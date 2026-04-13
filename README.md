@@ -1,16 +1,20 @@
 # capcut-cli
 
-Edit CapCut projects from the terminal. Change text, timing, speed, and volume in **seconds** instead of clicking through the GUI.
+Stop reverse-engineering CapCut's JSON schema every time you need to change a subtitle.
 
 ## The problem
 
-Every edit in CapCut's GUI takes 10-15 seconds: find the element, click, adjust, confirm. Multiply that by 20 subtitle changes, or batch-shifting all clips by half a second, and you've burned 5 minutes on mechanical clicking.
+CapCut stores projects as `draft_content.json` -- deeply nested, undocumented, with timing in microseconds and text buried inside escaped JSON-in-JSON. Every manual edit means: find the right segment ID, trace it to the material, figure out the content format, convert your timestamp, edit, pray you didn't break the structure. **15 seconds per change**, minimum.
 
-`capcut-cli` reads and writes `draft_content.json` directly. One command, one change, done.
+`capcut-cli` already knows the schema. One command, one change, **5 seconds**.
 
 ```
+$ capcut texts ./project
+ID        Start   -End       Text
+a1b2c3d4  0:01.00- 0:03.50   Welcome to the video
+
 $ capcut set-text ./project a1b2c3 "Fixed subtitle"
-"Teh original" -> "Fixed subtitle"
+"Welcome to the video" -> "Fixed subtitle"
 ```
 
 Zero dependencies. Works with CapCut (international) and JianYing (Chinese version).
@@ -102,7 +106,7 @@ capcut set-text ./project g7h8i9 "Corrected line three"
 capcut shift-all ./project +0.3s --track text
 ```
 
-Five changes in under 10 seconds total. Same work in CapCut GUI: ~75 seconds.
+Five changes in under 25 seconds. Doing it by hand in the JSON: 75+ seconds of navigating nested objects, matching IDs, and converting microseconds.
 
 ## Workflow: speed ramp
 
