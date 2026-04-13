@@ -1,0 +1,10 @@
+{
+  "description": "Ensures capcut-cli is available",
+  "hooks": [
+    {
+      "event": "on_plugin_enable",
+      "command": "npm list -g capcut-cli >/dev/null 2>&1 || npm install -g capcut-cli",
+      "description": "Install capcut-cli globally if not already installed"
+    }
+  ]
+}
