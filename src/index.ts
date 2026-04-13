@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { loadDraft, saveDraft, extractText, updateTextContent, findSegment, findMaterial, findMaterialGlobal, getMaterialTypes, getTracksByType } from "./draft.js";
 import { formatTime, formatDuration, parseTimeInput, srtTime } from "./time.js";
-import { addText, cutProject } from "./factory.js";
+import { addText, cutProject, saveTemplate, applyTemplate } from "./factory.js";
 import type { Draft, Track, Segment } from "./draft.js";
 import type { AddTextOptions, CutOptions } from "./factory.js";
 
@@ -50,6 +50,13 @@ Edit:
   opacity    <project> <id> <alpha>             Set opacity (0.0-1.0)
   export-srt <project>                          Export subtitles to SRT
   batch      <project>                          Run multiple edits from stdin (JSONL)
+
+Templates:
+  save-template <project> <id> <name> --out <path>
+             Extract any segment as a reusable template (text, sticker, video, audio)
+  apply-template <project> <template.json> <start> <duration> [text override]
+             Stamp a template into a project at the given time
+             Options: --x <n> --y <n> (override position)
 
 Project:
   cut        <project> <start> <end> --out <path>
@@ -465,6 +472,46 @@ function cmdCut(draft: Draft, filePath: string, positional: string[], flags: Fla
   out({ ok: true, kept: result.kept, removed: result.removed, duration_us: end - start, out: flags.out }, flags);
 }
 
+// --- Templates ---
+
+function cmdSaveTemplate(draft: Draft, positional: string[], flags: Flags): void {
+  const segId = positional[2];
+  const name = positional[3];
+  if (!flags.out) die("Missing --out <path>. Usage: capcut save-template <project> <id> <name> --out <path>");
+  const template = saveTemplate(draft, segId, name, flags.out);
+  out({
+    ok: true,
+    name: template.name,
+    type: template.type,
+    material_type: template.material.type,
+    extra_materials: template.extra_materials.length,
+    out: flags.out,
+  }, flags);
+}
+
+function cmdApplyTemplate(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  const templatePath = positional[2];
+  const startStr = positional[3];
+  const durationStr = positional[4];
+  const start = parseTimeInput(startStr);
+  const duration = parseTimeInput(durationStr);
+  const textOverride = positional.length > 5 ? positional.slice(5).join(" ") : undefined;
+  const result = applyTemplate(draft, templatePath, start, duration, {
+    x: flags.x,
+    y: flags.y,
+    text: textOverride,
+  });
+  saveDraft(filePath, draft);
+  out({
+    ok: true,
+    segment_id: result.segmentId,
+    material_id: result.materialId,
+    track_id: result.trackId,
+    start_us: start,
+    duration_us: duration,
+  }, flags);
+}
+
 // --- Batch ---
 
 interface BatchOp {
@@ -618,6 +665,14 @@ function main(): void {
     case "cut":
       requireArgs(positional, 4, "capcut cut <project> <start> <end> --out <path>");
       cmdCut(draft, filePath, positional, flags);
+      break;
+    case "save-template":
+      requireArgs(positional, 4, "capcut save-template <project> <id> <name> --out <path>");
+      cmdSaveTemplate(draft, positional, flags);
+      break;
+    case "apply-template":
+      requireArgs(positional, 5, "capcut apply-template <project> <template.json> <start> <duration>");
+      cmdApplyTemplate(draft, filePath, positional, flags);
       break;
     case "batch":
       cmdBatch(draft, filePath, flags);

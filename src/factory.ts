@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { Draft, Segment, Track, Timerange } from "./draft.js";
+import { findMaterialGlobal } from "./draft.js";
 
 // --- UUID generation ---
 
@@ -285,4 +287,174 @@ export function cutProject(draft: Draft, opts: CutOptions): { kept: number; remo
   draft.duration = duration;
 
   return { kept, removed };
+}
+
+// --- Templates ---
+
+export interface Template {
+  name: string;
+  type: string;            // track type: "text", "sticker", "video", "audio"
+  segment: Record<string, unknown>;
+  material: { type: string; data: Record<string, unknown> };
+  extra_materials: Array<{ type: string; data: Record<string, unknown> }>;
+}
+
+export function saveTemplate(draft: Draft, segId: string, name: string, outPath: string): Template {
+  const shortId = segId.toLowerCase();
+  let foundSeg: Segment | null = null;
+  let foundTrack: Track | null = null;
+
+  for (const track of draft.tracks) {
+    for (const seg of track.segments) {
+      if (seg.id === segId || seg.id.toLowerCase().startsWith(shortId)) {
+        foundSeg = seg;
+        foundTrack = track;
+        break;
+      }
+    }
+    if (foundSeg) break;
+  }
+
+  if (!foundSeg || !foundTrack) throw new Error(`Segment not found: ${segId}`);
+
+  // Resolve primary material
+  const mat = findMaterialGlobal(draft, foundSeg.material_id);
+  if (!mat) throw new Error(`Material not found for segment: ${segId}`);
+
+  // Resolve extra material refs
+  const extras: Array<{ type: string; data: Record<string, unknown> }> = [];
+  for (const refId of foundSeg.extra_material_refs) {
+    const extra = findMaterialGlobal(draft, refId);
+    if (extra) extras.push({ type: extra.type, data: { ...extra.material } });
+  }
+
+  const template: Template = {
+    name,
+    type: foundTrack.type,
+    segment: { ...foundSeg } as unknown as Record<string, unknown>,
+    material: { type: mat.type, data: { ...mat.material } },
+    extra_materials: extras,
+  };
+
+  writeFileSync(outPath, JSON.stringify(template, null, 2), "utf-8");
+  return template;
+}
+
+export function applyTemplate(
+  draft: Draft,
+  templatePath: string,
+  start: number,
+  duration: number,
+  overrides?: { x?: number; y?: number; scaleX?: number; scaleY?: number; text?: string },
+): { segmentId: string; materialId: string; trackId: string } {
+  const template = JSON.parse(readFileSync(templatePath, "utf-8")) as Template;
+
+  // Generate new IDs for everything
+  const idMap = new Map<string, string>();
+
+  function remapId(oldId: string): string {
+    if (!idMap.has(oldId)) idMap.set(oldId, uuid());
+    return idMap.get(oldId)!;
+  }
+
+  const newSegId = uuid();
+  const newMatId = uuid();
+
+  // Clone and remap the material
+  const newMat = deepCloneWithIdRemap(template.material.data, remapId);
+  newMat.id = newMatId;
+
+  // If text and override provided, update content
+  if (overrides?.text && template.type === "text" && typeof newMat.content === "string") {
+    try {
+      const parsed = JSON.parse(newMat.content as string);
+      if (parsed.text !== undefined) {
+        parsed.text = overrides.text;
+        if (parsed.styles && parsed.styles.length > 0) {
+          const encoded = Buffer.from(overrides.text, "utf16le");
+          parsed.styles[0].range = [0, encoded.length];
+        }
+        newMat.content = JSON.stringify(parsed);
+      }
+    } catch { /* keep original content */ }
+  }
+
+  // Register primary material
+  if (!draft.materials[template.material.type]) draft.materials[template.material.type] = [];
+  draft.materials[template.material.type].push(newMat);
+
+  // Clone and register extra materials
+  const newExtraIds: string[] = [];
+  for (const extra of template.extra_materials) {
+    const newExtra = deepCloneWithIdRemap(extra.data, remapId);
+    newExtraIds.push(newExtra.id as string);
+    if (!draft.materials[extra.type]) draft.materials[extra.type] = [];
+    draft.materials[extra.type].push(newExtra);
+  }
+
+  // Also add companion materials if the template didn't have them
+  if (newExtraIds.length === 0) {
+    const companions = createCompanionMaterials(template.type as "text" | "video" | "audio");
+    registerCompanions(draft, companions);
+    newExtraIds.push(...companions.ids);
+  }
+
+  // Find or create track
+  let track = draft.tracks.find(t => t.type === template.type);
+  if (!track) {
+    track = {
+      id: uuid(),
+      type: template.type,
+      name: template.name || template.type,
+      attribute: 0,
+      segments: [],
+      is_default_name: true,
+      flag: 0,
+    } as unknown as Track;
+    draft.tracks.push(track);
+  }
+
+  // Clone segment with new IDs and timing
+  const newSeg = { ...template.segment } as Record<string, unknown>;
+  newSeg.id = newSegId;
+  newSeg.material_id = newMatId;
+  newSeg.raw_segment_id = track.id;
+  newSeg.target_timerange = { start, duration };
+  if (template.segment.source_timerange) {
+    newSeg.source_timerange = { start: 0, duration };
+  }
+  newSeg.extra_material_refs = newExtraIds;
+
+  // Apply position/scale overrides
+  if (overrides && newSeg.clip && typeof newSeg.clip === "object") {
+    const clip = newSeg.clip as Record<string, unknown>;
+    if (overrides.x !== undefined || overrides.y !== undefined) {
+      clip.transform = {
+        x: overrides.x ?? (clip.transform as Record<string, number>)?.x ?? 0,
+        y: overrides.y ?? (clip.transform as Record<string, number>)?.y ?? 0,
+      };
+    }
+    if (overrides.scaleX !== undefined || overrides.scaleY !== undefined) {
+      clip.scale = {
+        x: overrides.scaleX ?? (clip.scale as Record<string, number>)?.x ?? 1,
+        y: overrides.scaleY ?? (clip.scale as Record<string, number>)?.y ?? 1,
+      };
+    }
+  }
+
+  track.segments.push(newSeg as unknown as Segment);
+
+  return { segmentId: newSegId, materialId: newMatId, trackId: track.id };
+}
+
+function deepCloneWithIdRemap(
+  obj: Record<string, unknown>,
+  remapId: (old: string) => string,
+): Record<string, unknown> {
+  const clone = JSON.parse(JSON.stringify(obj)) as Record<string, unknown>;
+  // Remap the id field
+  if (typeof clone.id === "string") {
+    clone.id = remapId(clone.id as string);
+  }
+  return clone;
 }
