@@ -73,10 +73,12 @@ function out(data: unknown, flags: Flags): void {
   process.stdout.write(JSON.stringify(data) + "\n");
 }
 
+class CliError extends Error {
+  constructor(msg: string) { super(msg); this.name = "CliError"; }
+}
+
 function die(msg: string): never {
-  process.stderr.write(JSON.stringify({ error: msg }) + "\n");
-  process.exit(1);
-  throw new Error("unreachable");
+  throw new CliError(msg);
 }
 
 function requireArgs(args: string[], min: number, usage: string): void {
@@ -462,7 +464,8 @@ function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
       ok++;
     } catch (e) {
       fail++;
-      process.stderr.write(JSON.stringify({ error: String(e), line: trimmed }) + "\n");
+      const msg = e instanceof Error ? e.message : String(e);
+      process.stderr.write(JSON.stringify({ error: msg, line: trimmed }) + "\n");
     }
   }
   saveDraft(filePath, draft);
