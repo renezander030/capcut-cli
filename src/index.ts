@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
-import { loadDraft, saveDraft, extractText, updateTextContent, findSegment, findMaterial, getTracksByType } from "./draft.js";
+import { loadDraft, saveDraft, extractText, updateTextContent, findSegment, findMaterial, findMaterialGlobal, getMaterialTypes, getTracksByType } from "./draft.js";
 import { formatTime, formatDuration, parseTimeInput, srtTime } from "./time.js";
 import type { Draft, Track, Segment } from "./draft.js";
 
@@ -15,11 +15,21 @@ Global flags:
   -H, --human     Human-readable table output (default: JSON)
   -q, --quiet     No output on success, exit code only (write commands)
 
-Commands:
-  info       <project>                          Project overview
+Overview (start here):
+  info       <project>                          Project overview + material summary
   tracks     <project>                          List all tracks
+  materials  <project>                          List all material types + counts
+  materials  <project> --type <type>            List items of one material type
+
+Browse:
   segments   <project> [--track <type>]         List segments with timing
   texts      <project>                          List all text/subtitle content
+
+Detail (drill into one item):
+  segment    <project> <id>                     Full detail for one segment + its material
+  material   <project> <id>                     Full detail for one material
+
+Edit:
   set-text   <project> <id> <text>              Change text content
   shift      <project> <id> <offset>            Shift segment timing (e.g. +0.5s, -1s)
   shift-all  <project> <offset> [--track <type>] Shift all segments on a track
@@ -30,8 +40,10 @@ Commands:
   export-srt <project>                          Export subtitles to SRT
   batch      <project>                          Run multiple edits from stdin (JSONL)
 
+Navigation: info → tracks/materials → segments → segment <id>
+            info → materials --type X → material <id>
 Time formats: 1.5s, 500ms, 1:30, +0.5s, -200ms
-IDs: first 6+ chars of segment ID (prefix match)`;
+IDs: first 6+ chars of segment/material ID (prefix match)`;
 
 // --- Flag parsing ---
 
@@ -48,7 +60,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     const a = args[i];
     if (a === "-H" || a === "--human") flags.human = true;
     else if (a === "-q" || a === "--quiet") flags.quiet = true;
-    else if (a === "--track" && i + 1 < args.length) { flags.track = args[++i]; }
+    else if ((a === "--track" || a === "--type") && i + 1 < args.length) { flags.track = args[++i]; }
     else positional.push(a);
   }
   return { positional, flags };
@@ -75,6 +87,8 @@ function requireArgs(args: string[], min: number, usage: string): void {
 
 function cmdInfo(draft: Draft, flags: Flags): void {
   const totalSegments = draft.tracks.reduce((n, t) => n + t.segments.length, 0);
+  const matTypes = getMaterialTypes(draft);
+  const matWithItems = matTypes.filter(m => m.count > 0);
   const data = {
     id: draft.id,
     name: draft.name || draft.id,
@@ -86,6 +100,9 @@ function cmdInfo(draft: Draft, flags: Flags): void {
     tracks: draft.tracks.length,
     segments: totalSegments,
     platform: draft.platform ? `${draft.platform.app_source === "cc" ? "CapCut" : "JianYing"} ${draft.platform.app_version}` : null,
+    material_types: matTypes.length,
+    materials_with_items: matWithItems.length,
+    material_summary: matWithItems.map(m => ({ type: m.type, count: m.count })),
   };
   if (flags.human) {
     const d = data;
@@ -96,6 +113,10 @@ function cmdInfo(draft: Draft, flags: Flags): void {
     console.log(`Tracks:     ${d.tracks}`);
     console.log(`Segments:   ${d.segments}`);
     if (d.platform) console.log(`Platform:   ${d.platform}`);
+    console.log(`Materials:  ${d.materials_with_items} types with data (${d.material_types} total)`);
+    for (const m of d.material_summary) {
+      console.log(`  ${m.type.padEnd(28)} ${m.count}`);
+    }
   } else {
     out(data, flags);
   }
@@ -303,6 +324,78 @@ function cmdExportSrt(draft: Draft): void {
   process.stdout.write(srt);
 }
 
+// --- Discovery & drill-down ---
+
+function cmdMaterials(draft: Draft, flags: Flags): void {
+  const matTypes = getMaterialTypes(draft);
+  if (flags.track) {
+    // --type filter: list items of that material type
+    const key = flags.track; // reuse --track flag as --type
+    const arr = draft.materials[key];
+    if (!arr || !Array.isArray(arr)) die(`Unknown material type: ${key}`);
+    const items = arr.map((m: Record<string, unknown>) => {
+      const summary: Record<string, unknown> = { id: m.id };
+      if (m.name !== undefined) summary.name = m.name;
+      if (m.material_name !== undefined) summary.name = m.material_name;
+      if (m.path !== undefined) summary.path = m.path;
+      if (m.duration !== undefined) summary.duration_us = m.duration;
+      if (m.type !== undefined) summary.type = m.type;
+      summary.fields = Object.keys(m).length;
+      return summary;
+    });
+    if (flags.human) {
+      if (items.length === 0) { console.log(`No ${key} materials.`); return; }
+      console.log(`ID        Name/Path                                    Fields`);
+      for (const item of items) {
+        const label = (item.name || item.path || "") as string;
+        console.log(`${(item.id as string).slice(0, 8)}  ${label.slice(0, 44).padEnd(44)} ${String(item.fields).padStart(3)}`);
+      }
+    } else {
+      out(items, flags);
+    }
+    return;
+  }
+  if (flags.human) {
+    console.log(`Type                          Count`);
+    for (const m of matTypes) {
+      console.log(`${m.type.padEnd(28)} ${String(m.count).padStart(5)}`);
+    }
+  } else {
+    out(matTypes, flags);
+  }
+}
+
+function cmdSegmentDetail(draft: Draft, segId: string, flags: Flags): void {
+  const result = findSegment(draft, segId);
+  if (!result) die(`Segment not found: ${segId}`);
+  const seg = result.segment;
+  // Resolve the primary material
+  const mat = findMaterialGlobal(draft, seg.material_id);
+  const detail = {
+    ...seg,
+    _track_type: result.track.type,
+    _track_name: result.track.name,
+    _track_id: result.track.id,
+    _material: mat ? { _type: mat.type, ...mat.material } : null,
+  };
+  if (flags.human) {
+    console.log(JSON.stringify(detail, null, 2));
+  } else {
+    out(detail, flags);
+  }
+}
+
+function cmdMaterialDetail(draft: Draft, matId: string, flags: Flags): void {
+  const result = findMaterialGlobal(draft, matId);
+  if (!result) die(`Material not found: ${matId}`);
+  const detail = { _type: result.type, ...result.material };
+  if (flags.human) {
+    console.log(JSON.stringify(detail, null, 2));
+  } else {
+    out(detail, flags);
+  }
+}
+
 // --- Batch ---
 
 interface BatchOp {
@@ -436,6 +529,17 @@ function main(): void {
       break;
     case "export-srt":
       cmdExportSrt(draft);
+      break;
+    case "materials":
+      cmdMaterials(draft, flags);
+      break;
+    case "segment":
+      requireArgs(positional, 3, "capcut segment <project> <id>");
+      cmdSegmentDetail(draft, positional[2], flags);
+      break;
+    case "material":
+      requireArgs(positional, 3, "capcut material <project> <id>");
+      cmdMaterialDetail(draft, positional[2], flags);
       break;
     case "batch":
       cmdBatch(draft, filePath, flags);

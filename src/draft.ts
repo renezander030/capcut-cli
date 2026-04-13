@@ -79,10 +79,10 @@ export interface Draft {
     audios: MaterialAudio[];
     texts: MaterialText[];
     speeds: Array<{ id: string; speed: number; [key: string]: unknown }>;
-    material_animations: unknown[];
-    audio_fades: unknown[];
-    transitions: unknown[];
-    [key: string]: unknown[];
+    material_animations: Array<Record<string, unknown>>;
+    audio_fades: Array<Record<string, unknown>>;
+    transitions: Array<Record<string, unknown>>;
+    [key: string]: Array<Record<string, unknown>>;
   };
   platform?: {
     app_source: string;
@@ -183,4 +183,28 @@ export function findMaterial<T extends { id: string }>(arr: T[], id: string): T 
 
 export function getTracksByType(draft: Draft, type: string): Track[] {
   return draft.tracks.filter(t => t.type === type);
+}
+
+export function getMaterialTypes(draft: Draft): Array<{ type: string; count: number }> {
+  return Object.entries(draft.materials)
+    .filter(([, v]) => Array.isArray(v))
+    .map(([type, arr]) => ({ type, count: arr.length }))
+    .sort((a, b) => b.count - a.count);
+}
+
+export function findMaterialGlobal(draft: Draft, id: string): { type: string; material: Record<string, unknown> } | null {
+  const shortId = id.toLowerCase();
+  for (const [type, arr] of Object.entries(draft.materials)) {
+    if (!Array.isArray(arr)) continue;
+    for (const mat of arr) {
+      if (mat && typeof mat === "object" && typeof (mat as Record<string, unknown>).id === "string") {
+        const m = mat as Record<string, unknown>;
+        const matId = m.id as string;
+        if (matId === id || matId.toLowerCase().startsWith(shortId)) {
+          return { type, material: m };
+        }
+      }
+    }
+  }
+  return null;
 }
