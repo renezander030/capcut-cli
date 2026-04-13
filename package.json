@@ -1,0 +1,30 @@
+{
+  "name": "capcut-cli",
+  "version": "0.1.0",
+  "description": "Fast CLI for editing CapCut projects. Edit text, timing, speed, and volume in seconds instead of minutes.",
+  "type": "module",
+  "bin": {
+    "capcut": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --import tsx src/index.ts"
+  },
+  "keywords": [
+    "capcut",
+    "video-editing",
+    "cli",
+    "draft_content",
+    "automation",
+    "batch-edit"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}

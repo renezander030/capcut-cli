@@ -1,0 +1,355 @@
+{
+  "id": "test-project-001",
+  "name": "Test Project",
+  "duration": 10000000,
+  "fps": 30,
+  "canvas_config": {
+    "width": 1920,
+    "height": 1080,
+    "ratio": "16:9"
+  },
+  "platform": {
+    "app_source": "cc",
+    "app_version": "6.2.8",
+    "os": "windows"
+  },
+  "tracks": [
+    {
+      "id": "track-video-01",
+      "type": "video",
+      "name": "Track 1",
+      "is_default_name": true,
+      "attribute": 0,
+      "flag": 0,
+      "segments": [
+        {
+          "id": "aaaaaa01-0000-0000-0000-000000000001",
+          "material_id": "mat-video-01",
+          "raw_segment_id": "track-video-01",
+          "target_timerange": {
+            "start": 0,
+            "duration": 5000000
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": 7500000
+          },
+          "speed": 1.5,
+          "volume": 1,
+          "visible": true,
+          "reverse": false,
+          "clip": {
+            "alpha": 1,
+            "rotation": 0,
+            "scale": {
+              "x": 1,
+              "y": 1
+            },
+            "transform": {
+              "x": 0,
+              "y": 0
+            },
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            }
+          },
+          "render_index": 0,
+          "track_render_index": 0,
+          "track_attribute": 0,
+          "extra_material_refs": [
+            "mat-speed-01"
+          ],
+          "common_keyframes": [],
+          "keyframe_refs": []
+        },
+        {
+          "id": "aaaaaa02-0000-0000-0000-000000000002",
+          "material_id": "mat-video-02",
+          "raw_segment_id": "track-video-01",
+          "target_timerange": {
+            "start": 5000000,
+            "duration": 5000000
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": 5000000
+          },
+          "speed": 1,
+          "volume": 0.8,
+          "visible": true,
+          "reverse": false,
+          "clip": {
+            "alpha": 0.7,
+            "rotation": 0,
+            "scale": {
+              "x": 1,
+              "y": 1
+            },
+            "transform": {
+              "x": 0,
+              "y": 0
+            },
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            }
+          },
+          "render_index": 1,
+          "track_render_index": 0,
+          "track_attribute": 0,
+          "extra_material_refs": [],
+          "common_keyframes": [],
+          "keyframe_refs": []
+        }
+      ]
+    },
+    {
+      "id": "track-audio-01",
+      "type": "audio",
+      "name": "Audio 1",
+      "is_default_name": true,
+      "attribute": 0,
+      "flag": 0,
+      "segments": [
+        {
+          "id": "bbbbbb01-0000-0000-0000-000000000001",
+          "material_id": "mat-audio-01",
+          "raw_segment_id": "track-audio-01",
+          "target_timerange": {
+            "start": 0,
+            "duration": 10000000
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": 10000000
+          },
+          "speed": 1,
+          "volume": 0.5,
+          "visible": true,
+          "reverse": false,
+          "clip": {
+            "alpha": 1,
+            "rotation": 0,
+            "scale": {
+              "x": 1,
+              "y": 1
+            },
+            "transform": {
+              "x": 0,
+              "y": 0
+            },
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            }
+          },
+          "render_index": 0,
+          "track_render_index": 0,
+          "track_attribute": 0,
+          "extra_material_refs": [],
+          "common_keyframes": [],
+          "keyframe_refs": []
+        }
+      ]
+    },
+    {
+      "id": "track-text-01",
+      "type": "text",
+      "name": "Subtitles",
+      "is_default_name": false,
+      "attribute": 0,
+      "flag": 0,
+      "segments": [
+        {
+          "id": "cccccc01-0000-0000-0000-000000000001",
+          "material_id": "mat-text-01",
+          "raw_segment_id": "track-text-01",
+          "target_timerange": {
+            "start": 700000,
+            "duration": 2500000
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": 2500000
+          },
+          "speed": 1,
+          "volume": 1,
+          "visible": true,
+          "reverse": false,
+          "clip": {
+            "alpha": 1,
+            "rotation": 0,
+            "scale": {
+              "x": 1,
+              "y": 1
+            },
+            "transform": {
+              "x": 0,
+              "y": 0
+            },
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            }
+          },
+          "render_index": 15000,
+          "track_render_index": 0,
+          "track_attribute": 0,
+          "extra_material_refs": [],
+          "common_keyframes": [],
+          "keyframe_refs": []
+        },
+        {
+          "id": "cccccc02-0000-0000-0000-000000000002",
+          "material_id": "mat-text-02",
+          "raw_segment_id": "track-text-01",
+          "target_timerange": {
+            "start": 4700000,
+            "duration": 3000000
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": 3000000
+          },
+          "speed": 1,
+          "volume": 1,
+          "visible": true,
+          "reverse": false,
+          "clip": {
+            "alpha": 1,
+            "rotation": 0,
+            "scale": {
+              "x": 1,
+              "y": 1
+            },
+            "transform": {
+              "x": 0,
+              "y": 0
+            },
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            }
+          },
+          "render_index": 15001,
+          "track_render_index": 0,
+          "track_attribute": 0,
+          "extra_material_refs": [],
+          "common_keyframes": [],
+          "keyframe_refs": []
+        },
+        {
+          "id": "cccccc03-0000-0000-0000-000000000003",
+          "material_id": "mat-text-03",
+          "raw_segment_id": "track-text-01",
+          "target_timerange": {
+            "start": 7700000,
+            "duration": 2000000
+          },
+          "source_timerange": {
+            "start": 0,
+            "duration": 2000000
+          },
+          "speed": 1,
+          "volume": 1,
+          "visible": true,
+          "reverse": false,
+          "clip": {
+            "alpha": 1,
+            "rotation": 0,
+            "scale": {
+              "x": 1,
+              "y": 1
+            },
+            "transform": {
+              "x": 0,
+              "y": 0
+            },
+            "flip": {
+              "horizontal": false,
+              "vertical": false
+            }
+          },
+          "render_index": 15002,
+          "track_render_index": 0,
+          "track_attribute": 0,
+          "extra_material_refs": [],
+          "common_keyframes": [],
+          "keyframe_refs": []
+        }
+      ]
+    }
+  ],
+  "materials": {
+    "videos": [
+      {
+        "id": "mat-video-01",
+        "path": "/media/intro-clip.mp4",
+        "material_name": "intro-clip.mp4",
+        "type": "video",
+        "duration": 5000000,
+        "width": 1920,
+        "height": 1080,
+        "has_audio": true
+      },
+      {
+        "id": "mat-video-02",
+        "path": "/media/main-content.mp4",
+        "material_name": "main-content.mp4",
+        "type": "video",
+        "duration": 12000000,
+        "width": 1920,
+        "height": 1080,
+        "has_audio": true
+      }
+    ],
+    "audios": [
+      {
+        "id": "mat-audio-01",
+        "path": "/media/background-music.mp3",
+        "name": "Background Music",
+        "duration": 180000000,
+        "type": "music"
+      }
+    ],
+    "texts": [
+      {
+        "id": "mat-text-01",
+        "type": "text",
+        "content": "{\"styles\":[{\"range\":[0,28],\"size\":15,\"bold\":false,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1,\"color\":[1,1,1]}}}}],\"text\":\"Hello everyone\"}",
+        "alignment": 1,
+        "font_size": 15,
+        "text_color": "#FFFFFF"
+      },
+      {
+        "id": "mat-text-02",
+        "type": "text",
+        "content": "{\"styles\":[{\"range\":[0,62],\"size\":15.0,\"bold\":false,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1.0,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[1.0,1.0,1.0]}}}}],\"text\":\"Let me show you how this works\"}",
+        "alignment": 1,
+        "font_size": 15,
+        "text_color": "#FFFFFF"
+      },
+      {
+        "id": "mat-text-03",
+        "type": "text",
+        "content": "<font id=\"\" path=\"/fonts/arial.ttf\"><size=15><color=(1,1,1,1)>[Thanks for watching]</color></size></font>",
+        "alignment": 1,
+        "font_size": 15,
+        "text_color": "#FFFFFF"
+      }
+    ],
+    "speeds": [
+      {
+        "id": "mat-speed-01",
+        "type": "speed",
+        "speed": 1.5,
+        "mode": 0,
+        "curve_speed": null
+      }
+    ],
+    "material_animations": [],
+    "audio_fades": [],
+    "transitions": []
+  }
+}
