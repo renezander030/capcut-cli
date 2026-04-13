@@ -1,0 +1,11 @@
+{
+  "plugins": [
+    {
+      "name": "capcut-cli",
+      "displayName": "CapCut CLI",
+      "description": "Edit CapCut and JianYing projects from Claude Code — subtitles, timing, speed, volume, templates, cut long-form to shorts.",
+      "version": "0.1.4",
+      "source": "https://github.com/renezander030/capcut-cli"
+    }
+  ]
+}
