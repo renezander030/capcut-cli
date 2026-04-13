@@ -445,4 +445,10 @@ function main(): void {
   }
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  const msg = e instanceof Error ? e.message : String(e);
+  process.stderr.write(JSON.stringify({ error: msg }) + "\n");
+  process.exit(1);
+}
