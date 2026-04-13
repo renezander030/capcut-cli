@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "CLI to edit CapCut and JianYing project files — subtitles, timing, speed, volume, templates, cut long-form to shorts. Reads and writes draft_content.json / draft_info.json directly.",
   "type": "module",
   "bin": {

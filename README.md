@@ -29,6 +29,17 @@ Or run directly:
 npx capcut-cli info ./my-project/
 ```
 
+### Claude Code plugin
+
+Add the marketplace, then enable the plugin:
+
+```
+/plugin marketplace add https://github.com/renezander030/capcut-cli
+/plugin enable capcut-cli
+```
+
+This gives Claude Code the `/capcut-cli:capcut-edit` skill -- it learns every command, the progressive disclosure navigation pattern, and how to find your CapCut projects on macOS/Windows. Auto-installs the CLI on first enable.
+
 ## Output modes
 
 **JSON (default)** -- pipe to `jq`, feed to scripts, consume from agents:
