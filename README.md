@@ -51,18 +51,43 @@ capcut set-text ./project a1b2c3 "New text" -q && echo "done"
 
 ## Commands
 
-### Read
+### Overview (start here)
 
 ```bash
-capcut info ./project                        # Project overview
+capcut info ./project                        # Project overview + material summary
 capcut tracks ./project                      # List all tracks
+capcut materials ./project                   # List all material types + counts
+capcut materials ./project --type audios     # List items of one material type
+```
+
+### Browse
+
+```bash
 capcut segments ./project                    # List all segments with timing
 capcut segments ./project --track text       # Filter by track type
 capcut texts ./project                       # List all text/subtitle content
 capcut export-srt ./project > subs.srt       # Export subtitles to SRT
 ```
 
-### Write
+### Detail (drill into one item)
+
+```bash
+capcut segment ./project a1b2c3              # Full detail for one segment + its material
+capcut material ./project a1b2c3             # Full detail for one material
+```
+
+Progressive disclosure: `info` shows the shape, `materials` shows what's available, `segment`/`material` shows everything about one item. An AI agent navigates overview → list → detail, never gets more data than it needs.
+
+### Add
+
+```bash
+capcut add-text ./project 0s 5s "Title" --font-size 24 --color "#FFD700" --y -0.4
+capcut add-text ./project 55s 5s "Subscribe!" --font-size 14 --align 1
+```
+
+Options: `--font-size <n>`, `--color <hex>`, `--align <0|1|2>` (left/center/right), `--x <n> --y <n>` (position, -1 to 1), `--track-name <name>`.
+
+### Edit
 
 Every write command creates a `.bak` backup before modifying the file.
 
@@ -78,6 +103,58 @@ capcut opacity ./project a1b2c3 0.5
 capcut trim ./project a1b2c3 2s 5s
 ```
 
+### Templates
+
+Extract any element from a project as a reusable template, then stamp it into other projects. Works with text, stickers, shapes, video, audio -- anything that exists as a segment.
+
+```bash
+# Save a styled text element as a template
+capcut save-template ./project a1b2c3 "gold-title" --out gold-title.json
+
+# Apply it to another project with new timing
+capcut apply-template ./other-project gold-title.json 0s 5s
+
+# Override the text content (keeps all styling -- font, color, size)
+capcut apply-template ./project gold-title.json 5:00 4s "Chapter 3: The Forge"
+
+# Save a sticker and reuse it
+capcut save-template ./project d4e5f6 "subscribe-btn" --out subscribe.json
+capcut apply-template ./project subscribe.json 9:50 5s --x 0.35 --y -0.35
+```
+
+Templates preserve everything: styling, colors, font size, scale, resource IDs, shadow settings, shape params. Only the ID, timing, and optionally position/text get changed on apply.
+
+**Workflow: build a template library**
+
+```bash
+# Create elements in CapCut, then extract them
+mkdir -p ~/.capcut-templates
+capcut save-template ./project abc123 "lower-third"   --out ~/.capcut-templates/lower-third.json
+capcut save-template ./project def456 "end-card"      --out ~/.capcut-templates/end-card.json
+capcut save-template ./project ghi789 "subscribe-cta" --out ~/.capcut-templates/subscribe-cta.json
+
+# Stamp them into every new project
+capcut apply-template ./new-project ~/.capcut-templates/lower-third.json 0s 5s "New Episode"
+capcut apply-template ./new-project ~/.capcut-templates/end-card.json 9:55 5s
+capcut apply-template ./new-project ~/.capcut-templates/subscribe-cta.json 9:50 5s
+```
+
+### Cut (long-form → short)
+
+Extract a time range from a project into a new file. Clips edge segments, rebases timing to zero, removes empty tracks, cleans up orphaned materials.
+
+```bash
+# 60-second teaser from a 10-minute video
+capcut cut ./project 1:00 2:00 --out ./teaser.json
+
+# 30-second highlight
+capcut cut ./project 3:00 3:30 --out ./highlight.json
+
+# Then add titles to the short
+capcut add-text ./teaser.json 0s 5s "MYCENAE" --font-size 24 --color "#FFD700"
+capcut add-text ./teaser.json 55s 5s "Full video in description" --font-size 14
+```
+
 ### Batch
 
 Multiple edits, one JSON parse, one file write:
@@ -91,11 +168,11 @@ echo '{"cmd":"set-text","id":"a1b2c3","text":"Line one"}
 
 Output: `{"ok":true,"succeeded":4,"failed":0}`
 
-Batch operations: `set-text`, `shift`, `shift-all`, `speed`, `volume`, `opacity`, `trim`.
+Batch tolerates per-operation errors and continues processing. Operations: `set-text`, `shift`, `shift-all`, `speed`, `volume`, `opacity`, `trim`.
 
 ### IDs
 
-Segment IDs are UUIDs. The first 6-8 characters work as prefix match:
+Segment and material IDs are UUIDs. The first 6-8 characters work as prefix match:
 
 ```bash
 $ capcut texts ./project | jq '.[0].id'
