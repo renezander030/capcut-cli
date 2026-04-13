@@ -10,14 +10,13 @@ CapCut stores projects as `draft_content.json` -- deeply nested, undocumented, w
 
 ```
 $ capcut texts ./project
-ID        Start   -End       Text
-a1b2c3d4  0:01.00- 0:03.50   Welcome to the video
+[{"id":"a1b2c3d4-...","start_us":500000,"duration_us":2500000,"text":"Welcome to the video"}]
 
 $ capcut set-text ./project a1b2c3 "Fixed subtitle"
-"Welcome to the video" -> "Fixed subtitle"
+{"ok":true,"id":"a1b2c3d4-...","old":"Welcome to the video","new":"Fixed subtitle"}
 ```
 
-Zero dependencies. Works with CapCut (international) and JianYing (Chinese version).
+Zero dependencies. JSON output by default. Pipeable. Works with CapCut and JianYing.
 
 ## Install
 
@@ -30,17 +29,37 @@ Or run directly:
 npx capcut-cli info ./my-project/
 ```
 
+## Output modes
+
+**JSON (default)** -- pipe to `jq`, feed to scripts, consume from agents:
+```bash
+capcut texts ./project | jq '.[].text'
+capcut info ./project | jq '.duration_us'
+```
+
+**Human-readable** (`-H` / `--human`):
+```bash
+capcut texts ./project -H
+ID        Start   -End       Text
+a1b2c3d4  0:00.50- 0:03.00   Welcome to the video
+```
+
+**Quiet** (`-q` / `--quiet`) -- exit code only, zero stdout on writes:
+```bash
+capcut set-text ./project a1b2c3 "New text" -q && echo "done"
+```
+
 ## Commands
 
 ### Read
 
 ```bash
-capcut info ./project              # Project overview: resolution, duration, track count
-capcut tracks ./project            # List all tracks with segment counts
-capcut segments ./project          # List all segments with timing
-capcut segments ./project --track text   # Filter by track type
-capcut texts ./project             # List all text/subtitle content with IDs
-capcut export-srt ./project > subs.srt   # Export subtitles to SRT file
+capcut info ./project                        # Project overview
+capcut tracks ./project                      # List all tracks
+capcut segments ./project                    # List all segments with timing
+capcut segments ./project --track text       # Filter by track type
+capcut texts ./project                       # List all text/subtitle content
+capcut export-srt ./project > subs.srt       # Export subtitles to SRT
 ```
 
 ### Write
@@ -48,29 +67,42 @@ capcut export-srt ./project > subs.srt   # Export subtitles to SRT file
 Every write command creates a `.bak` backup before modifying the file.
 
 ```bash
-capcut set-text ./project a1b2c3 "New subtitle"     # Change text content
-capcut shift ./project a1b2c3 +0.5s                  # Move segment forward 0.5s
-capcut shift ./project a1b2c3 -200ms                 # Move segment back 200ms
-capcut shift-all ./project +1s                        # Shift everything forward 1s
-capcut shift-all ./project -0.5s --track text         # Shift only text track
-capcut speed ./project a1b2c3 1.5                     # Set 1.5x playback speed
-capcut volume ./project a1b2c3 0.8                    # Set volume to 80%
-capcut opacity ./project a1b2c3 0.5                   # Set opacity to 50%
-capcut trim ./project a1b2c3 2s 5s                    # Trim to 5s starting at 2s
+capcut set-text ./project a1b2c3 "New subtitle"
+capcut shift ./project a1b2c3 +0.5s
+capcut shift ./project a1b2c3 -200ms
+capcut shift-all ./project +1s
+capcut shift-all ./project -0.5s --track text
+capcut speed ./project a1b2c3 1.5
+capcut volume ./project a1b2c3 0.8
+capcut opacity ./project a1b2c3 0.5
+capcut trim ./project a1b2c3 2s 5s
 ```
+
+### Batch
+
+Multiple edits, one JSON parse, one file write:
+
+```bash
+echo '{"cmd":"set-text","id":"a1b2c3","text":"Line one"}
+{"cmd":"set-text","id":"d4e5f6","text":"Line two"}
+{"cmd":"shift","id":"a1b2c3","offset":"+0.3s"}
+{"cmd":"volume","id":"g7h8i9","volume":0.5}' | capcut batch ./project
+```
+
+Output: `{"ok":true,"succeeded":4,"failed":0}`
+
+Batch operations: `set-text`, `shift`, `shift-all`, `speed`, `volume`, `opacity`, `trim`.
 
 ### IDs
 
-Segment IDs are UUIDs. You don't need the full thing -- the first 6-8 characters work:
+Segment IDs are UUIDs. The first 6-8 characters work as prefix match:
 
 ```bash
-$ capcut texts ./project
-ID        Start   -End       Text
-a1b2c3d4  0:01.00- 0:03.50   Welcome to the video
-e5f6a7b8  0:04.00- 0:06.00   Let me show you
+$ capcut texts ./project | jq '.[0].id'
+"a1b2c3d4-0000-0000-0000-000000000001"
 
 $ capcut set-text ./project a1b2c3 "Hey everyone"
-"Welcome to the video" -> "Hey everyone"
+{"ok":true,"id":"a1b2c3d4-0000-0000-0000-000000000001","old":"Welcome","new":"Hey everyone"}
 ```
 
 ### Time formats
@@ -83,7 +115,7 @@ $ capcut set-text ./project a1b2c3 "Hey everyone"
 
 ## How it works
 
-CapCut stores projects as JSON (`draft_content.json` on Windows, `draft_info.json` on macOS). This CLI reads and modifies that JSON directly.
+CapCut stores projects as JSON (`draft_content.json` on Windows, `draft_info.json` on macOS). This CLI reads and modifies that JSON directly. It preserves the original file's indentation style on save.
 
 Typical project location:
 - **Windows**: `C:\Users\<you>\AppData\Local\CapCut\User Data\Projects\com.lveditor.draft\<id>\`
@@ -94,31 +126,17 @@ Close the project in CapCut before editing, reopen after. CapCut reads the JSON 
 ## Workflow: batch subtitle correction
 
 ```bash
-# See all subtitles
-capcut texts ./project
+# Get all subtitle IDs and text
+capcut texts ./project | jq '.[] | "\(.id) \(.text)"'
 
-# Fix typos
-capcut set-text ./project a1b2c3 "Corrected line one"
-capcut set-text ./project d4e5f6 "Corrected line two"
-capcut set-text ./project g7h8i9 "Corrected line three"
-
-# Shift all subtitles forward to sync with audio
-capcut shift-all ./project +0.3s --track text
+# Fix 3 typos + sync timing in one shot
+echo '{"cmd":"set-text","id":"a1b2c3","text":"Corrected line one"}
+{"cmd":"set-text","id":"d4e5f6","text":"Corrected line two"}
+{"cmd":"set-text","id":"g7h8i9","text":"Corrected line three"}
+{"cmd":"shift-all","offset":"+0.3s","track":"text"}' | capcut batch ./project
 ```
 
-Five changes in under 25 seconds. Doing it by hand in the JSON: 75+ seconds of navigating nested objects, matching IDs, and converting microseconds.
-
-## Workflow: speed ramp
-
-```bash
-# List video segments
-capcut segments ./project --track video
-
-# Slow down the intro, speed up the middle
-capcut speed ./project a1b2c3 0.5
-capcut speed ./project d4e5f6 2.0
-capcut speed ./project g7h8i9 1.0
-```
+Four changes, one file write. Done in under 5 seconds.
 
 ## License
 
