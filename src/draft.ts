@@ -19,7 +19,7 @@ export interface Segment {
     rotation: number;
     scale: { x: number; y: number };
     transform: { x: number; y: number };
-  };
+  } | null;
   extra_material_refs: string[];
   render_index: number;
   [key: string]: unknown;

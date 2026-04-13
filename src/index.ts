@@ -153,7 +153,7 @@ function segmentData(draft: Draft, track: Track, seg: Segment) {
     duration_us: t.duration,
     speed: seg.speed,
     volume: seg.volume,
-    opacity: seg.clip.alpha,
+    opacity: seg.clip?.alpha ?? 1,
     label,
   };
 }
@@ -280,6 +280,7 @@ function cmdOpacity(draft: Draft, filePath: string, segId: string, alphaStr: str
   if (!result) die(`Segment not found: ${segId}`);
   const alpha = parseFloat(alphaStr);
   if (isNaN(alpha) || alpha < 0 || alpha > 1) die("Opacity must be 0.0-1.0");
+  if (!result.segment.clip) die(`Segment ${segId} has no clip (audio segment?)`);
   const old = result.segment.clip.alpha;
   result.segment.clip.alpha = alpha;
   if (save) saveDraft(filePath, draft);
