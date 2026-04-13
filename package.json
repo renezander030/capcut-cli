@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Fast CLI for editing CapCut projects. Edit text, timing, speed, and volume in seconds instead of minutes.",
   "type": "module",
   "bin": {
@@ -19,11 +19,25 @@
   },
   "keywords": [
     "capcut",
+    "jianying",
     "video-editing",
     "cli",
+    "youtube",
+    "youtube-shorts",
+    "shorts",
+    "reels",
+    "tiktok",
+    "subtitles",
+    "srt",
+    "captions",
+    "timeline",
     "draft_content",
+    "draft_info",
     "automation",
-    "batch-edit"
+    "batch-edit",
+    "templates",
+    "ai-agent",
+    "mcp"
   ],
   "author": "René Zander",
   "license": "MIT",
