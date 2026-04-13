@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { loadDraft, saveDraft, extractText, updateTextContent, findSegment, findMaterial, findMaterialGlobal, getMaterialTypes, getTracksByType } from "./draft.js";
 import { formatTime, formatDuration, parseTimeInput, srtTime } from "./time.js";
+import { addText, cutProject } from "./factory.js";
 import type { Draft, Track, Segment } from "./draft.js";
+import type { AddTextOptions, CutOptions } from "./factory.js";
 
 const HELP = `capcut-cli -- fast edits to CapCut projects
 
@@ -29,6 +31,15 @@ Detail (drill into one item):
   segment    <project> <id>                     Full detail for one segment + its material
   material   <project> <id>                     Full detail for one material
 
+Add:
+  add-text   <project> <start> <duration> <text> [options]
+             Add a text segment. Options:
+               --font-size <n>    Font size (default: 15)
+               --color <hex>      Text color (default: #FFFFFF)
+               --align <0|1|2>    Left/center/right (default: 1)
+               --x <n> --y <n>    Position (-1 to 1, default: 0,0)
+               --track-name <s>   Track name (default: "text")
+
 Edit:
   set-text   <project> <id> <text>              Change text content
   shift      <project> <id> <offset>            Shift segment timing (e.g. +0.5s, -1s)
@@ -39,6 +50,10 @@ Edit:
   opacity    <project> <id> <alpha>             Set opacity (0.0-1.0)
   export-srt <project>                          Export subtitles to SRT
   batch      <project>                          Run multiple edits from stdin (JSONL)
+
+Project:
+  cut        <project> <start> <end> --out <path>
+             Extract a time range into a new project (long-form → short)
 
 Navigation: info → tracks/materials → segments → segment <id>
             info → materials --type X → material <id>
@@ -51,6 +66,13 @@ interface Flags {
   human: boolean;
   quiet: boolean;
   track?: string;
+  out?: string;
+  fontSize?: number;
+  color?: string;
+  align?: number;
+  x?: number;
+  y?: number;
+  trackName?: string;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
@@ -61,6 +83,13 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     if (a === "-H" || a === "--human") flags.human = true;
     else if (a === "-q" || a === "--quiet") flags.quiet = true;
     else if ((a === "--track" || a === "--type") && i + 1 < args.length) { flags.track = args[++i]; }
+    else if (a === "--out" && i + 1 < args.length) { flags.out = args[++i]; }
+    else if (a === "--font-size" && i + 1 < args.length) { flags.fontSize = parseFloat(args[++i]); }
+    else if (a === "--color" && i + 1 < args.length) { flags.color = args[++i]; }
+    else if (a === "--align" && i + 1 < args.length) { flags.align = parseInt(args[++i]); }
+    else if (a === "--x" && i + 1 < args.length) { flags.x = parseFloat(args[++i]); }
+    else if (a === "--y" && i + 1 < args.length) { flags.y = parseFloat(args[++i]); }
+    else if (a === "--track-name" && i + 1 < args.length) { flags.trackName = args[++i]; }
     else positional.push(a);
   }
   return { positional, flags };
@@ -398,6 +427,44 @@ function cmdMaterialDetail(draft: Draft, matId: string, flags: Flags): void {
   }
 }
 
+// --- Add commands ---
+
+function cmdAddText(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  const startStr = positional[2];
+  const durationStr = positional[3];
+  const text = positional.slice(4).join(" ");
+  if (!text) die("Missing text. Usage: capcut add-text <project> <start> <duration> <text>");
+  const start = parseTimeInput(startStr);
+  const duration = parseTimeInput(durationStr);
+  const opts: AddTextOptions = {
+    text,
+    start,
+    duration,
+    fontSize: flags.fontSize,
+    color: flags.color,
+    alignment: flags.align,
+    x: flags.x,
+    y: flags.y,
+    trackName: flags.trackName,
+  };
+  const result = addText(draft, filePath, opts);
+  saveDraft(filePath, draft);
+  out({ ok: true, segment_id: result.segmentId, material_id: result.materialId, track_id: result.trackId, text, start_us: start, duration_us: duration }, flags);
+}
+
+function cmdCut(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  if (!flags.out) die("Missing --out <path>. Usage: capcut cut <project> <start> <end> --out <path>");
+  const start = parseTimeInput(positional[2]);
+  const end = parseTimeInput(positional[3]);
+  if (end <= start) die("End time must be after start time");
+  const opts: CutOptions = { start, end };
+  const result = cutProject(draft, opts);
+  // Write to new file (not in-place)
+  const indent = 0;
+  writeFileSync(flags.out, JSON.stringify(draft, null, indent), "utf-8");
+  out({ ok: true, kept: result.kept, removed: result.removed, duration_us: end - start, out: flags.out }, flags);
+}
+
 // --- Batch ---
 
 interface BatchOp {
@@ -543,6 +610,14 @@ function main(): void {
     case "material":
       requireArgs(positional, 3, "capcut material <project> <id>");
       cmdMaterialDetail(draft, positional[2], flags);
+      break;
+    case "add-text":
+      requireArgs(positional, 5, "capcut add-text <project> <start> <duration> <text>");
+      cmdAddText(draft, filePath, positional, flags);
+      break;
+    case "cut":
+      requireArgs(positional, 4, "capcut cut <project> <start> <end> --out <path>");
+      cmdCut(draft, filePath, positional, flags);
       break;
     case "batch":
       cmdBatch(draft, filePath, flags);
