@@ -1,13 +1,20 @@
 {
   "name": "capcut-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fast CLI for editing CapCut projects. Edit text, timing, speed, and volume in seconds instead of minutes.",
   "type": "module",
   "bin": {
-    "capcut": "./dist/index.js"
+    "capcut": "dist/index.js",
+    "capcut-cli": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "tsc",
     "dev": "node --import tsx src/index.ts"
   },
   "keywords": [
@@ -18,7 +25,12 @@
     "automation",
     "batch-edit"
   ],
+  "author": "René Zander",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/renezander030/capcut-cli.git"
+  },
   "engines": {
     "node": ">=18"
   },
