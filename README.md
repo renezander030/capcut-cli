@@ -1,6 +1,6 @@
 # capcut-cli
 
-Stop reverse-engineering CapCut's JSON schema every time you need to change a subtitle.
+Create and edit CapCut projects from the command line. Build drafts from scratch, add media, modify subtitles, cut long-form to shorts.
 
 ## The problem
 
@@ -88,6 +88,27 @@ capcut material ./project a1b2c3             # Full detail for one material
 ```
 
 Progressive disclosure: `info` shows the shape, `materials` shows what's available, `segment`/`material` shows everything about one item. An AI agent navigates overview → list → detail, never gets more data than it needs.
+
+### Create (build projects from scratch)
+
+No need to open CapCut first. Create a draft, add media, then open in CapCut.
+
+```bash
+# Create an empty draft
+capcut init "My Short" --drafts ~/Movies/CapCut/User\ Data/Projects/com.lveditor.draft
+
+# Add media
+capcut add-video ./my-short ./clip.mp4 0s 10s
+capcut add-audio ./my-short ./voiceover.wav 0s 10s --volume 0.9
+capcut add-audio ./my-short ./music.mp3 0s 30s --volume 0.3
+
+# Add titles
+capcut add-text ./my-short 0s 5s "My Short" --font-size 24 --color "#FFD700"
+```
+
+`init` creates a valid `draft_content.json` from a built-in template. `add-video` and `add-audio` copy the file into the draft's assets directory so CapCut can find it. Open the project in CapCut and everything links up.
+
+Options for `add-video` / `add-audio`: `--volume <0-1>`, `--template <path>` (custom draft template).
 
 ### Add
 
