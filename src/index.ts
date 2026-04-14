@@ -3,9 +3,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { loadDraft, saveDraft, extractText, updateTextContent, findSegment, findMaterial, findMaterialGlobal, getMaterialTypes, getTracksByType } from "./draft.js";
 import { formatTime, formatDuration, parseTimeInput, srtTime } from "./time.js";
-import { addText, cutProject, saveTemplate, applyTemplate } from "./factory.js";
+import { addText, addAudio, addVideo, cutProject, saveTemplate, applyTemplate, initDraft } from "./factory.js";
 import type { Draft, Track, Segment } from "./draft.js";
-import type { AddTextOptions, CutOptions } from "./factory.js";
+import type { AddTextOptions, AddAudioOptions, AddVideoOptions, CutOptions, InitOptions } from "./factory.js";
 
 const HELP = `capcut-cli -- fast edits to CapCut projects
 
@@ -31,7 +31,23 @@ Detail (drill into one item):
   segment    <project> <id>                     Full detail for one segment + its material
   material   <project> <id>                     Full detail for one material
 
+Create:
+  init       <name> [--template <dir>] [--drafts <dir>]
+             Create a new empty draft from template. Defaults:
+               --template   ../CapCutAPI/template (relative to capcut-cli)
+               --drafts     ~/Movies/CapCut/User Data/Projects/com.lveditor.draft
+
 Add:
+  add-audio  <project> <file> <start> <duration> [options]
+             Add an audio segment (VO, music, SFX). Options:
+               --volume <n>       Volume 0.0-1.0 (default: 1.0)
+               --track-name <s>   Track name (default: "audio")
+
+  add-video  <project> <file> <start> <duration> [options]
+             Add a video or image segment. Type auto-detected from extension.
+             Options:
+               --track-name <s>   Track name (default: "video")
+
   add-text   <project> <start> <duration> <text> [options]
              Add a text segment. Options:
                --font-size <n>    Font size (default: 15)
@@ -80,6 +96,9 @@ interface Flags {
   x?: number;
   y?: number;
   trackName?: string;
+  volume?: number;
+  template?: string;
+  drafts?: string;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
@@ -97,6 +116,9 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     else if (a === "--x" && i + 1 < args.length) { flags.x = parseFloat(args[++i]); }
     else if (a === "--y" && i + 1 < args.length) { flags.y = parseFloat(args[++i]); }
     else if (a === "--track-name" && i + 1 < args.length) { flags.trackName = args[++i]; }
+    else if (a === "--volume" && i + 1 < args.length) { flags.volume = parseFloat(args[++i]); }
+    else if (a === "--template" && i + 1 < args.length) { flags.template = args[++i]; }
+    else if (a === "--drafts" && i + 1 < args.length) { flags.drafts = args[++i]; }
     else positional.push(a);
   }
   return { positional, flags };
@@ -436,6 +458,45 @@ function cmdMaterialDetail(draft: Draft, matId: string, flags: Flags): void {
 
 // --- Add commands ---
 
+function cmdAddAudio(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  const audioPath = positional[2];
+  const startStr = positional[3];
+  const durationStr = positional[4];
+  if (!audioPath || !startStr || !durationStr) die("Usage: capcut add-audio <project> <file> <start> <duration>");
+  const absPath = audioPath.startsWith("/") ? audioPath : process.cwd() + "/" + audioPath;
+  const start = parseTimeInput(startStr);
+  const duration = parseTimeInput(durationStr);
+  const opts: AddAudioOptions = {
+    path: absPath,
+    start,
+    duration,
+    volume: flags.volume,
+    trackName: flags.trackName,
+  };
+  const result = addAudio(draft, filePath, opts);
+  saveDraft(filePath, draft);
+  out({ ok: true, segment_id: result.segmentId, material_id: result.materialId, track_id: result.trackId, path: absPath, start_us: start, duration_us: duration }, flags);
+}
+
+function cmdAddVideo(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  const videoPath = positional[2];
+  const startStr = positional[3];
+  const durationStr = positional[4];
+  if (!videoPath || !startStr || !durationStr) die("Usage: capcut add-video <project> <file> <start> <duration>");
+  const absPath = videoPath.startsWith("/") ? videoPath : process.cwd() + "/" + videoPath;
+  const start = parseTimeInput(startStr);
+  const duration = parseTimeInput(durationStr);
+  const opts: AddVideoOptions = {
+    path: absPath,
+    start,
+    duration,
+    trackName: flags.trackName,
+  };
+  const result = addVideo(draft, filePath, opts);
+  saveDraft(filePath, draft);
+  out({ ok: true, segment_id: result.segmentId, material_id: result.materialId, track_id: result.trackId, path: absPath, start_us: start, duration_us: duration }, flags);
+}
+
 function cmdAddText(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
   const startStr = positional[2];
   const durationStr = positional[3];
@@ -599,6 +660,19 @@ function main(): void {
   const cmd = positional[0];
   const projectPath = positional[1];
 
+  // init doesn't need an existing project
+  if (cmd === "init") {
+    const name = projectPath; // positional[1] is the name for init
+    if (!name) die("Missing name. Usage: capcut init <name> [--template <dir>] [--drafts <dir>]");
+    const cliDir = new URL(".", import.meta.url).pathname.replace(/\/dist\/$/, "");
+    const templateDir = flags.template ?? cliDir + "/../CapCutAPI/template";
+    const draftsDir = flags.drafts ?? (process.env.HOME || "~") + "/Movies/CapCut/User Data/Projects/com.lveditor.draft";
+    const result = initDraft({ name, templateDir, draftsDir });
+    out({ ok: true, name, draft_path: result.draftPath, file_path: result.filePath }, flags);
+    if (!flags.quiet) process.stderr.write(`Created: ${result.draftPath}\n`);
+    process.exit(0);
+  }
+
   if (!projectPath) die("Missing project path. Run 'capcut --help' for usage.");
 
   const { draft, filePath } = loadDraft(projectPath);
@@ -657,6 +731,14 @@ function main(): void {
     case "material":
       requireArgs(positional, 3, "capcut material <project> <id>");
       cmdMaterialDetail(draft, positional[2], flags);
+      break;
+    case "add-audio":
+      requireArgs(positional, 5, "capcut add-audio <project> <file> <start> <duration>");
+      cmdAddAudio(draft, filePath, positional, flags);
+      break;
+    case "add-video":
+      requireArgs(positional, 5, "capcut add-video <project> <file> <start> <duration>");
+      cmdAddVideo(draft, filePath, positional, flags);
       break;
     case "add-text":
       requireArgs(positional, 5, "capcut add-text <project> <start> <duration> <text>");

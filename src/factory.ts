@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import type { Draft, Segment, Track, Timerange } from "./draft.js";
 import { findMaterialGlobal } from "./draft.js";
 
@@ -7,6 +8,38 @@ import { findMaterialGlobal } from "./draft.js";
 
 export function uuid(): string {
   return randomUUID();
+}
+
+// --- Init (create new empty draft) ---
+
+export interface InitOptions {
+  name: string;
+  templateDir: string;  // path to template directory
+  draftsDir: string;    // path to CapCut drafts directory
+}
+
+export function initDraft(opts: InitOptions): { draftPath: string; filePath: string } {
+  const draftPath = resolve(opts.draftsDir, opts.name);
+  if (existsSync(draftPath)) {
+    throw new Error(`Draft already exists: ${draftPath}. Delete it first or use a different name.`);
+  }
+  cpSync(opts.templateDir, draftPath, { recursive: true });
+
+  // Find the draft file
+  const candidates = ["draft_info.json", "draft_content.json"];
+  for (const c of candidates) {
+    const fp = resolve(draftPath, c);
+    if (existsSync(fp)) {
+      // Update the draft name
+      const raw = readFileSync(fp, "utf-8");
+      const draft = JSON.parse(raw) as Draft;
+      draft.name = opts.name;
+      draft.id = uuid();
+      writeFileSync(fp, JSON.stringify(draft, null, 0), "utf-8");
+      return { draftPath, filePath: fp };
+    }
+  }
+  throw new Error(`No draft_info.json or draft_content.json found in template: ${opts.templateDir}`);
 }
 
 // --- Companion materials (CapCut 6.5+ creates these per-segment) ---
@@ -198,6 +231,178 @@ export function addText(draft: Draft, filePath: string, opts: AddTextOptions): {
     (seg.clip as NonNullable<typeof seg.clip>).transform = { x: opts.x ?? 0, y: opts.y ?? 0 };
   }
   track.segments.push(seg);
+
+  return { segmentId: segId, materialId: matId, trackId: track.id };
+}
+
+// --- Audio ---
+
+export interface AddAudioOptions {
+  path: string;         // absolute path to audio file
+  start: number;        // microseconds
+  duration: number;     // microseconds (0 = use file duration)
+  volume?: number;      // 0.0-1.0, default 1.0
+  trackName?: string;   // default "audio"
+}
+
+export function addAudio(draft: Draft, filePath: string, opts: AddAudioOptions): { segmentId: string; materialId: string; trackId: string } {
+  const segId = uuid();
+  const matId = uuid();
+  const trackName = opts.trackName ?? "audio";
+  const volume = opts.volume ?? 1.0;
+
+  // Find or create audio track
+  let track = draft.tracks.find(t => t.type === "audio" && t.name === trackName);
+  if (!track) {
+    track = {
+      id: uuid(),
+      type: "audio",
+      name: trackName,
+      attribute: 0,
+      segments: [],
+      is_default_name: false,
+      flag: 0,
+    } as unknown as Track;
+    draft.tracks.push(track);
+  }
+
+  // Create companion materials
+  const companions = createCompanionMaterials("audio");
+  registerCompanions(draft, companions);
+
+  // Create audio material
+  const audioMaterial = {
+    id: matId,
+    path: opts.path,
+    name: opts.path.split("/").pop() || "audio",
+    duration: opts.duration,
+    type: "extract_music",
+    category_id: "",
+    category_name: "local",
+    check_flag: 1,
+    music_id: "",
+    request_id: "",
+    source_platform: 0,
+    team_id: "",
+    text_id: "",
+    tone_category_id: "",
+    tone_category_name: "",
+    tone_effect_id: "",
+    tone_effect_name: "",
+    tone_platform: "",
+    tone_second_category_id: "",
+    tone_second_category_name: "",
+    tone_speaker: "",
+    tone_type: "",
+    wave_points: [],
+  };
+  (draft.materials.audios as unknown as Array<Record<string, unknown>>).push(audioMaterial);
+
+  // Create segment
+  const timerange: Timerange = { start: opts.start, duration: opts.duration };
+  const seg = baseSegment(segId, matId, track.id, timerange, companions.ids, 11000);
+  seg.volume = volume;
+  track.segments.push(seg);
+
+  // Update project duration if needed
+  const segEnd = opts.start + opts.duration;
+  if (segEnd > draft.duration) {
+    draft.duration = segEnd;
+  }
+
+  return { segmentId: segId, materialId: matId, trackId: track.id };
+}
+
+// --- Video / Image ---
+
+export interface AddVideoOptions {
+  path: string;         // absolute path to video/image file
+  start: number;        // microseconds
+  duration: number;     // microseconds
+  type?: "video" | "photo";  // default: inferred from extension
+  width?: number;       // default 1920
+  height?: number;      // default 1080
+  trackName?: string;   // default "video"
+}
+
+export function addVideo(draft: Draft, filePath: string, opts: AddVideoOptions): { segmentId: string; materialId: string; trackId: string } {
+  const segId = uuid();
+  const matId = uuid();
+  const trackName = opts.trackName ?? "video";
+  const width = opts.width ?? 1920;
+  const height = opts.height ?? 1080;
+
+  // Infer type from extension if not provided
+  const ext = opts.path.split(".").pop()?.toLowerCase() || "";
+  const materialType = opts.type ?? (["jpg", "jpeg", "png", "webp", "bmp", "tiff"].includes(ext) ? "photo" : "video");
+
+  // Find or create video track
+  let track = draft.tracks.find(t => t.type === "video" && t.name === trackName);
+  if (!track) {
+    track = {
+      id: uuid(),
+      type: "video",
+      name: trackName,
+      attribute: 0,
+      segments: [],
+      is_default_name: false,
+      flag: 0,
+    } as unknown as Track;
+    draft.tracks.push(track);
+  }
+
+  // Create companion materials
+  const companions = createCompanionMaterials("video");
+  registerCompanions(draft, companions);
+
+  // Create video material
+  const videoMaterial = {
+    id: matId,
+    path: opts.path,
+    material_name: opts.path.split("/").pop() || "media",
+    type: materialType,
+    duration: opts.duration,
+    width,
+    height,
+    category_id: "",
+    category_name: "local",
+    check_flag: 7,
+    crop: { lower_left_x: 0, lower_left_y: 1, lower_right_x: 1, lower_right_y: 1, upper_left_x: 0, upper_left_y: 0, upper_right_x: 1, upper_right_y: 0 },
+    has_audio: materialType === "video",
+    extra_type_option: 0,
+    formula_id: "",
+    freeze: null,
+    intensifies_audio_path: "",
+    intensifies_path: "",
+    is_ai_generate_content: false,
+    is_copyright: false,
+    is_text_edit_overdub: false,
+    is_unified_beauty_mode: false,
+    local_id: "",
+    local_material_id: "",
+    material_url: "",
+    media_path: "",
+    object_locked: null,
+    origin_material_id: "",
+    request_id: "",
+    reverse_path: "",
+    source_platform: 0,
+    stable: { matrix_path: "", stable_level: 0, time_range: { duration: 0, start: 0 } },
+    team_id: "",
+    video_algorithm: { algorithms: [], deflicker: null, motion_blur_config: null, noise_reduction: null, path: "", quality_enhance: null, time_range: null },
+  };
+  (draft.materials.videos as unknown as Array<Record<string, unknown>>).push(videoMaterial);
+
+  // Create segment
+  const timerange: Timerange = { start: opts.start, duration: opts.duration };
+  const seg = baseSegment(segId, matId, track.id, timerange, companions.ids, 14000);
+  track.segments.push(seg);
+
+  // Update project duration if needed
+  const segEnd = opts.start + opts.duration;
+  if (segEnd > draft.duration) {
+    draft.duration = segEnd;
+  }
 
   return { segmentId: segId, materialId: matId, trackId: track.id };
 }
