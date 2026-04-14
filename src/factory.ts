@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync, copyFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import type { Draft, Segment, Track, Timerange } from "./draft.js";
 import { findMaterialGlobal } from "./draft.js";
@@ -251,6 +251,18 @@ export function addAudio(draft: Draft, filePath: string, opts: AddAudioOptions):
   const trackName = opts.trackName ?? "audio";
   const volume = opts.volume ?? 1.0;
 
+  // Copy file into draft assets directory
+  const draftDir = dirname(filePath);
+  const filename = opts.path.split("/").pop() || "audio.mp3";
+  const assetsDir = resolve(draftDir, "assets", "audio");
+  mkdirSync(assetsDir, { recursive: true });
+  const destPath = resolve(assetsDir, filename);
+  if (!existsSync(destPath)) {
+    copyFileSync(opts.path, destPath);
+  }
+  // Use the local assets path — CapCut rewrites to placeholder on open
+  const localPath = destPath;
+
   // Find or create audio track
   let track = draft.tracks.find(t => t.type === "audio" && t.name === trackName);
   if (!track) {
@@ -273,8 +285,8 @@ export function addAudio(draft: Draft, filePath: string, opts: AddAudioOptions):
   // Create audio material
   const audioMaterial = {
     id: matId,
-    path: opts.path,
-    name: opts.path.split("/").pop() || "audio",
+    path: localPath,
+    name: filename,
     duration: opts.duration,
     type: "extract_music",
     category_id: "",
@@ -336,6 +348,18 @@ export function addVideo(draft: Draft, filePath: string, opts: AddVideoOptions):
   const ext = opts.path.split(".").pop()?.toLowerCase() || "";
   const materialType = opts.type ?? (["jpg", "jpeg", "png", "webp", "bmp", "tiff"].includes(ext) ? "photo" : "video");
 
+  // Copy file into draft assets directory
+  const draftDir = dirname(filePath);
+  const filename = opts.path.split("/").pop() || "media";
+  const assetsDir = resolve(draftDir, "assets", "video");
+  mkdirSync(assetsDir, { recursive: true });
+  const destPath = resolve(assetsDir, filename);
+  if (!existsSync(destPath)) {
+    copyFileSync(opts.path, destPath);
+  }
+  // Use the local assets path — CapCut rewrites to placeholder on open
+  const localPath = destPath;
+
   // Find or create video track
   let track = draft.tracks.find(t => t.type === "video" && t.name === trackName);
   if (!track) {
@@ -358,8 +382,8 @@ export function addVideo(draft: Draft, filePath: string, opts: AddVideoOptions):
   // Create video material
   const videoMaterial = {
     id: matId,
-    path: opts.path,
-    material_name: opts.path.split("/").pop() || "media",
+    path: localPath,
+    material_name: filename,
     type: materialType,
     duration: opts.duration,
     width,
