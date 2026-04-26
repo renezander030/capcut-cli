@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "CLI to create and edit CapCut projects — build drafts from scratch, add video/audio/text, subtitles, timing, speed, volume, templates, cut long-form to shorts. No API needed.",
   "type": "module",
   "bin": {
