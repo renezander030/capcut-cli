@@ -258,6 +258,9 @@ End-to-end recipes in [`examples/`](./examples/):
 - [Build a short from scratch — clip + VO + music + title, no GUI](./examples/build-short-from-scratch.md)
 - [Translate subtitles via SRT round-trip](./examples/translate-subtitles.md)
 - [Save a styled title once, reuse across many projects](./examples/reusable-title-template.md)
+- [Programmatic Ken Burns zoom keyframes](./examples/keyframe-zoom.md)
+- [Unfinished-pan keyframe pattern for epilogue stills](./examples/keyframe-pan.md)
+- [Pre-flight check on VO + word-level timestamps](./examples/verify-vo-alignment.md)
 
 ## License
 

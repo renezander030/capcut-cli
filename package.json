@@ -9,7 +9,9 @@
   },
   "files": [
     "dist",
+    "examples",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE"
   ],
   "scripts": {
