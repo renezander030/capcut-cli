@@ -1,5 +1,7 @@
 # capcut-cli
 
+English | [中文](./README.zh-CN.md)
+
 Create and edit CapCut projects from the command line. Build drafts from scratch, add media, modify subtitles, cut long-form to shorts.
 
 ## The problem
@@ -246,6 +248,16 @@ echo '{"cmd":"set-text","id":"a1b2c3","text":"Corrected line one"}
 ```
 
 Four changes, one file write. Done in under 5 seconds.
+
+## Examples
+
+End-to-end recipes in [`examples/`](./examples/):
+
+- [Cut one long video into multiple shorts](./examples/cut-to-shorts.md)
+- [Batch-fix subtitles (typos + timing in one pass)](./examples/batch-fix-subtitles.md)
+- [Build a short from scratch — clip + VO + music + title, no GUI](./examples/build-short-from-scratch.md)
+- [Translate subtitles via SRT round-trip](./examples/translate-subtitles.md)
+- [Save a styled title once, reuse across many projects](./examples/reusable-title-template.md)
 
 ## License
 
