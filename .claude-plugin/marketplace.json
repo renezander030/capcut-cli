@@ -1,0 +1,14 @@
+{
+  "name": "capcut-cli",
+  "owner": {
+    "name": "René Zander"
+  },
+  "description": "Edit CapCut and JianYing projects from Claude Code (capcut-cli plugin).",
+  "plugins": [
+    {
+      "name": "capcut-cli",
+      "source": "./",
+      "description": "Edit CapCut and JianYing projects from Claude Code — subtitles, timing, speed, volume, transitions, masks, templates, cut long-form to shorts."
+    }
+  ]
+}
