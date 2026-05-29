@@ -12,6 +12,7 @@ Copy-paste recipes for common CapCut / JianYing workflows. Every recipe is one s
 | [keyframe-zoom.md](./keyframe-zoom.md) | Programmatic Ken Burns zoom-in/out keyframes on one segment |
 | [keyframe-pan.md](./keyframe-pan.md) | Unfinished-pan keyframe pattern for epilogue / payoff stills |
 | [verify-vo-alignment.md](./verify-vo-alignment.md) | Pre-flight check on ElevenLabs voiceover + word-level timestamps |
+| [serve-automation.md](./serve-automation.md) | Wire the stateless JSONL queue runner into n8n / Make / Coze / Docker |
 
 All shell-only recipes assume `capcut` is on your `$PATH` (`npm install -g capcut-cli`).
 The three keyframe / VO recipes ship with companion Python scripts under [`./scripts/`](./scripts/) — Python 3.9+, no external deps.
