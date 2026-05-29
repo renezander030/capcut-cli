@@ -32,6 +32,7 @@ import {
   transitionSlugs,
 } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
+import { type DoctorCheck, runDoctor } from "./doctor.js";
 import type { Draft, Segment, Track } from "./draft.js";
 import {
   extractText,
@@ -305,6 +306,10 @@ Encryption (v0.6 — detection scaffold):
   decrypt    <project>
              Detect JianYing 6.0+ encryption and report next steps.
              (Decryption algorithm not bundled; clear error UX + workaround docs.)
+  doctor
+             Check the environment, not a draft: Node version, whisper binary
+             (for caption), ANTHROPIC_API_KEY (for translate), and the default
+             CapCut/JianYing project directory. Exit 1 only on hard failures.
 
 Stateless queue runner (v0.5):
   serve      [--queue <path>] [--fail-fast]
@@ -1901,6 +1906,25 @@ function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
   out({ ok: true, succeeded: ok, failed: fail }, flags);
 }
 
+function cmdDoctor(flags: Flags): boolean {
+  const report = runDoctor();
+  if (flags.human) {
+    const glyph: Record<DoctorCheck["status"], string> = { ok: "✓", warn: "!", missing: "✗" };
+    console.log(`Platform:  ${report.platform}`);
+    console.log(`Node:      ${report.node}`);
+    console.log("");
+    for (const c of report.checks) {
+      console.log(`[${glyph[c.status]}] ${c.name.padEnd(18)} ${c.detail}`);
+      if (c.status !== "ok" && c.fix) console.log(`      → ${c.fix}`);
+    }
+    console.log("");
+    console.log(report.ok ? "Ready." : "Missing a hard requirement — see ✗ above.");
+  } else {
+    out(report, flags);
+  }
+  return report.ok;
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -1918,6 +1942,11 @@ async function main(): Promise<void> {
   if (cmd === "enums") {
     cmdEnums(flags);
     process.exit(0);
+  }
+
+  // `doctor` inspects the environment, not a draft — no project needed.
+  if (cmd === "doctor") {
+    process.exit(cmdDoctor(flags) ? 0 : 1);
   }
 
   // `serve` reads jobs from stdin/queue file — no project needed.
