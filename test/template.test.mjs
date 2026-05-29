@@ -47,7 +47,7 @@ describe("capcut save-template + apply-template", () => {
 });
 
 describe("shipped templates apply cleanly", () => {
-  for (const name of ["gold-title", "end-card", "subscribe-cta"]) {
+  for (const name of ["gold-title", "end-card", "subscribe-cta", "caption-pop", "lower-third", "hook-question"]) {
     it(`templates/${name}.json roundtrips into a fresh draft`, () => {
       const fix = tmpDraft();
       try {

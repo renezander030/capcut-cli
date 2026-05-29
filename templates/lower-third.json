@@ -1,0 +1,79 @@
+{
+  "name": "lower-third",
+  "type": "text",
+  "segment": {
+    "id": "b1b2c3d4-0001-4b01-9b01-000000000001",
+    "material_id": "b1b2c3d4-0002-4b02-9b02-000000000002",
+    "raw_segment_id": "b1b2c3d4-0003-4b03-9b03-000000000003",
+    "target_timerange": { "start": 0, "duration": 4000000 },
+    "source_timerange": { "start": 0, "duration": 4000000 },
+    "speed": 1,
+    "volume": 1,
+    "visible": true,
+    "reverse": false,
+    "clip": {
+      "alpha": 1,
+      "rotation": 0,
+      "scale": { "x": 1, "y": 1 },
+      "transform": { "x": -0.42, "y": -0.62 },
+      "flip": { "horizontal": false, "vertical": false }
+    },
+    "render_index": 15000,
+    "track_render_index": 0,
+    "track_attribute": 0,
+    "extra_material_refs": [
+      "b1b2c3d4-0004-4b04-9b04-000000000004",
+      "b1b2c3d4-0005-4b05-9b05-000000000005",
+      "b1b2c3d4-0006-4b06-9b06-000000000006",
+      "b1b2c3d4-0007-4b07-9b07-000000000007"
+    ],
+    "common_keyframes": [],
+    "keyframe_refs": []
+  },
+  "material": {
+    "type": "texts",
+    "data": {
+      "id": "b1b2c3d4-0002-4b02-9b02-000000000002",
+      "type": "text",
+      "content": "{\"styles\":[{\"range\":[0,9],\"size\":8,\"bold\":true,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1,\"color\":[1,1,1]}}}}],\"text\":\"@handle\"}",
+      "alignment": 0,
+      "font_size": 8,
+      "text_color": "#FFFFFF",
+      "typesetting": 0,
+      "letter_spacing": 0,
+      "line_spacing": 0.02,
+      "line_feed": 1,
+      "line_max_width": 0.82,
+      "force_apply_line_max_width": false,
+      "check_flag": 7,
+      "fixed_width": -1,
+      "fixed_height": -1,
+      "has_shadow": true,
+      "shadow_alpha": 0.6,
+      "shadow_color": "#000000",
+      "shadow_distance": 4,
+      "border_width": 0.04,
+      "border_color": "#000000",
+      "border_alpha": 1,
+      "has_border": true
+    }
+  },
+  "extra_materials": [
+    {
+      "type": "speeds",
+      "data": { "id": "b1b2c3d4-0004-4b04-9b04-000000000004", "type": "speed", "speed": 1, "mode": 0, "curve_speed": null }
+    },
+    {
+      "type": "placeholder_infos",
+      "data": { "id": "b1b2c3d4-0005-4b05-9b05-000000000005", "type": "placeholder_info", "error_path": "", "error_text": "", "meta_type": "none", "res_path": "", "res_text": "" }
+    },
+    {
+      "type": "sound_channel_mappings",
+      "data": { "id": "b1b2c3d4-0006-4b06-9b06-000000000006", "type": "none", "audio_channel_mapping": 0, "is_config_open": false }
+    },
+    {
+      "type": "vocal_separations",
+      "data": { "id": "b1b2c3d4-0007-4b07-9b07-000000000007", "type": "vocal_separation", "choice": 0, "enter_from": "", "final_algorithm": "", "production_path": "", "removed_sounds": [], "time_range": null }
+    }
+  ]
+}
