@@ -1,5 +1,6 @@
 # capcut-cli
 
+[![CI](https://github.com/renezander030/capcut-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/renezander030/capcut-cli/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/capcut-cli.svg)](https://www.npmjs.com/package/capcut-cli)
 [![npm downloads](https://img.shields.io/npm/dm/capcut-cli.svg)](https://www.npmjs.com/package/capcut-cli)
 [![node](https://img.shields.io/node/v/capcut-cli.svg)](https://nodejs.org)
@@ -7,15 +8,25 @@
 
 [English](./README.md) | 中文
 
-**剪映 / CapCut 工具链，扛得住字节跳动下次改版 —— 自动加的字幕也是真字幕对象（不是 import-srt 那种文本伪装）。**
+**任何大模型 Agent 都能驱动的剪映 / CapCut 命令行 —— 零依赖、无服务、CapCut + 剪映共用一个二进制。**
 
-任何能输出 JSON 的大模型都能驱动它：不用 MCP 服务，不用 HTTP 守护进程，无状态。命令行查看工程、从零搭草稿、加素材、改字幕、用 whisper 自动打字幕、一键克隆成多语言版本、把长视频切成短片。直接读写 `draft_content.json`，零运行时依赖，CapCut + 剪映两个命名空间共用一个二进制。
+每个命令都直接读写 `draft_content.json`：JSON 进、JSON 出，不用 MCP 服务，不用 HTTP 守护进程，无状态。任何模型（Claude、DeepSeek、GLM、Kimi）都能在流水线里直接调用这个确定性边界。命令行查看工程、从零搭草稿、加素材、改字幕、用 whisper 自动打字幕、一键克隆成多语言版本、把长视频切成短片。因为链路里没有任何私有 API，所以扛得住字节跳动下次改版 —— 而且 `caption` 写的是真字幕对象，不是别的工具那种文本伪装。
+
+**三种用法：**
+
+- **命令行** —— `npm install -g capcut-cli`，然后 `capcut <command> <project>`
+- **代码库** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
+- **队列执行器** —— `capcut serve` 从 stdin 读 JSONL 任务，可对接 [n8n / Make / 扣子 Coze](./examples/serve-automation.md)
+
+先跑 `capcut doctor` 检查环境（Node、whisper、草稿目录）。
+
+**v0.6 新增** —— `doctor`（环境预检）、可导入的 Node 代码库（`import { … } from "capcut-cli"`）、官方 [Dockerfile](./Dockerfile)、在 CI 里检查草稿的 [GitHub Action](./action.yml)、三个新模板（`caption-pop`、`lower-third`、`hook-question`），以及覆盖 Node 18/20/22 的 CI 矩阵。
 
 **v0.4 新增** —— `caption`（whisper → 真字幕对象，不再是 import-srt 那种文本伪装）、`migrate`（剪映 5.9 / CapCut 9.6 之间的 `mask` ↔ `common_masks` schema 迁移）、`lint`（字幕检查：重叠、行长、缺失素材文件）、`version`（检测兼容状态）、`translate`（多语言草稿克隆，走 Anthropic API）、`add-sfx`、`chroma`、`serve`（无状态 JSONL 队列 —— 对接 n8n / Coze / 扣子 / Make）、`export --batch`（**实验性** macOS UI 自动化批量导出）。
 
-## v0.5 投票决定下一步
+## v0.5 已发布（社区投票决定）
 
-下面是 v0.5 候选功能，欢迎到 **[Discussion #1](https://github.com/renezander030/capcut-cli/discussions/1)** 给你想要的功能 👍 —— 我会按票数把前 3-5 个打包进一个 v0.5 release（目标 2 周内出）。
+下面六个功能都是在 **[Discussion #1](https://github.com/renezander030/capcut-cli/discussions/1)** 投票选出、并在 v0.5 一起发布的。想决定下一步加什么？去那里给评论点 👍，或者开一个新 discussion。
 
 - `audio-fade <project> <id> --in <秒> --out <秒>` —— 音频淡入淡出（写真正的 `audio_fades` 对象，不再用音量关键帧凑）
 - `bubble-text <project> <id> --bubble <slug>` / 花字 —— 文本气泡 / 花字特效 + `enums --bubbles` 枚举发现
@@ -24,7 +35,7 @@
 - `import-ass <project> <ass-path>` —— ASS 字幕导入（跟现有 `import-srt` 并存）
 - `mix-mode <project> <id> <模式>` —— 视频片段混合模式（正片叠底 / 滤色 / 叠加 …）
 
-> 投票截止到 v0.5 发布为止。如果你想要的功能不在列表里，去 Discussion #1 留言。
+> 六个功能都已在 v0.5.0 发布。如果你想要的功能不在列表里，去 Discussion #1 留言。
 
 > **想要完整的国产大模型 + 剪映短视频流水线？** `capcut-cli` 是引擎，配套的 **[病毒短视频蓝图（完整教程 + 蓝图下载）](https://renezander.com/zh-cn/guides/automate-xiaohongshu-capcut-cli/?utm_source=capcut-cli&utm_medium=readme&utm_campaign=hero-cn)** 给你完整方法 —— DeepSeek / GLM / Kimi / Qwen 都能跑，专为 **小红书 + 抖音** 优化（不是 YouTube），**支付宝 / 微信支付** 通过 Stripe 直接下单。
 
