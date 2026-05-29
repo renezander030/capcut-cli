@@ -1,5 +1,6 @@
 # capcut-cli
 
+[![CI](https://github.com/renezander030/capcut-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/renezander030/capcut-cli/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/capcut-cli.svg)](https://www.npmjs.com/package/capcut-cli)
 [![npm downloads](https://img.shields.io/npm/dm/capcut-cli.svg)](https://www.npmjs.com/package/capcut-cli)
 [![node](https://img.shields.io/node/v/capcut-cli.svg)](https://nodejs.org)
@@ -7,15 +8,25 @@
 
 English | [中文](./README.zh-CN.md)
 
-**The CapCut/JianYing toolkit that survives the next ByteDance update — and auto-captions with real caption objects.**
+**The CapCut/JianYing CLI any LLM agent can drive — zero dependencies, no server, both namespaces in one binary.**
 
-A pure CLI any LLM can drive: no MCP server, no HTTP daemon, no state. Inspect drafts, build from scratch, add media, modify subtitles, auto-caption with whisper, translate to N languages, cut long-form to shorts. Zero runtime deps, both CapCut and JianYing namespaces in one binary, JSON output by default.
+Every command reads and writes `draft_content.json` directly: JSON in, JSON out, no MCP server, no HTTP daemon, no state to babysit. That makes it a deterministic boundary any model (Claude, DeepSeek, GLM, Kimi) can call from a pipeline. Inspect drafts, build from scratch, add media, edit subtitles, auto-caption with whisper, translate to N languages, and cut long-form to shorts. Because there is no private API in the loop, it keeps working across ByteDance updates — and `caption` writes real caption objects, not the text-segment mimics other tools settle for.
+
+**Use it three ways:**
+
+- **CLI** — `npm install -g capcut-cli`, then `capcut <command> <project>`
+- **Library** — `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"` (typed, zero-dep)
+- **Queue runner** — `capcut serve` reads JSONL jobs from stdin and drops into [n8n / Make / Coze](./examples/serve-automation.md)
+
+Run `capcut doctor` first to verify your environment (Node, whisper, draft directory).
+
+**New in v0.6** — `doctor` (environment preflight), an importable Node library (`import { … } from "capcut-cli"`), an official [Dockerfile](./Dockerfile), a [GitHub Action](./action.yml) that lints drafts in CI, three new shipped templates (`caption-pop`, `lower-third`, `hook-question`), and a CI matrix across Node 18/20/22.
 
 **New in v0.4** — `caption` (whisper → real caption objects, not the import-srt text-mimics), `migrate` (mask ↔ common_masks across CapCut/JianYing version jumps), `lint` (schema-aware checks: overlaps, line length, missing files), `version` (detect support status), `translate` (Anthropic-API multi-language draft clone), `add-sfx`, `chroma`, `serve` (stateless JSONL queue runner for n8n/Coze/Make), and `export --batch` (EXPERIMENTAL macOS UI-automated render queue).
 
-## v0.5 — vote on what ships next
+## v0.5 — shipped, community-voted
 
-Open for community vote on **[Discussion #1](https://github.com/renezander030/capcut-cli/discussions/1)**. 👍 the comments for the features you want most — I ship the top 3-5 as a single v0.5 release within ~2 weeks.
+All six features below were voted in on **[Discussion #1](https://github.com/renezander030/capcut-cli/discussions/1)** and shipped together in v0.5. Want a say in what lands next? 👍 the comments there, or open a new discussion.
 
 - ✅ `audio-fade <project> <id> --in <s> --fade-out <s>` — fade-in / fade-out on audio segments (proper `audio_fades` objects, not volume keyframes) **shipped in v0.5**
 - ✅ `bubble-text <project> <id> --bubble <slug>` / 花字 — bubble / decorative text effects + `enums --bubbles` discovery **shipped in v0.5**
@@ -24,7 +35,7 @@ Open for community vote on **[Discussion #1](https://github.com/renezander030/ca
 - ✅ `import-ass <project> <ass-path>` — ASS subtitle import alongside existing `import-srt` **shipped in v0.5**
 - ✅ `mix-mode <project> <id> <mode>` — blend modes per video segment (multiply, screen, overlay, …) **shipped in v0.5**
 
-> Voting closes when v0.5 ships. If your feature is missing, drop a comment on Discussion #1.
+> All six shipped in v0.5.0. If the feature you want is missing, drop a comment on Discussion #1.
 
 ## Workflow
 
@@ -129,7 +140,15 @@ Status of every feature shipped. ✅ = implemented, ⬜ = roadmap. Section ancho
 - ✅ `caption` — whisper shell-out (openai-whisper / whisper.cpp / faster-whisper) → real caption-track segments with `sub_type` + `caption_template_info` (addresses pyJianYingDraft #148 — no more text-segment mimics)
 - ✅ `translate` — Anthropic-API multi-language draft clone, zero runtime deps (uses built-in `fetch`). `--dry-run` for safe inspection. Original stays untouched
 
-### v0.5 — new commands (in progress)
+### v0.6 — distribution & integration
+- ✅ `doctor` — environment preflight: Node version, whisper binary (for `caption`), `ANTHROPIC_API_KEY` (for `translate`), default CapCut/JianYing project directory. Exits 1 only on hard failures
+- ✅ Node **library** — `import { loadDraft, lintDraft, saveDraft, detectVersion, runDoctor } from "capcut-cli"` — the core, typed and zero-dep, importable without running the CLI
+- ✅ [**Dockerfile**](./Dockerfile) — zero-dep multi-stage image; `docker run --rm -v "$PWD:/work" capcut-cli info /work/draft_content.json`
+- ✅ [**GitHub Action**](./action.yml) — `uses: renezander030/capcut-cli@v0.6` to lint drafts in CI (exit 2 on errors fails the job)
+- ✅ Three new templates — `caption-pop`, `lower-third`, `hook-question` (six shipped templates total)
+- ✅ CI matrix across Node 18 / 20 / 22 + Biome lint on every push and PR
+
+### v0.5 — new commands (shipped)
 - ✅ `mix-mode` — set blend mode on a video segment (normal · multiply · screen · overlay · soft-light · hard-light · color-dodge · color-burn · darken · lighten · difference · exclusion)
 - ✅ `audio-fade` — fade-in / fade-out on an audio segment via `materials.audio_fades[]` (real fade material, not `volume` keyframes)
 - ✅ `add-cover` — set the draft's cover frame (thumbnail) to a local image (PNG/JPG); `--time <ms>` defaults to 0
@@ -186,6 +205,49 @@ Add the marketplace, then enable the plugin:
 ```
 
 This gives Claude Code the `/capcut-cli:capcut-edit` skill -- it learns every command, the progressive disclosure navigation pattern, and how to find your CapCut projects on macOS/Windows. Auto-installs the CLI on first enable.
+
+### Use as a Node library
+
+The core is importable and typed — no shelling out, no CLI process:
+
+```ts
+import { loadDraft, lintDraft, saveDraft, detectVersion } from "capcut-cli";
+
+const { draft, filePath } = loadDraft("./my-project/draft_content.json");
+console.log(detectVersion(draft).support.status);   // supported | untested | known-broken
+const issues = lintDraft(draft);                     // [{ severity, code, message, location }]
+saveDraft(filePath, draft);
+```
+
+Importing the package never runs the CLI. Exposed: `loadDraft`, `saveDraft`, `findSegment`, `findMaterial`, `getTracksByType`, `extractText`, `updateTextContent`, `lintDraft`, `detectVersion`, `runDoctor`, plus their types.
+
+### Docker
+
+Zero runtime deps, so the image is just Node + the build output. Mount your drafts at `/work`:
+
+```bash
+docker build -t capcut-cli .
+docker run --rm -v "$PWD:/work" capcut-cli info /work/draft_content.json
+cat jobs.jsonl | docker run --rm -i -v "$PWD:/work" capcut-cli serve
+```
+
+### GitHub Action — lint drafts in CI
+
+Gate caption quality (overlaps, line length, missing files) on every push. `lint` exits `2` on errors, which fails the job:
+
+```yaml
+- uses: renezander030/capcut-cli@v0.6
+  with:
+    project: ./drafts/my-short
+    args: --max-chars 32 --max-cue-secs 6
+```
+
+### Verify your environment
+
+```bash
+capcut doctor          # JSON report; exit 1 only on a hard failure (Node < 18)
+capcut doctor -H       # human-readable checklist
+```
 
 ### Why a CLI, not an MCP server
 
