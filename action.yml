@@ -1,0 +1,30 @@
+name: capcut-cli
+description: Lint CapCut/JianYing drafts in CI — caption overlaps, line length, cue duration, missing material refs and files.
+author: renezander030
+branding:
+  icon: check-square
+  color: green
+
+inputs:
+  project:
+    description: Path to draft_content.json (or its parent directory) to lint.
+    required: true
+  args:
+    description: 'Extra flags passed to `capcut lint` (e.g. "--max-chars 32 --max-cue-secs 6").'
+    required: false
+    default: ''
+  version:
+    description: capcut-cli version to install from npm.
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - name: Install capcut-cli
+      shell: bash
+      run: npm install -g "capcut-cli@${{ inputs.version }}"
+    - name: Lint draft
+      shell: bash
+      # `lint` exits 0 (clean) / 1 (warnings) / 2 (errors) — exit 2 fails the job.
+      run: capcut lint "${{ inputs.project }}" ${{ inputs.args }} -H

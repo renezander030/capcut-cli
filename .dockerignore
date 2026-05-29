@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.github
+test
+docs
+media
+examples
+*.md
+.husky
+hooks
+skills
+.claude-plugin
+marketplace.json
