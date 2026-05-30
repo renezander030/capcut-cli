@@ -86,6 +86,7 @@ Usage: capcut <command> <project> [options]
 
 Global flags:
   -H, --human     Human-readable table output (default: JSON)
+  -v, --version   Print the installed CLI version
   -q, --quiet     No output on success, exit code only (write commands)
   --jianying      Use JianYing enum namespace (default: CapCut) for
                   transition, mask, text-anim, image-anim, add-effect, enums
@@ -453,6 +454,7 @@ interface Flags {
   // serve
   queue?: string;
   failFast?: boolean;
+  version?: boolean;
 }
 
 // Map CLI enum flags -> enums.json category key. Order matters for HELP text.
@@ -478,6 +480,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-H" || a === "--human") flags.human = true;
+    else if (a === "-v" || a === "--version") flags.version = true;
     else if (a === "-q" || a === "--quiet") flags.quiet = true;
     else if (a === "--batch") flags.batch = true;
     else if ((a === "--track" || a === "--type") && i + 1 < args.length) {
@@ -1925,6 +1928,12 @@ function cmdDoctor(flags: Flags): boolean {
   return report.ok;
 }
 
+function getCliVersion(): string {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
+  return pkg.version;
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -1935,6 +1944,11 @@ async function main(): Promise<void> {
   }
 
   const { positional, flags } = parseFlags(raw);
+
+  if (flags.version) {
+    console.log(getCliVersion());
+    process.exit(0);
+  }
   const cmd = positional[0];
   const projectPath = positional[1];
 

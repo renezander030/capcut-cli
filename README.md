@@ -193,7 +193,11 @@ Zero dependencies. JSON output by default. Pipeable. Works with CapCut and JianY
 ```bash
 npm install -g capcut-cli
 ```
+Verify the installation:
 
+```bash
+capcut --version    # prints the installed CLI version
+```
 Or run directly:
 ```bash
 npx capcut-cli info ./my-project/
