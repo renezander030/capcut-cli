@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseAss } from "./ass.js";
 import { captionDraft } from "./caption.js";
 import { removeChroma, setChroma } from "./chroma.js";
@@ -250,6 +252,9 @@ Templates:
   apply-template <project> <template.json> <start> <duration> [text override]
              Stamp a template into a project at the given time
              Options: --x <n> --y <n> (override position)
+  templates  
+             Show available templates in the template library.
+             Use -H for a table.
 
 Project:
   cut        <project> <start> <end> --out <path>
@@ -1925,6 +1930,48 @@ function cmdDoctor(flags: Flags): boolean {
   return report.ok;
 }
 
+function cmdTemplates(flags: Flags): void {
+  const cliDir = path.dirname(fileURLToPath(import.meta.url));
+  const templatesPath = path.join(cliDir, "..", "templates");
+
+  if (!existsSync(templatesPath)) {
+    die(`Templates directory not found: ${templatesPath}`);
+  }
+
+  const descriptions: Record<string, string> = {
+    "caption-pop": "word-highlight pop captions",
+    "lower-third": "name/title lower third",
+    "hook-question": "opening hook question card",
+    "gold-title": "gold title card",
+    "end-card": "end / outro card",
+    "subscribe-cta": "subscribe call-to-action",
+  };
+
+  const entries = readdirSync(templatesPath)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => {
+      const slug = path.basename(f, ".json");
+      return {
+        slug,
+        description: descriptions[slug] ?? slug.replace(/-/g, " "),
+      };
+    });
+
+  if (flags.human) {
+    if (entries.length === 0) {
+      console.log("No bundled templates found.");
+      return;
+    }
+    console.log(`${"Slug".padEnd(33)} Description`);
+    for (const e of entries) {
+      console.log(`${e.slug.padEnd(33)} ${e.description}`);
+    }
+    process.stderr.write(`\n${entries.length} templates\n`);
+  } else {
+    out(entries, flags);
+  }
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -1964,6 +2011,12 @@ async function main(): Promise<void> {
   // `export` iterates a directory of drafts — projectPath is the directory itself, not a single draft.
   if (cmd === "export") {
     cmdExport(positional, flags);
+    process.exit(0);
+  }
+
+  // `templates` list all available templates
+  if (cmd === "templates") {
+    cmdTemplates(flags);
     process.exit(0);
   }
 
