@@ -79,6 +79,63 @@ import { formatDuration, formatTime, parseTimeInput, srtTime } from "./time.js";
 import { translateDraft } from "./translate.js";
 import { detectVersion } from "./version.js";
 
+export const COMMANDS = [
+  "info",
+  "version",
+  "lint",
+  "tracks",
+  "segments",
+  "texts",
+  "set-text",
+  "shift",
+  "shift-all",
+  "speed",
+  "volume",
+  "trim",
+  "opacity",
+  "export-srt",
+  "materials",
+  "segment",
+  "material",
+  "add-audio",
+  "add-video",
+  "add-text",
+  "cut",
+  "keyframe",
+  "transition",
+  "mask",
+  "bg-blur",
+  "text-style",
+  "text-anim",
+  "image-anim",
+  "add-sticker",
+  "mix-mode",
+  "audio-fade",
+  "add-cover",
+  "add-filter",
+  "bubble-text",
+  "add-effect",
+  "save-template",
+  "apply-template",
+  "batch",
+  "import-srt",
+  "import-ass",
+  "text-ranges",
+  "caption",
+  "translate",
+  "migrate",
+  "add-sfx",
+  "chroma",
+  "enums",
+  "doctor",
+  "serve",
+  "decrypt",
+  "export",
+  "init",
+] as const;
+
+const GLOBAL_FLAGS = ["--jianying", "-H", "--human", "-q", "--quiet", "-v", "--version"] as const;
+
 const HELP = `capcut-cli -- fast edits to CapCut projects
 
 Usage: capcut <command> <project> [options]
@@ -477,6 +534,23 @@ const ENUM_FLAG_MAP: Array<{ flag: string; category: Category }> = [
   { flag: "--fonts", category: "fonts" },
   { flag: "--filters", category: "filters" },
 ];
+
+function bashCompletion(): string {
+  const words = [...COMMANDS, ...GLOBAL_FLAGS].join(" ");
+
+  return `# bash completion for capcut
+
+_capcut()
+{
+    local cur
+    cur="\${COMP_WORDS[COMP_CWORD]}"
+
+    COMPREPLY=( $(compgen -W "${words}" -- "$cur") )
+}
+
+complete -F _capcut capcut
+`;
+}
 
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
@@ -1996,6 +2070,18 @@ async function main(): Promise<void> {
     process.exit(0);
   }
   const cmd = positional[0];
+
+  if (cmd === "completions") {
+    const shell = positional[1];
+
+    if (shell !== "bash") {
+      die("Usage: capcut completions bash");
+    }
+
+    process.stdout.write(bashCompletion());
+    process.exit(0);
+  }
+
   const projectPath = positional[1];
 
   // `enums` is a pure lookup — no project needed.
