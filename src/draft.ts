@@ -112,7 +112,7 @@ export function loadDraft(path: string): { draft: Draft; filePath: string } {
 }
 
 export function saveDraft(filePath: string, draft: Draft): void {
-  const bakPath = filePath + ".bak";
+  const bakPath = `${filePath}.bak`;
   if (existsSync(filePath)) {
     const original = rawOriginal ?? readFileSync(filePath, "utf-8");
     writeFileSync(bakPath, original, "utf-8");
