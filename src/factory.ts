@@ -314,7 +314,7 @@ export function copyTextStyle(draft: Draft, refSegmentId: string, targetMaterial
 
 export function addText(
   draft: Draft,
-  filePath: string,
+  _filePath: string,
   opts: AddTextOptions,
 ): { segmentId: string; materialId: string; trackId: string } {
   const segId = uuid();
@@ -996,7 +996,7 @@ export function addEffect(
     const scene = findEnum("scene_effects", opts.slug, ns);
     const char = scene ? null : findEnum("character_effects", opts.slug, ns);
     const hit = scene ?? char;
-    if (!hit || !hit.name || !hit.effect_id || !hit.resource_id) {
+    if (!hit?.name || !hit.effect_id || !hit.resource_id) {
       const hint = ns === "jianying" ? " --jianying" : "";
       throw new Error(
         `Unknown effect slug: ${opts.slug}. Run 'capcut enums --scene-effects${hint}' or '--character-effects${hint}' for the full list.`,
@@ -1266,7 +1266,7 @@ export function addFilter(
   let meta: FilterMeta | null = ns === "capcut" ? (VIDEO_FILTERS[opts.slug.toLowerCase()] ?? null) : null;
   if (!meta) {
     const hit = findEnum("filters", opts.slug, ns);
-    if (!hit || !hit.name || !hit.effect_id || !hit.resource_id) {
+    if (!hit?.name || !hit.effect_id || !hit.resource_id) {
       const hint = ns === "jianying" ? " --jianying" : "";
       throw new Error(`Unknown filter slug: ${opts.slug}. Run 'capcut enums --filters${hint}' for the full list.`);
     }

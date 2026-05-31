@@ -19,8 +19,8 @@ export interface SrtCue {
 const TS = /^(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})/;
 
 function tsToUs(h: string, m: string, s: string, ms: string): number {
-  const msPadded = (ms + "000").slice(0, 3);
-  return ((parseInt(h) * 3600 + parseInt(m) * 60 + parseInt(s)) * 1000 + parseInt(msPadded)) * 1000;
+  const msPadded = `${ms}000`.slice(0, 3);
+  return ((parseInt(h, 10) * 3600 + parseInt(m, 10) * 60 + parseInt(s, 10)) * 1000 + parseInt(msPadded, 10)) * 1000;
 }
 
 export function parseSrt(content: string): SrtCue[] {
@@ -33,7 +33,7 @@ export function parseSrt(content: string): SrtCue[] {
     if (i >= lines.length) break;
     let idx = autoIdx + 1;
     if (/^\d+$/.test(lines[i].trim())) {
-      idx = parseInt(lines[i].trim());
+      idx = parseInt(lines[i].trim(), 10);
       i++;
     }
     if (i >= lines.length) break;

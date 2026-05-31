@@ -28,43 +28,43 @@ export function parseKeyframeValue(property: string, value: string): number {
   const v = value.trim();
   if (property === "position_x" || property === "position_y") {
     const n = parseFloat(v);
-    if (!isFinite(n) || n < -10 || n > 10)
+    if (!Number.isFinite(n) || n < -10 || n > 10)
       throw new Error(`${property} must be a finite number in [-10, 10], got: ${value}`);
     return n;
   }
   if (property === "rotation") {
     const raw = v.endsWith("deg") ? v.slice(0, -3) : v;
     const n = parseFloat(raw);
-    if (!isFinite(n)) throw new Error(`Invalid rotation value: ${value}`);
+    if (!Number.isFinite(n)) throw new Error(`Invalid rotation value: ${value}`);
     return n;
   }
   if (property === "alpha" || property === "volume") {
     if (v.endsWith("%")) {
       const n = parseFloat(v.slice(0, -1));
-      if (!isFinite(n)) throw new Error(`Invalid ${property} percentage: ${value}`);
+      if (!Number.isFinite(n)) throw new Error(`Invalid ${property} percentage: ${value}`);
       return n / 100;
     }
     const n = parseFloat(v);
-    if (!isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
+    if (!Number.isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
     return n;
   }
   if (property === "saturation" || property === "contrast" || property === "brightness") {
     if (v.startsWith("+")) {
       const n = parseFloat(v.slice(1));
-      if (!isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
+      if (!Number.isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
       return n;
     }
     if (v.startsWith("-")) {
       const n = parseFloat(v.slice(1));
-      if (!isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
+      if (!Number.isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
       return -n;
     }
     const n = parseFloat(v);
-    if (!isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
+    if (!Number.isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
     return n;
   }
   const n = parseFloat(v);
-  if (!isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
+  if (!Number.isFinite(n)) throw new Error(`Invalid ${property} value: ${value}`);
   return n;
 }
 
@@ -154,7 +154,7 @@ export function addTransition(
   namespace: Namespace = "capcut",
 ): { segmentId: string; transition_id: string; name: string; duration_us: number } {
   const meta = findEnum("transitions", slug, namespace);
-  if (!meta || !meta.name || !meta.effect_id || !meta.resource_id) {
+  if (!meta?.name || !meta.effect_id || !meta.resource_id) {
     const hint = namespace === "jianying" ? " --jianying" : "";
     throw new Error(`Unknown transition: ${slug}. Run 'capcut enums --transitions${hint}' for the full list.`);
   }
@@ -218,7 +218,7 @@ export function addMask(
   namespace: Namespace = "capcut",
 ): { segmentId: string; mask_id: string; name: string } {
   const meta = findEnum("masks", slug, namespace, MASK_ALIASES);
-  if (!meta || !meta.name || !meta.effect_id || !meta.resource_id || !meta.resource_type) {
+  if (!meta?.name || !meta.effect_id || !meta.resource_id || !meta.resource_type) {
     const hint = namespace === "jianying" ? " --jianying" : "";
     throw new Error(`Unknown mask: ${slug}. Run 'capcut enums --masks${hint}' for the full list.`);
   }
@@ -630,7 +630,7 @@ export function addImageAnim(
     } else {
       const category = animType === "in" ? "image_intros" : animType === "out" ? "image_outros" : "image_combos";
       const meta = findEnum(category, slug, namespace);
-      if (!meta || !meta.effect_id || !meta.resource_id) {
+      if (!meta?.effect_id || !meta.resource_id) {
         const hint = namespace === "jianying" ? " --jianying" : "";
         throw new Error(
           `Unknown image ${animType} animation: ${slug}. Run 'capcut enums --image-${animType === "in" ? "intros" : animType === "out" ? "outros" : "combos"}${hint}' for the full list.`,
@@ -728,7 +728,7 @@ export function addTextAnim(
   const addOne = (slug: string, overrideDur: number | undefined, animType: "in" | "out") => {
     const category = animType === "in" ? "text_intros" : "text_outros";
     const meta = findEnum(category, slug, namespace, TEXT_ANIM_ALIASES);
-    if (!meta || !meta.effect_id || !meta.resource_id) {
+    if (!meta?.effect_id || !meta.resource_id) {
       const hint = namespace === "jianying" ? " --jianying" : "";
       throw new Error(
         `Unknown text ${animType === "in" ? "intro" : "outro"}: ${slug}. Run 'capcut enums --text-${animType === "in" ? "intros" : "outros"}${hint}' for the full list.`,
@@ -813,7 +813,7 @@ export function setTextRanges(
   const byteLen = Buffer.from(full, "utf16le").length;
 
   // Baseline style inherited for fields the user didn't override.
-  const base = (content.styles && content.styles[0]) ?? {};
+  const base = content.styles?.[0] ?? {};
   const baseFill = (
     base.fill as { content?: { solid?: { color?: [number, number, number]; alpha?: number } } } | undefined
   )?.content?.solid;
