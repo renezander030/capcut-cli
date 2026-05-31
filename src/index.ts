@@ -29,7 +29,6 @@ import {
   setTextRanges,
   setTextStyle,
   textAnimSlugs,
-  transitionSlugs,
 } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import { type DoctorCheck, runDoctor } from "./doctor.js";
@@ -47,7 +46,7 @@ import {
 } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { exportBatch } from "./export-batch.js";
-import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CutOptions, InitOptions } from "./factory.js";
+import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CutOptions } from "./factory.js";
 import {
   addAudio,
   addEffect,
@@ -489,7 +488,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     } else if (a === "--color" && i + 1 < args.length) {
       flags.color = args[++i];
     } else if (a === "--align" && i + 1 < args.length) {
-      flags.align = parseInt(args[++i]);
+      flags.align = parseInt(args[++i], 10);
     } else if (a === "--x" && i + 1 < args.length) {
       flags.x = parseFloat(args[++i]);
     } else if (a === "--y" && i + 1 < args.length) {
@@ -555,7 +554,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     } else if (a === "--bg-alpha" && i + 1 < args.length) {
       flags.bgAlpha = parseFloat(args[++i]);
     } else if (a === "--bg-style" && i + 1 < args.length) {
-      flags.bgStyle = parseInt(args[++i]);
+      flags.bgStyle = parseInt(args[++i], 10);
     } else if (a === "--bg-round-radius" && i + 1 < args.length) {
       flags.bgRoundRadius = parseFloat(args[++i]);
     } else if (a === "--bg-width" && i + 1 < args.length) {
@@ -609,7 +608,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     } else if (a === "--force-license") {
       flags.forceLicense = true;
     } else if (a === "--max-chars" && i + 1 < args.length) {
-      flags.maxChars = parseInt(args[++i]);
+      flags.maxChars = parseInt(args[++i], 10);
     } else if (a === "--max-cue-secs" && i + 1 < args.length) {
       flags.maxCueSecs = parseFloat(args[++i]);
     } else if (a === "--min-gap-ms" && i + 1 < args.length) {
@@ -658,7 +657,7 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
 
 function out(data: unknown, flags: Flags): void {
   if (flags.quiet) return;
-  process.stdout.write(JSON.stringify(data) + "\n");
+  process.stdout.write(`${JSON.stringify(data)}\n`);
 }
 
 class CliError extends Error {
@@ -743,7 +742,7 @@ function cmdTracks(draft: Draft, flags: Flags): void {
       if (t.hidden) fl.push("hidden");
       if (t.locked) fl.push("locked");
       console.log(
-        `${String(t.index).padStart(2)}  ${t.type.padEnd(8)} ${t.name.padEnd(14)} ${String(t.segments).padStart(4)} segs  ${formatDuration(t.duration_us).padStart(10)}${fl.length ? "  [" + fl.join(",") + "]" : ""}`,
+        `${String(t.index).padStart(2)}  ${t.type.padEnd(8)} ${t.name.padEnd(14)} ${String(t.segments).padStart(4)} segs  ${formatDuration(t.duration_us).padStart(10)}${fl.length ? `  [${fl.join(",")}]` : ""}`,
       );
     }
   } else {
@@ -785,7 +784,7 @@ function cmdSegments(draft: Draft, flags: Flags): void {
     for (const s of data) {
       const end = s.start_us + s.duration_us;
       console.log(
-        `${s.id.slice(0, 8)}  ${s.type.padEnd(6)} ${formatTime(s.start_us).padStart(8)}-${formatTime(end).padStart(8)}  ${formatDuration(s.duration_us).padStart(8)}  ${s.speed !== 1 ? s.speed + "x" : "   "}  ${s.label.slice(0, 40)}`,
+        `${s.id.slice(0, 8)}  ${s.type.padEnd(6)} ${formatTime(s.start_us).padStart(8)}-${formatTime(end).padStart(8)}  ${formatDuration(s.duration_us).padStart(8)}  ${s.speed !== 1 ? `${s.speed}x` : "   "}  ${s.label.slice(0, 40)}`,
       );
     }
   } else {
@@ -863,7 +862,7 @@ function cmdSpeed(draft: Draft, filePath: string, segId: string, multiplier: str
   const result = findSegment(draft, segId);
   if (!result) die(`Segment not found: ${segId}`);
   const speed = parseFloat(multiplier);
-  if (isNaN(speed) || speed <= 0) die("Speed must be a positive number");
+  if (Number.isNaN(speed) || speed <= 0) die("Speed must be a positive number");
   const seg = result.segment;
   const oldSpeed = seg.speed;
   seg.speed = speed;
@@ -880,7 +879,7 @@ function cmdVolume(draft: Draft, filePath: string, segId: string, levelStr: stri
   const result = findSegment(draft, segId);
   if (!result) die(`Segment not found: ${segId}`);
   const level = parseFloat(levelStr);
-  if (isNaN(level) || level < 0) die("Volume must be >= 0");
+  if (Number.isNaN(level) || level < 0) die("Volume must be >= 0");
   const old = result.segment.volume;
   result.segment.volume = level;
   if (save) saveDraft(filePath, draft);
@@ -921,7 +920,7 @@ function cmdOpacity(draft: Draft, filePath: string, segId: string, alphaStr: str
   const result = findSegment(draft, segId);
   if (!result) die(`Segment not found: ${segId}`);
   const alpha = parseFloat(alphaStr);
-  if (isNaN(alpha) || alpha < 0 || alpha > 1) die("Opacity must be 0.0-1.0");
+  if (Number.isNaN(alpha) || alpha < 0 || alpha > 1) die("Opacity must be 0.0-1.0");
   if (!result.segment.clip) die(`Segment ${segId} has no clip (audio segment?)`);
   const old = result.segment.clip.alpha;
   result.segment.clip.alpha = alpha;
@@ -1032,7 +1031,7 @@ async function cmdAddAudio(draft: Draft, filePath: string, positional: string[],
     die("Usage: capcut add-audio <project> <file-or-wikimedia-url> <start> <duration>");
   // Wikimedia URLs go through the license-gated fetcher; locals pass through.
   const { localPath, asset, warning } = await resolveAssetPath(audioPath, filePath, "audio", flags.forceLicense);
-  const absPath = localPath.startsWith("/") ? localPath : process.cwd() + "/" + localPath;
+  const absPath = localPath.startsWith("/") ? localPath : `${process.cwd()}/${localPath}`;
   const start = parseTimeInput(startStr);
   const duration = parseTimeInput(durationStr);
   const opts: AddAudioOptions = {
@@ -1074,7 +1073,7 @@ async function cmdAddVideo(draft: Draft, filePath: string, positional: string[],
   if (!videoPath || !startStr || !durationStr)
     die("Usage: capcut add-video <project> <file-or-wikimedia-url> <start> <duration>");
   const { localPath, asset, warning } = await resolveAssetPath(videoPath, filePath, "video", flags.forceLicense);
-  const absPath = localPath.startsWith("/") ? localPath : process.cwd() + "/" + localPath;
+  const absPath = localPath.startsWith("/") ? localPath : `${process.cwd()}/${localPath}`;
   const start = parseTimeInput(startStr);
   const duration = parseTimeInput(durationStr);
   const opts: AddVideoOptions = {
@@ -1239,7 +1238,7 @@ function cmdBgBlur(draft: Draft, filePath: string, positional: string[], flags: 
   let level: 1 | 2 | 3 | 4 | "off";
   if (flags.off) level = "off";
   else {
-    const n = parseInt(arg ?? "");
+    const n = parseInt(arg ?? "", 10);
     if (![1, 2, 3, 4].includes(n)) die(`bg-blur level must be 1, 2, 3, or 4 (or --off)`);
     level = n as 1 | 2 | 3 | 4;
   }
@@ -1436,7 +1435,7 @@ function cmdMixMode(draft: Draft, filePath: string, positional: string[], flags:
   out({ ok: true, ...result }, flags);
 }
 
-function cmdCut(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+function cmdCut(draft: Draft, _filePath: string, positional: string[], flags: Flags): void {
   if (!flags.out) die("Missing --out <path>. Usage: capcut cut <project> <start> <end> --out <path>");
   const start = parseTimeInput(positional[2]);
   const end = parseTimeInput(positional[3]);
@@ -1829,7 +1828,7 @@ async function cmdServe(flags: Flags): Promise<void> {
     failFast: flags.failFast,
   });
   // Write a final summary line at end (JSON only, stderr to avoid mixing with per-job results)
-  process.stderr.write(JSON.stringify({ summary: result }) + "\n");
+  process.stderr.write(`${JSON.stringify({ summary: result })}\n`);
 }
 
 // --- Batch ---
@@ -1899,7 +1898,7 @@ function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
     } catch (e) {
       fail++;
       const msg = e instanceof Error ? e.message : String(e);
-      process.stderr.write(JSON.stringify({ error: msg, line: trimmed }) + "\n");
+      process.stderr.write(`${JSON.stringify({ error: msg, line: trimmed })}\n`);
     }
   }
   saveDraft(filePath, draft);
@@ -1973,14 +1972,13 @@ async function main(): Promise<void> {
     if (!name) die("Missing name. Usage: capcut init <name> [--template <dir>] [--drafts <dir>]");
     const cliDir = new URL(".", import.meta.url).pathname.replace(/\/dist\/$/, "");
     // Default template resolution: user --template > ../CapCutAPI/template > bundled _init template
-    const externalTemplate = cliDir + "/../CapCutAPI/template";
-    const bundledTemplate = cliDir + "/templates/_init";
+    const externalTemplate = `${cliDir}/../CapCutAPI/template`;
+    const bundledTemplate = `${cliDir}/templates/_init`;
     let templateDir = flags.template ?? externalTemplate;
     if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
       templateDir = bundledTemplate;
     }
-    const draftsDir =
-      flags.drafts ?? (process.env.HOME || "~") + "/Movies/CapCut/User Data/Projects/com.lveditor.draft";
+    const draftsDir = flags.drafts ?? `${process.env.HOME || "~"}/Movies/CapCut/User Data/Projects/com.lveditor.draft`;
     const result = initDraft({ name, templateDir, draftsDir });
     out({ ok: true, name, draft_path: result.draftPath, file_path: result.filePath }, flags);
     if (!flags.quiet) process.stderr.write(`Created: ${result.draftPath}\n`);
@@ -2173,6 +2171,6 @@ async function main(): Promise<void> {
 
 main().catch((e) => {
   const msg = e instanceof Error ? e.message : String(e);
-  process.stderr.write(JSON.stringify({ error: msg }) + "\n");
+  process.stderr.write(`${JSON.stringify({ error: msg })}\n`);
   process.exit(1);
 });

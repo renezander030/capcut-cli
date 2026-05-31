@@ -44,15 +44,15 @@ export function parseTimeInput(input: string): number {
     const parts = clean.split(":");
     let totalSec = 0;
     if (parts.length === 3) {
-      totalSec = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseFloat(parts[2]);
+      totalSec = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2]);
     } else {
-      totalSec = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+      totalSec = parseInt(parts[0], 10) * 60 + parseFloat(parts[1]);
     }
     return (negative ? -1 : 1) * secondsToUs(totalSec);
   }
   // bare number = seconds
   const val = parseFloat(clean);
-  if (isNaN(val)) throw new Error(`Invalid time: ${input}`);
+  if (Number.isNaN(val)) throw new Error(`Invalid time: ${input}`);
   return (negative ? -1 : 1) * secondsToUs(val);
 }
 

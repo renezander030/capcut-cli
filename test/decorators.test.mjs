@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
-import { findSegmentByPrefix, loadDraft } from "./helpers/load-fixture.mjs";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
 
@@ -121,8 +120,8 @@ describe("capcut enums", () => {
     const jy = spawnCli(["enums", "--transitions", "--jianying"]).json;
     // Different namespaces return different slug sets
     if (cap?.length && jy?.length) {
-      const capSlugs = new Set(cap.map((e) => e.member));
-      const jySlugs = new Set(jy.map((e) => e.member));
+      const _capSlugs = new Set(cap.map((e) => e.member));
+      const _jySlugs = new Set(jy.map((e) => e.member));
       // At least some overlap or difference — they shouldn't be identical objects
       assert.notEqual(JSON.stringify(cap), JSON.stringify(jy));
     }

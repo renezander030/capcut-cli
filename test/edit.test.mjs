@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { findSegmentByPrefix, loadDraft } from "./helpers/load-fixture.mjs";
+import { loadDraft } from "./helpers/load-fixture.mjs";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
 

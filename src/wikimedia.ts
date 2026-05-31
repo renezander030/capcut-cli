@@ -83,7 +83,7 @@ export function extractFileTitle(u: string): string | null {
     // 1. upload.wikimedia.org direct CDN: /wikipedia/commons/(thumb/)?a/ab/Foo.jpg
     if (host === "upload.wikimedia.org") {
       const m = url.pathname.match(/\/wikipedia\/[^/]+\/(?:thumb\/)?[0-9a-f]\/[0-9a-f]{2}\/([^/]+?)(?:\/\d+px-.+)?$/i);
-      if (m) return "File:" + decodeURIComponent(m[1]);
+      if (m) return `File:${decodeURIComponent(m[1])}`;
       return null;
     }
 
@@ -159,7 +159,7 @@ async function resolvePageimagesApi(apiUrl: string): Promise<string> {
   for (const p of Object.values(pages)) {
     // pageimages returns a pageimage filename (sans File:)
     const file = p.pageimage ?? p.pageprops?.page_image_free;
-    if (file) return "File:" + file;
+    if (file) return `File:${file}`;
   }
   throw new Error(`No pageimage found for titles=${titles}`);
 }
