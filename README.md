@@ -108,7 +108,7 @@ Status of every feature shipped. ✅ = implemented, ⬜ = roadmap. Section ancho
 
 ### Templates
 - ✅ [`save-template`](#templates) · [`apply-template`](#templates) — extract any segment as reusable JSON; restamp with new timing / position / text
-- ✅ [`template`](#templates) — List available templates that can be used
+- ✅ [`templates`](#templates) — List available templates that can be used
 - ✅ 6 templates ship in [`templates/`](./templates/): `gold-title`, `end-card`, `subscribe-cta`, `hook-question`, `lower-third`, `caption-pop`
 
 ### Import & discovery
