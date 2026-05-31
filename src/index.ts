@@ -571,6 +571,10 @@ compdef _capcut capcut
 `;
 }
 
+function fishCompletion(): string {
+  return [...COMMANDS, ...GLOBAL_FLAGS].map((word) => `complete -c capcut -f -a "${word}"`).join("\n");
+}
+
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = { human: false, quiet: false, batch: false };
@@ -2100,8 +2104,11 @@ async function main(): Promise<void> {
       case "zsh":
         process.stdout.write(zshCompletion());
         break;
+      case "fish":
+        process.stdout.write(fishCompletion());
+        break;
       default:
-        die("Usage: capcut completions <bash|zsh>");
+        die("Usage: capcut completions <bash|zsh|fish>");
     }
 
     process.exit(0);
