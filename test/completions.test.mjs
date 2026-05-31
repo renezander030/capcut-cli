@@ -18,3 +18,19 @@ describe("capcut completions bash", () => {
     assert.match(r.stdout, /-v/);
   });
 });
+describe("capcut completions zsh", () => {
+  it("prints zsh completion script", () => {
+    const r = spawnCli(["completions", "zsh"]);
+
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /#compdef capcut/);
+    assert.match(r.stdout, /info/);
+    assert.match(r.stdout, /tracks/);
+    assert.match(r.stdout, /--jianying/);
+    assert.match(r.stdout, /--quiet/);
+    assert.match(r.stdout, /--version/);
+    assert.match(r.stdout, /-H/);
+    assert.match(r.stdout, /-q/);
+    assert.match(r.stdout, /-v/);
+  });
+});

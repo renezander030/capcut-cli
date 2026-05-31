@@ -552,6 +552,25 @@ complete -F _capcut capcut
 `;
 }
 
+function zshCompletion(): string {
+  const words = [...COMMANDS, ...GLOBAL_FLAGS].map((w) => `"${w}"`).join("\n    ");
+
+  return `#compdef capcut
+
+_capcut() {
+  local -a commands
+
+  commands=(
+    ${words}
+  )
+
+  _describe 'command' commands
+}
+
+compdef _capcut capcut
+`;
+}
+
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = { human: false, quiet: false, batch: false };
@@ -2074,11 +2093,17 @@ async function main(): Promise<void> {
   if (cmd === "completions") {
     const shell = positional[1];
 
-    if (shell !== "bash") {
-      die("Usage: capcut completions bash");
+    switch (shell) {
+      case "bash":
+        process.stdout.write(bashCompletion());
+        break;
+      case "zsh":
+        process.stdout.write(zshCompletion());
+        break;
+      default:
+        die("Usage: capcut completions <bash|zsh>");
     }
 
-    process.stdout.write(bashCompletion());
     process.exit(0);
   }
 

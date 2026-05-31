@@ -131,7 +131,7 @@ Status of every feature shipped. ✅ = implemented, ⬜ = roadmap. Section ancho
 - ✅ JSON (default — pipeable to `jq`)
 - ✅ `-H` / `--human` table mode (human-readable)
 - ✅ `-q` / `--quiet` mode (exit code only)
-- ✅ `completions bash` — generate Bash shell completions
+- ✅ `completions <bash|zsh>` — generate shell completions
 
 ### Quality (v0.4)
 - ✅ 60+ tests `node:test` suite ([`test/`](./test/)) running against [`test/draft_content.json`](./test/draft_content.json)
@@ -573,12 +573,23 @@ $ capcut set-text ./project a1b2c3 "Hey everyone"
 
 ### Shell completions
 
-Generate a Bash completion script:
+Generate shell completions:
 
-Install permanently:
+```bash
+capcut completions <bash|zsh>
+```
+
+#### Bash
 
 ```bash
 capcut completions bash >> ~/.bashrc
+```
+
+#### Zsh
+
+```bash
+mkdir -p ~/.zsh/completions
+capcut completions zsh > ~/.zsh/completions/_capcut
 ```
 
 Completes command names and global flags (`--jianying`, `-H`/`--human`, `-q`/`--quiet`, `-v`/`--version`).
