@@ -111,12 +111,36 @@ export function loadDraft(path: string): { draft: Draft; filePath: string } {
   return { draft, filePath };
 }
 
+// Canonical bottom->top layer order CapCut expects in the tracks array.
+// Derived from a real CapCut-authored draft: [video, audio, text].
+// Tracks are pushed in command-call order as content is added, so without
+// this normalization the array order (which drives CapCut's timeline layout)
+// ends up scrambled. Unknown types are kept after the known ones.
+const TRACK_RANK: Record<string, number> = {
+  video: 0,
+  audio: 1,
+  sticker: 2,
+  effect: 3,
+  filter: 4,
+  text: 5,
+};
+
+// Sort tracks into the canonical layer order. Stable: tracks of the same type
+// keep their authored order (tiebreak on original index).
+export function sortTracks(draft: Draft): void {
+  draft.tracks = draft.tracks
+    .map((track, index) => ({ track, index }))
+    .sort((a, b) => (TRACK_RANK[a.track.type] ?? 99) - (TRACK_RANK[b.track.type] ?? 99) || a.index - b.index)
+    .map(({ track }) => track);
+}
+
 export function saveDraft(filePath: string, draft: Draft): void {
   const bakPath = filePath + ".bak";
   if (existsSync(filePath)) {
     const original = rawOriginal ?? readFileSync(filePath, "utf-8");
     writeFileSync(bakPath, original, "utf-8");
   }
+  sortTracks(draft);
   // Detect original indent: if first line after { starts with tab use tab, else count spaces
   const indent = detectIndent(rawOriginal);
   writeFileSync(filePath, JSON.stringify(draft, null, indent), "utf-8");
