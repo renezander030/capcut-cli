@@ -39,7 +39,7 @@ function nodeMajor(): number {
 }
 
 /** Default per-OS CapCut/JianYing project directories. */
-function draftDirs(): { label: string; path: string }[] {
+export function draftDirs(): { label: string; path: string }[] {
   const home = homedir();
   if (platform() === "darwin") {
     return [

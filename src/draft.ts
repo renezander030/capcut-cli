@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface Timerange {
   start: number;
@@ -147,6 +147,52 @@ export function isDryRun(): boolean {
   return dryRun;
 }
 
+// Multi-step undo history. Alongside the single `.bak`, every write also keeps
+// a rolling stack of the pre-write content under `<draftdir>/.capcut-cli-history/`,
+// capped at HISTORY_MAX. `restore --step N` rolls back N writes; CapCut ignores
+// the hidden dir. snapshots are named `<draftbase>.NNNNNN.snap` (zero-padded,
+// monotonically increasing) so the newest is the lexicographically last.
+const HISTORY_DIR = ".capcut-cli-history";
+const HISTORY_MAX = 20;
+
+function historyDir(filePath: string): string {
+  return join(dirname(filePath), HISTORY_DIR);
+}
+
+function snapshotFiles(filePath: string): string[] {
+  const dir = historyDir(filePath);
+  if (!existsSync(dir)) return [];
+  const prefix = `${basename(filePath)}.`;
+  return readdirSync(dir)
+    .filter((f) => f.startsWith(prefix) && f.endsWith(".snap"))
+    .sort(); // zero-padded indices => lexicographic === numeric order, oldest first
+}
+
+function writeHistorySnapshot(filePath: string, content: string): void {
+  const dir = historyDir(filePath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const existing = snapshotFiles(filePath);
+  const last = existing[existing.length - 1];
+  const lastIndex = last ? Number.parseInt(last.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10) : 0;
+  const name = `${basename(filePath)}.${String(lastIndex + 1).padStart(6, "0")}.snap`;
+  writeFileSync(join(dir, name), content, "utf-8");
+  // Trim oldest beyond the cap.
+  const all = snapshotFiles(filePath);
+  while (all.length > HISTORY_MAX) {
+    const oldest = all.shift();
+    if (oldest) rmSync(join(dir, oldest));
+  }
+}
+
+// Snapshots newest-first, step 1 = most recent write (equivalent to `.bak`).
+export function listSnapshots(filePath: string): Array<{ step: number; index: number; path: string }> {
+  const dir = historyDir(filePath);
+  return snapshotFiles(filePath)
+    .map((f) => ({ index: Number.parseInt(f.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10), path: join(dir, f) }))
+    .sort((a, b) => b.index - a.index)
+    .map((s, i) => ({ step: i + 1, index: s.index, path: s.path }));
+}
+
 export function saveDraft(filePath: string, draft: Draft): void {
   if (dryRun) {
     // Normalize in memory (so any read-back is consistent) but write nothing.
@@ -157,6 +203,7 @@ export function saveDraft(filePath: string, draft: Draft): void {
   if (existsSync(filePath)) {
     const original = rawOriginal ?? readFileSync(filePath, "utf-8");
     writeFileSync(bakPath, original, "utf-8");
+    writeHistorySnapshot(filePath, original);
   }
   sortTracks(draft);
   // Detect original indent: if first line after { starts with tab use tab, else count spaces

@@ -68,15 +68,16 @@ How `capcut-cli` differs from the other CapCut / JianYing tooling:
 
 A capability map; see [Commands](#commands) for syntax.
 
-- **Inspect** — `info` · `tracks` · `materials` · `segments` · `texts`; `segment`/`material <id>` for progressive-disclosure drill-down; `export-srt`.
+- **Inspect** — `info` · `tracks` · `materials` · `segments` · `texts`; `segment`/`material <id>` for progressive-disclosure drill-down; `timeline` (ASCII layout); `export-srt`.
 - **Build & add** — `init` a draft, then `add-video` · `add-audio` · `add-text` from local files or [Wikimedia Commons URLs](#wikimedia-commons-phase-5) (license-gated); `add-sticker`, `add-effect`.
-- **Edit** — `set-text` · `shift` · `shift-all` · `speed` · `volume` · `opacity` · `trim`; `batch` (many edits, one write); `--dry-run` preview and `restore` undo on any write.
+- **Edit** — `set-text` · `shift` · `shift-all` · `speed` · `volume` · `opacity` · `trim`; `batch` (many edits, one write); `--dry-run` preview, and `restore` undo (latest `.bak` or `--step N` through snapshot history).
+- **Maintain** — `prune` (drop unreferenced materials) · `relink` (repair broken media paths via `--dir` or `--from`/`--to`) · `projects` (list drafts on disk by name).
 - **Decorate** — `keyframe` · `transition` · `mask` · `bg-blur` · `text-style` · `text-anim` · `image-anim` · `text-ranges` (word-level highlight captions); `mix-mode` · `audio-fade` · `add-filter` · `bubble-text` · `add-cover` · `add-sfx` · `chroma`.
 - **Captions & translate** — `caption` (whisper → real caption objects, not text-segment mimics), `import-srt` / `import-ass`, `translate` (Anthropic-API multi-language clone, zero deps).
 - **Templates** — `save-template` / `apply-template`; six ship in [`templates/`](./templates/) (`gold-title`, `end-card`, `subscribe-cta`, `hook-question`, `lower-third`, `caption-pop`).
 - **Resilience** — `version` (support detection) · `lint` (schema-aware CI checks, exit 0/1/2) · `migrate` · `decrypt`; [schema reference](./docs/draft-schema/) + [version matrix](./docs/version-support.md).
 - **Discover** — `enums` — 12 categories × 2 namespaces, no network.
-- **Integrate** — Node [library](#use-as-a-node-library), [Dockerfile](./Dockerfile), [GitHub Action](#github-action--lint-drafts-in-ci), `serve` (stateless JSONL runner for n8n/Make/Coze), `export --batch` (experimental render queue), `completions <bash|zsh|fish>`, [Claude Code plugin](#claude-code-plugin).
+- **Integrate** — `describe` (JSON tool spec for LLM/agent callers), Node [library](#use-as-a-node-library), [Dockerfile](./Dockerfile), [GitHub Action](#github-action--lint-drafts-in-ci), `serve` (stateless JSONL runner for n8n/Make/Coze), `export --batch` (experimental render queue), `completions <bash|zsh|fish>`, [Claude Code plugin](#claude-code-plugin).
 - **Output** — JSON by default (pipe to `jq`), `-H` table, `-q` quiet.
 
 **Cross-platform:** CapCut **and** JianYing in one binary (`--jianying` switches the enum namespace); macOS · Windows · Linux; pure Node ≥ 18, zero runtime deps.
@@ -572,7 +573,7 @@ Close the project in CapCut before editing, reopen after. CapCut reads the JSON 
 |---|---|
 | **Edits vanish / project looks unchanged** | CapCut was open. It keeps its own copy of the draft in memory and overwrites your file when it next saves. **Close the project in CapCut, run the CLI, then reopen.** This is the single most common gotcha. |
 | **Track / layer order looks scrambled in CapCut** | Older builds wrote tracks in command-call order, but CapCut lays out the timeline from the tracks-array order. Recent builds normalize the array to the canonical layer order (video → audio → overlays → text) on every save. Update, re-run the edit, reopen. ([#21](https://github.com/renezander030/capcut-cli/issues/21)) |
-| **Need to undo an edit** | Run `capcut restore <project>` — it copies the `.bak` back over the draft. Single-step (only the last write is kept). Preview any command first with `--dry-run` to avoid the round-trip. |
+| **Need to undo an edit** | `capcut restore <project>` reverts the last write. Earlier writes are recoverable too: `capcut restore <project> --list` shows the snapshot history (kept in `<draftdir>/.capcut-cli-history/`, last 20), and `--step N` rolls back N writes. Preview any command first with `--dry-run` to avoid the round-trip. |
 | **`caption` fails: whisper not found** | `caption` shells out to a whisper binary. Install one (`pip install openai-whisper`, `brew install whisper-cpp`, or faster-whisper) or pass `--whisper-cmd <path>`. |
 | **`translate` fails: ANTHROPIC_API_KEY** | Set the env var (`export ANTHROPIC_API_KEY=…`) or pass `--api-key`. |
 | **`audio-fade --out` seems ignored** | `--out` is the global output-path flag. Use `--fade-out` for the fade-out duration. |
