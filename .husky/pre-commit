@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Pre-commit gate:
 #   1. lint-staged — biome check/format on staged files only
-#   2. fast unit tests — node:test against the built CLI
+#   2. unit tests — node:test against a freshly built CLI
 #
 # Skip with `git commit --no-verify` only when truly necessary; the gate is
 # cheap (lint=<1s, tests<10s on a clean tree) so the bypass should be rare.
@@ -11,5 +11,7 @@ set -e
 # 1. Lint + format staged files
 npx --no-install lint-staged
 
-# 2. Fast unit tests. Build first so dist/ matches src/.
-npm run test:fast --silent 2>&1 | tail -20
+# 2. Unit tests. `npm test` rebuilds dist/ first so it matches src/ — without
+#    the rebuild, test:fast runs against a stale build and can pass-or-fail on
+#    code that isn't what's being committed.
+npm test --silent 2>&1 | tail -20
