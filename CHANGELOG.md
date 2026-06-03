@@ -2,20 +2,43 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] — 2026-06-03
+
+Safety, discoverability, and a long-overdue track-order fix. No breaking changes; everything stays zero-dep, JSON-by-default, and pipeable.
 
 ### Added
 
 - **Global `--dry-run`** ([#15](https://github.com/renezander030/capcut-cli/issues/15)) — any draft-mutating command now honors `--dry-run`: it computes and prints the normal JSON result with `"dryRun":true` added, but leaves the draft **and** its `.bak` untouched. Gated centrally in `saveDraft`, so it covers every write command at once. `translate` / `export --batch` keep their existing dry-run behavior.
 - **`restore` command** ([#16](https://github.com/renezander030/capcut-cli/issues/16)) — `capcut restore <project>` undoes the last write by copying `<draft>.bak` back over the draft. Single-step (only one backup generation is kept); exits non-zero with a clear message when no `.bak` exists. Honors `--dry-run`.
-
-### Documentation
-
-- **README** — added a from-source install path and a consolidated Prerequisites note (Node ≥ 18, whisper for `caption`, `ANTHROPIC_API_KEY` for `translate`); a worked-example block for the v0.4/v0.5 commands that had none (`mix-mode`, `audio-fade`, `add-filter`, `bubble-text`, `add-cover`, `add-sfx`, `chroma`, `import-ass`); and a **Troubleshooting** table covering the CapCut-must-be-closed footgun, track-order normalization ([#21](https://github.com/renezander030/capcut-cli/issues/21)), `.bak` recovery, whisper/API-key setup, and the `--fade-out` flag.
+- **Shell completions** ([#18](https://github.com/renezander030/capcut-cli/pull/18), [#19](https://github.com/renezander030/capcut-cli/pull/19), [#20](https://github.com/renezander030/capcut-cli/pull/20)) — `capcut completions <bash|zsh|fish>` generates a completion script for command names and global flags.
 
 ### Fixed
 
 - **Track order scrambled on import** ([#21](https://github.com/renezander030/capcut-cli/issues/21)) — tracks were written in the order edit commands ran, but CapCut lays out the timeline from the tracks-array order, not from per-segment `render_index`, so building a draft incrementally produced a jumbled timeline. `saveDraft` now normalizes the tracks array to the canonical bottom→top layer order (`video → audio → sticker → effect → filter → text`) on every save; the sort is stable so same-type tracks keep their authored order. Also exported as `sortTracks` from the library entry point.
+
+### Documentation
+
+- **README** — added a from-source install path and a consolidated Prerequisites note (Node ≥ 18, whisper for `caption`, `ANTHROPIC_API_KEY` for `translate`); a worked-example block for the v0.4/v0.5 commands that had none (`mix-mode`, `audio-fade`, `add-filter`, `bubble-text`, `add-cover`, `add-sfx`, `chroma`, `import-ass`); `--dry-run` / `restore` usage; and a **Troubleshooting** table covering the CapCut-must-be-closed footgun, track-order normalization, `.bak` recovery, whisper/API-key setup, and the `--fade-out` flag.
+- **`CONTRIBUTING.md`** — build / test / lint commands, the `npm test` pre-commit gate, and PR conventions.
+
+### Internal
+
+- **Pre-commit hook rebuilds `dist/` before tests** ([#23](https://github.com/renezander030/capcut-cli/pull/23)) — the hook ran `test:fast` (no build step), so it could pass-or-fail against a stale `dist/`. It now runs `npm test`, which builds first.
+
+## [0.7.0] — 2026-05-31
+
+### Added
+
+- **`templates` command** ([#13](https://github.com/renezander030/capcut-cli/pull/13)) — `capcut templates` lists the bundled templates (slug + description). JSON by default, `-H` for a table.
+- **Global `--version` / `-v` flag** ([#12](https://github.com/renezander030/capcut-cli/pull/12)) — print the installed CLI version without a subcommand.
+
+### Documentation
+
+- **Independent / non-affiliation disclaimer + trademark notice** — README and metadata clarify the project is unofficial and not affiliated with ByteDance; "CapCut" / "JianYing" are used nominatively.
+
+### Internal
+
+- **Pinned Biome to 2.4.15** ([#14](https://github.com/renezander030/capcut-cli/pull/14)) and cleared auto-fixable lint debt.
 
 ## [0.6.0] — 2026-05-29
 
