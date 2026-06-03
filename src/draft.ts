@@ -134,7 +134,25 @@ export function sortTracks(draft: Draft): void {
     .map(({ track }) => track);
 }
 
+// --dry-run state. When set, saveDraft computes the in-memory change but skips
+// both the on-disk write and the .bak snapshot, so the draft is left untouched.
+// All ~35 mutating commands funnel through saveDraft, so gating here covers them.
+let dryRun = false;
+
+export function setDryRun(value: boolean): void {
+  dryRun = value;
+}
+
+export function isDryRun(): boolean {
+  return dryRun;
+}
+
 export function saveDraft(filePath: string, draft: Draft): void {
+  if (dryRun) {
+    // Normalize in memory (so any read-back is consistent) but write nothing.
+    sortTracks(draft);
+    return;
+  }
   const bakPath = `${filePath}.bak`;
   if (existsSync(filePath)) {
     const original = rawOriginal ?? readFileSync(filePath, "utf-8");

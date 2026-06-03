@@ -330,6 +330,13 @@ a1b2c3d4  0:00.50- 0:03.00   Welcome to the video
 capcut set-text ./project a1b2c3 "New text" -q && echo "done"
 ```
 
+**Dry run** (`--dry-run`) -- preview any mutating command. It prints the normal JSON result with `"dryRun":true` added, but leaves the draft **and** its `.bak` untouched. Preview, then commit:
+```bash
+capcut speed ./project a1b2c3 2.0 --dry-run
+# {"ok":true,"id":"a1b2c3...","old_speed":1,"new_speed":2,"dryRun":true}   ← nothing written
+capcut speed ./project a1b2c3 2.0            # run for real
+```
+
 ## Commands
 
 ### Overview (start here)
@@ -391,7 +398,7 @@ Options: `--font-size <n>`, `--color <hex>`, `--align <0|1|2>` (left/center/righ
 
 ### Edit
 
-Every write command creates a `.bak` backup before modifying the file.
+Every write command creates a `.bak` backup before modifying the file. Add `--dry-run` to any of them to preview without writing; `capcut restore` rolls the last write back.
 
 ```bash
 capcut set-text ./project a1b2c3 "New subtitle"
@@ -403,6 +410,7 @@ capcut speed ./project a1b2c3 1.5
 capcut volume ./project a1b2c3 0.8
 capcut opacity ./project a1b2c3 0.5
 capcut trim ./project a1b2c3 2s 5s
+capcut restore ./project                     # undo the last write (single-step, from .bak)
 ```
 
 ### Templates
@@ -656,7 +664,7 @@ Close the project in CapCut before editing, reopen after. CapCut reads the JSON 
 |---|---|
 | **Edits vanish / project looks unchanged** | CapCut was open. It keeps its own copy of the draft in memory and overwrites your file when it next saves. **Close the project in CapCut, run the CLI, then reopen.** This is the single most common gotcha. |
 | **Track / layer order looks scrambled in CapCut** | Older builds wrote tracks in command-call order, but CapCut lays out the timeline from the tracks-array order. Recent builds normalize the array to the canonical layer order (video → audio → overlays → text) on every save. Update, re-run the edit, reopen. ([#21](https://github.com/renezander030/capcut-cli/issues/21)) |
-| **Need to undo an edit** | Every write leaves a `.bak` beside the draft. Roll back with `mv draft_content.json.bak draft_content.json`. |
+| **Need to undo an edit** | Run `capcut restore <project>` — it copies the `.bak` back over the draft. Single-step (only the last write is kept). Preview any command first with `--dry-run` to avoid the round-trip. |
 | **`caption` fails: whisper not found** | `caption` shells out to a whisper binary. Install one (`pip install openai-whisper`, `brew install whisper-cpp`, or faster-whisper) or pass `--whisper-cmd <path>`. |
 | **`translate` fails: ANTHROPIC_API_KEY** | Set the env var (`export ANTHROPIC_API_KEY=…`) or pass `--api-key`. |
 | **`audio-fade --out` seems ignored** | `--out` is the global output-path flag. Use `--fade-out` for the fade-out duration. |

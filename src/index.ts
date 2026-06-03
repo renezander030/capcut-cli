@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseAss } from "./ass.js";
@@ -37,13 +37,16 @@ import { type DoctorCheck, runDoctor } from "./doctor.js";
 import type { Draft, Segment, Track } from "./draft.js";
 import {
   extractText,
+  findDraft,
   findMaterial,
   findMaterialGlobal,
   findSegment,
   getMaterialTypes,
   getTracksByType,
+  isDryRun,
   loadDraft,
   saveDraft,
+  setDryRun,
   updateTextContent,
 } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
@@ -128,13 +131,14 @@ export const COMMANDS = [
   "chroma",
   "enums",
   "doctor",
+  "restore",
   "serve",
   "decrypt",
   "export",
   "init",
 ] as const;
 
-const GLOBAL_FLAGS = ["--jianying", "-H", "--human", "-q", "--quiet", "-v", "--version"] as const;
+const GLOBAL_FLAGS = ["--jianying", "-H", "--human", "-q", "--quiet", "-v", "--version", "--dry-run"] as const;
 
 const HELP = `capcut-cli -- fast edits to CapCut projects
 
@@ -146,6 +150,8 @@ Global flags:
   -H, --human     Human-readable table output (default: JSON)
   -v, --version   Print the installed CLI version
   -q, --quiet     No output on success, exit code only (write commands)
+  --dry-run       Preview a mutating command: print the result (with
+                  "dryRun":true) but leave the draft and its .bak untouched
   --jianying      Use JianYing enum namespace (default: CapCut) for
                   transition, mask, text-anim, image-anim, add-effect, enums
 
@@ -212,6 +218,7 @@ Edit:
   opacity    <project> <id> <alpha>             Set opacity (0.0-1.0)
   export-srt <project>                          Export subtitles to SRT
   batch      <project>                          Run multiple edits from stdin (JSONL)
+  restore    <project>                          Undo the last write (restore from .bak, single-step)
 
 Animate:
   keyframe   <project> <id> <property> <time> <value>
@@ -762,7 +769,13 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
 
 function out(data: unknown, flags: Flags): void {
   if (flags.quiet) return;
-  process.stdout.write(`${JSON.stringify(data)}\n`);
+  // In --dry-run, stamp an object result with dryRun:true so callers can tell a
+  // preview from a committed write. Arrays (read commands) are left untouched.
+  let payload = data;
+  if (isDryRun() && data !== null && typeof data === "object" && !Array.isArray(data)) {
+    payload = { ...(data as Record<string, unknown>), dryRun: true };
+  }
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
 class CliError extends Error {
@@ -2077,6 +2090,19 @@ function getCliVersion(): string {
   return pkg.version;
 }
 
+// `restore` undoes the last write by copying <draft>.bak back over the draft.
+// Only one backup generation is kept, so this is a single-step undo.
+function cmdRestore(projectPath: string | undefined, flags: Flags): void {
+  if (!projectPath) die("Missing project path. Usage: capcut restore <project>");
+  const filePath = findDraft(projectPath);
+  const bakPath = `${filePath}.bak`;
+  if (!existsSync(bakPath)) {
+    die(`No backup found at ${bakPath}. Nothing to restore (a .bak is written on the first edit).`);
+  }
+  if (!isDryRun()) copyFileSync(bakPath, filePath);
+  out({ ok: true, restored: filePath, from: bakPath }, flags);
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -2087,6 +2113,9 @@ async function main(): Promise<void> {
   }
 
   const { positional, flags } = parseFlags(raw);
+
+  // Global --dry-run: gate every saveDraft write (see src/draft.ts).
+  setDryRun(flags.dryRun === true);
 
   if (flags.version) {
     console.log(getCliVersion());
@@ -2125,6 +2154,12 @@ async function main(): Promise<void> {
   // `doctor` inspects the environment, not a draft — no project needed.
   if (cmd === "doctor") {
     process.exit(cmdDoctor(flags) ? 0 : 1);
+  }
+
+  // `restore` copies <draft>.bak back over the draft — no loadDraft/parse needed.
+  if (cmd === "restore") {
+    cmdRestore(projectPath, flags);
+    process.exit(0);
   }
 
   // `serve` reads jobs from stdin/queue file — no project needed.
