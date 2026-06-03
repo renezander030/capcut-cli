@@ -47,7 +47,7 @@ flowchart LR
 
 How `capcut-cli` differs from the other CapCut / JianYing tooling:
 
-| Capability | [`pyJianYingDraft`](https://github.com/GuanYixuan/pyJianYingDraft) (Python, JianYing) | [`pyCapCut`](https://github.com/GuanYixuan/pyCapCut) (Python, CapCut) | [`CapCutAPI`](https://github.com/sun-guannan/CapCutAPI) (Python, HTTP server) | `cutcli` (Go, closed) | **`capcut-cli`** (Node, this repo) |
+| Capability | [`pyJianYingDraft`](https://github.com/GuanYixuan/pyJianYingDraft) (Python, JianYing) | [`pyCapCut`](https://github.com/GuanYixuan/pyCapCut) (Python, CapCut) | [`VectCutAPI`](https://github.com/sun-guannan/VectCutAPI) (Python, HTTP server, formerly CapCutAPI) | `cutcli` (Go, closed) | **`capcut-cli`** (Node, this repo) |
 |---|:---:|:---:|:---:|:---:|:---:|
 | Inspect drafts (`info` / `tracks` / `materials` / `segments` / `texts`) | partial | partial | ❌ | ❌ | ✅ |
 | Create drafts from scratch | ✅ | ✅ | ✅ | ✅ | ✅ |
