@@ -196,6 +196,8 @@ Zero dependencies. JSON output by default. Pipeable. Works with CapCut and JianY
 
 ## Install
 
+**Prerequisites:** Node ≥ 18 (built-ins only — no native modules). Two commands need extra tooling: `caption` shells out to a whisper binary, and `translate` needs `ANTHROPIC_API_KEY`. Run `capcut doctor` right after install to check all of this in one shot.
+
 ```bash
 npm install -g capcut-cli
 ```
@@ -207,6 +209,13 @@ capcut --version    # prints the installed CLI version
 Or run directly:
 ```bash
 npx capcut-cli info ./my-project/
+```
+Or build from source:
+```bash
+git clone https://github.com/renezander030/capcut-cli
+cd capcut-cli
+npm install && npm run build
+node dist/index.js info ./my-project/   # or `npm link` to expose `capcut` globally
 ```
 
 ### Claude Code plugin
@@ -456,6 +465,35 @@ capcut text-ranges ./project c1c1c1 --styles '[
 See `skills/capcut-edit/references/api-reference.md` for every flag and value
 format.
 
+### Sound, colour & decorative effects (v0.4 / v0.5)
+
+```bash
+# Blend mode on a video segment (multiply, screen, overlay, …)
+capcut mix-mode    ./project a1b2c3 screen
+
+# Fade audio in/out — real audio_fades objects, not volume keyframes.
+# Note: --fade-out, because --out is the global output-path flag.
+capcut audio-fade  ./project a1b2c3 --in 0.5s --fade-out 1s
+
+# Colour filter on its own track (slugs from `enums --filters`)
+capcut add-filter  ./project warm 0s 10s
+
+# Speech-bubble shape on a text segment (slugs from `enums --bubbles`)
+capcut bubble-text ./project c1c1c1 --bubble rounded
+
+# Set the project cover / thumbnail from a local image (--time in ms)
+capcut add-cover   ./project ./thumb.png --time 1500
+
+# Sound effect on a dedicated track (slugs from `enums --audio-effects`)
+capcut add-sfx     ./project big-house 2s 1s
+
+# Green-screen / chroma key on a video segment (or --off to clear)
+capcut chroma      ./project a1b2c3 --color "#00FF00" --intensity 0.5
+
+# ASS / SSA subtitle import, alongside import-srt
+capcut import-ass  ./project subs.ass --track-name captions
+```
+
 ### Enum discovery (Phase 3)
 
 ```bash
@@ -611,6 +649,19 @@ Typical project location:
 - **macOS**: `/Users/<you>/Movies/CapCut/User Data/Projects/com.lveditor.draft/<id>/`
 
 Close the project in CapCut before editing, reopen after. CapCut reads the JSON on project open.
+
+## Troubleshooting
+
+| Symptom | Cause & fix |
+|---|---|
+| **Edits vanish / project looks unchanged** | CapCut was open. It keeps its own copy of the draft in memory and overwrites your file when it next saves. **Close the project in CapCut, run the CLI, then reopen.** This is the single most common gotcha. |
+| **Track / layer order looks scrambled in CapCut** | Older builds wrote tracks in command-call order, but CapCut lays out the timeline from the tracks-array order. Recent builds normalize the array to the canonical layer order (video → audio → overlays → text) on every save. Update, re-run the edit, reopen. ([#21](https://github.com/renezander030/capcut-cli/issues/21)) |
+| **Need to undo an edit** | Every write leaves a `.bak` beside the draft. Roll back with `mv draft_content.json.bak draft_content.json`. |
+| **`caption` fails: whisper not found** | `caption` shells out to a whisper binary. Install one (`pip install openai-whisper`, `brew install whisper-cpp`, or faster-whisper) or pass `--whisper-cmd <path>`. |
+| **`translate` fails: ANTHROPIC_API_KEY** | Set the env var (`export ANTHROPIC_API_KEY=…`) or pass `--api-key`. |
+| **`audio-fade --out` seems ignored** | `--out` is the global output-path flag. Use `--fade-out` for the fade-out duration. |
+| **`doctor` can't find your project dir on Linux** | The default-path probe only knows the macOS/Windows locations — CapCut Desktop isn't shipped for Linux. Pass the draft path explicitly. |
+| **`requires Node >= 18`** | The CLI uses Node 18+ built-ins (`fetch`, fs promises). Upgrade Node, then re-run `capcut doctor`. |
 
 ## Workflow: batch subtitle correction
 
