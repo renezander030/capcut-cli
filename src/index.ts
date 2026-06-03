@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseAss } from "./ass.js";
@@ -73,6 +74,7 @@ import {
   setAudioFade,
   setCover,
   setMixMode,
+  uuid,
 } from "./factory.js";
 import { DEFAULT_LINT_OPTIONS, type LintOptions, lintDraft, lintExitCode, summarize } from "./lint.js";
 import { migrateDraft } from "./migrate.js";
@@ -134,6 +136,9 @@ export const COMMANDS = [
   "relink",
   "timeline",
   "projects",
+  "diff",
+  "concat",
+  "config",
   "describe",
   "completions",
   "enums",
@@ -232,6 +237,9 @@ Maintenance & inspection:
   relink     <project> --dir <d> | --from <p> --to <q>  Repair broken media paths
   timeline   <project> [--cols N]               Show track/segment layout (JSON, or -H ASCII bars)
   projects   [query] [--drafts <dir>] [--names] List CapCut/JianYing draft folders on disk
+  diff       <projectA> <projectB>             Compare two drafts (added/removed/changed)
+  concat     <projectA> <draftB> [--out <p>]   Append draftB onto projectA's timeline (id-safe)
+  config                                       Show resolved .capcutrc + effective defaults
   describe                                      Emit the full command surface as JSON (agent tool spec)
 
 Animate:
@@ -2380,6 +2388,9 @@ const SUMMARIES: Record<string, string> = {
   relink: "Repair broken media paths (--dir or --from/--to).",
   timeline: "Show the track/segment layout (JSON, or -H ASCII bars).",
   projects: "List CapCut/JianYing draft folders on disk.",
+  diff: "Compare two drafts (segments/materials/tracks added/removed/changed).",
+  concat: "Append one draft onto another's timeline (id-safe), write to --out or in place.",
+  config: "Show the resolved config (.capcutrc + effective defaults).",
   describe: "Emit the full command surface as JSON (agent tool spec).",
   completions: "Generate shell completions (bash|zsh|fish).",
   restore: "Undo writes from .bak / snapshot history (--step N, --list).",
@@ -2414,6 +2425,205 @@ function cmdDescribe(flags: Flags): void {
   );
 }
 
+// --- Config (.capcutrc) ---
+
+interface CapcutConfig {
+  drafts?: string;
+  jianying?: boolean;
+  cols?: number;
+}
+
+// Load .capcutrc from cwd, then home. cwd wins. Returns {} if none/invalid.
+function loadConfig(): { path: string | null; config: CapcutConfig } {
+  for (const p of [path.join(process.cwd(), ".capcutrc"), path.join(homedir(), ".capcutrc")]) {
+    if (!existsSync(p)) continue;
+    try {
+      const cfg = JSON.parse(readFileSync(p, "utf-8")) as CapcutConfig;
+      return { path: p, config: cfg };
+    } catch {
+      // Malformed config is ignored rather than crashing every command.
+      return { path: p, config: {} };
+    }
+  }
+  return { path: null, config: {} };
+}
+
+// Apply config as defaults: a CLI flag always wins over the file.
+function applyConfig(flags: Flags, config: CapcutConfig): void {
+  if (flags.drafts === undefined && typeof config.drafts === "string") flags.drafts = config.drafts;
+  if (flags.jianying === undefined && config.jianying === true) flags.jianying = true;
+  if (flags.cols === undefined && typeof config.cols === "number") flags.cols = config.cols;
+}
+
+function cmdConfig(flags: Flags): void {
+  const { path: cfgPath, config } = loadConfig();
+  out(
+    {
+      ok: true,
+      path: cfgPath,
+      config,
+      effective: { drafts: flags.drafts, jianying: !!flags.jianying, cols: flags.cols },
+    },
+    flags,
+  );
+}
+
+// --- diff / concat ---
+
+// Read a draft from disk without touching loadDraft's module state (so two can
+// be loaded at once for diff/concat).
+function readDraft(input: string): { draft: Draft; filePath: string } {
+  const filePath = findDraft(input);
+  return { draft: JSON.parse(readFileSync(filePath, "utf-8")) as Draft, filePath };
+}
+
+function indexSegments(draft: Draft): Map<string, { seg: Segment; track: string }> {
+  const m = new Map<string, { seg: Segment; track: string }>();
+  for (const t of draft.tracks) for (const s of t.segments) m.set(s.id, { seg: s, track: t.type });
+  return m;
+}
+
+function indexMaterials(draft: Draft): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const [type, arr] of Object.entries(draft.materials)) {
+    if (!Array.isArray(arr)) continue;
+    for (const mat of arr) {
+      const id = (mat as { id?: unknown }).id;
+      if (typeof id === "string") m.set(id, type);
+    }
+  }
+  return m;
+}
+
+// id -> serialized material, so diff can detect in-place content changes
+// (a text edit mutates the material under the same id).
+function indexMaterialContent(draft: Draft): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const arr of Object.values(draft.materials)) {
+    if (!Array.isArray(arr)) continue;
+    for (const mat of arr) {
+      const id = (mat as { id?: unknown }).id;
+      if (typeof id === "string") m.set(id, JSON.stringify(mat));
+    }
+  }
+  return m;
+}
+
+// `diff` reports what changed between two drafts: segments added/removed/changed
+// and materials added/removed. Read-only.
+function cmdDiff(positional: string[], flags: Flags): void {
+  const aPath = positional[1];
+  const bPath = positional[2];
+  if (!aPath || !bPath) die("Usage: capcut diff <projectA> <projectB>");
+  const a = readDraft(aPath).draft;
+  const b = readDraft(bPath).draft;
+
+  const aSeg = indexSegments(a);
+  const bSeg = indexSegments(b);
+  const segAdded: string[] = [];
+  const segRemoved: string[] = [];
+  const segChanged: Array<{ id: string; fields: string[] }> = [];
+  for (const [id, { seg }] of bSeg) {
+    if (!aSeg.has(id)) {
+      segAdded.push(id);
+      continue;
+    }
+    const prev = aSeg.get(id)?.seg as Segment;
+    const fields: string[] = [];
+    if (prev.target_timerange.start !== seg.target_timerange.start) fields.push("start");
+    if (prev.target_timerange.duration !== seg.target_timerange.duration) fields.push("duration");
+    if (prev.material_id !== seg.material_id) fields.push("material_id");
+    if (JSON.stringify(prev.content ?? null) !== JSON.stringify(seg.content ?? null)) fields.push("content");
+    if (prev.speed !== seg.speed) fields.push("speed");
+    if (prev.volume !== seg.volume) fields.push("volume");
+    if (fields.length) segChanged.push({ id, fields });
+  }
+  for (const id of aSeg.keys()) if (!bSeg.has(id)) segRemoved.push(id);
+
+  const aMat = indexMaterialContent(a);
+  const bMat = indexMaterialContent(b);
+  const matAdded = [...bMat.keys()].filter((id) => !aMat.has(id));
+  const matRemoved = [...aMat.keys()].filter((id) => !bMat.has(id));
+  // Same id in both but different serialized content — e.g. a text edit mutates
+  // the text material (not the segment), so this is where set-text shows up.
+  const matChanged = [...bMat.keys()].filter((id) => aMat.has(id) && aMat.get(id) !== bMat.get(id));
+
+  const changed =
+    segAdded.length + segRemoved.length + segChanged.length + matAdded.length + matRemoved.length + matChanged.length >
+    0;
+  out(
+    {
+      ok: true,
+      changed,
+      tracks: { a: a.tracks.length, b: b.tracks.length },
+      segments: { added: segAdded, removed: segRemoved, changed: segChanged },
+      materials: { added: matAdded, removed: matRemoved, changed: matChanged },
+    },
+    flags,
+  );
+}
+
+// `concat` appends draftB onto draftA's timeline. B's segments are time-shifted
+// by A's duration; any B material/segment id that collides with A is reassigned
+// a fresh uuid (and references rewritten) so the merged draft stays valid.
+function cmdConcat(positional: string[], flags: Flags): void {
+  const aInput = positional[1];
+  const bInput = positional[2];
+  if (!aInput || !bInput) die("Usage: capcut concat <projectA> <draftB> [--out <path>]");
+  const { draft: a, filePath: aFile } = loadDraft(aInput);
+  const b = JSON.parse(readFileSync(findDraft(bInput), "utf-8")) as Draft;
+
+  const offset = a.duration || 0;
+  const aSegIds = new Set<string>();
+  for (const t of a.tracks) for (const s of t.segments) aSegIds.add(s.id);
+  const aMatIds = new Set(indexMaterials(a).keys());
+
+  // 1. Reassign colliding material ids in B, build old->new map.
+  const matRemap = new Map<string, string>();
+  for (const [, arr] of Object.entries(b.materials)) {
+    if (!Array.isArray(arr)) continue;
+    for (const mat of arr) {
+      const m = mat as { id?: string };
+      if (typeof m.id === "string" && aMatIds.has(m.id)) {
+        const fresh = uuid();
+        matRemap.set(m.id, fresh);
+        m.id = fresh;
+      }
+    }
+  }
+  // 2. Fix B segments: remap material refs, reassign colliding segment ids, time-shift.
+  for (const t of b.tracks) {
+    for (const s of t.segments) {
+      if (matRemap.has(s.material_id)) s.material_id = matRemap.get(s.material_id) as string;
+      s.extra_material_refs = (s.extra_material_refs ?? []).map((r) => matRemap.get(r) ?? r);
+      if (aSegIds.has(s.id)) s.id = uuid();
+      s.target_timerange = { ...s.target_timerange, start: s.target_timerange.start + offset };
+    }
+  }
+  // 3. Merge B materials into A.
+  for (const [type, arr] of Object.entries(b.materials)) {
+    if (!Array.isArray(arr)) continue;
+    const dest = (a.materials as Record<string, unknown[]>)[type];
+    if (Array.isArray(dest)) dest.push(...arr);
+    else (a.materials as Record<string, unknown[]>)[type] = [...arr];
+  }
+  // 4. Merge B tracks into A: same type+name extends; otherwise appended.
+  for (const bt of b.tracks) {
+    const match = a.tracks.find((at) => at.type === bt.type && at.name === bt.name);
+    if (match) match.segments.push(...bt.segments);
+    else a.tracks.push(bt);
+  }
+  a.duration = offset + (b.duration || 0);
+
+  if (flags.out) {
+    writeFileSync(flags.out, JSON.stringify(a, null, 2), "utf-8");
+    out({ ok: true, out: flags.out, duration_us: a.duration, remapped_ids: matRemap.size }, flags);
+  } else {
+    saveDraft(aFile, a);
+    out({ ok: true, project: aFile, duration_us: a.duration, remapped_ids: matRemap.size }, flags);
+  }
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -2424,6 +2634,9 @@ async function main(): Promise<void> {
   }
 
   const { positional, flags } = parseFlags(raw);
+
+  // .capcutrc defaults fill in unset flags (CLI flags always win).
+  applyConfig(flags, loadConfig().config);
 
   // Global --dry-run: gate every saveDraft write (see src/draft.ts).
   setDryRun(flags.dryRun === true);
@@ -2482,6 +2695,22 @@ async function main(): Promise<void> {
   // `projects` scans the disk for draft folders — no single project needed.
   if (cmd === "projects") {
     cmdProjects(positional, flags);
+    process.exit(0);
+  }
+
+  // `diff` reads two drafts; `concat` reads two and writes one — handled directly.
+  if (cmd === "diff") {
+    cmdDiff(positional, flags);
+    process.exit(0);
+  }
+  if (cmd === "concat") {
+    cmdConcat(positional, flags);
+    process.exit(0);
+  }
+
+  // `config` just reports the resolved .capcutrc — no project needed.
+  if (cmd === "config") {
+    cmdConfig(flags);
     process.exit(0);
   }
 

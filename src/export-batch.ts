@@ -23,7 +23,7 @@ export interface ExportBatchResult {
  *
  * CapCut/JianYing have no headless render CLI. This wraps OS-level automation:
  *   - macOS: AppleScript (`osascript`) opens each draft and triggers Export
- *   - Windows: PowerShell + SendKeys (sketched; needs CapCut window focus)
+ *   - Windows: PowerShell + SendKeys (Ctrl+E export; needs CapCut window focus)
  *   - Linux: not supported — CapCut/JianYing don't run natively
  *
  * Reliability is bounded by the host UI not changing. We surface this clearly
@@ -109,11 +109,30 @@ function runMacOSExport(draftDir: string, app: "capcut" | "jianying"): { ok: boo
   return { ok: true, message: "Export triggered via AppleScript; check your CapCut export queue" };
 }
 
-function runWindowsExport(_draftDir: string, _app: "capcut" | "jianying"): { ok: boolean; message: string } {
-  return {
-    ok: false,
-    message:
-      "Windows automation is sketched but not yet shipped — requires PowerShell + UI Automation framework. " +
-      "Workaround: use AutoHotkey externally. See docs/version-support.md.",
-  };
+// Build the PowerShell automation for one draft. Pure (no I/O) so it can be
+// unit-tested off-Windows: opens the project file, waits for the app window,
+// then sends CapCut's export shortcut (Ctrl+E) via SendKeys.
+export function windowsExportScript(draftDir: string, app: "capcut" | "jianying"): string {
+  const exe = app === "capcut" ? "CapCut" : "JianyingPro";
+  const draftFile = `${draftDir}\\draft_content.json`;
+  return [
+    "Add-Type -AssemblyName System.Windows.Forms;",
+    `Start-Process -FilePath '${draftFile}';`,
+    "Start-Sleep -Seconds 6;",
+    `$p = Get-Process '${exe}' -ErrorAction SilentlyContinue | Select-Object -First 1;`,
+    "if ($p) { [System.Windows.Forms.SendKeys]::SendWait('^e'); } else { exit 3 }",
+  ].join("\n");
+}
+
+function runWindowsExport(draftDir: string, app: "capcut" | "jianying"): { ok: boolean; message: string } {
+  // Same reliability caveat as the macOS path: bounded by the host UI not moving.
+  const script = windowsExportScript(draftDir, app);
+  const r = spawnSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf-8", timeout: 30_000 });
+  if (r.status !== 0) {
+    return {
+      ok: false,
+      message: `powershell failed (status ${r.status}): ${r.stderr || r.stdout || "is CapCut installed and the window unobstructed?"}`,
+    };
+  }
+  return { ok: true, message: "Export triggered via PowerShell SendKeys (Ctrl+E); check your CapCut export queue" };
 }
