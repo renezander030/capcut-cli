@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment } from "./draft.js";
@@ -39,6 +39,58 @@ export async function resolveAssetPath(
 
 export function uuid(): string {
   return randomUUID();
+}
+
+// --- Asset copy (collision-safe) ---
+
+function fileSha1(path: string): string {
+  return createHash("sha1").update(readFileSync(path)).digest("hex");
+}
+
+/** True if both paths exist and have byte-identical content. */
+function sameContent(a: string, b: string): boolean {
+  if (statSync(a).size !== statSync(b).size) return false;
+  return fileSha1(a) === fileSha1(b);
+}
+
+/**
+ * Copy a source file into an assets directory, keyed by its basename.
+ *
+ * The skip-on-exists behaviour is intentional and load-bearing: the Wikimedia
+ * fetch path pre-writes into the same dir so this copy is a deliberate no-op,
+ * and re-adding the same file must not re-copy. But when a *different* source
+ * resolves to a basename already present (e.g. `en/0_00.png` vs `jp/0_00.png`),
+ * skipping silently leaves the draft pointing at the wrong content. In that case
+ * we de-collide by writing under a content-hashed name and warn on stderr.
+ *
+ * Returns the destination path the draft should reference.
+ */
+function copyAssetDeduped(srcPath: string, assetsDir: string, fallbackName: string): string {
+  mkdirSync(assetsDir, { recursive: true });
+  const filename = basename(srcPath) || fallbackName;
+  const destPath = resolve(assetsDir, filename);
+
+  if (!existsSync(destPath)) {
+    copyFileSync(srcPath, destPath);
+    return destPath;
+  }
+  // Destination exists — same source (intentional no-op) or basename collision?
+  if (sameContent(srcPath, destPath)) return destPath;
+
+  // Different source resolving to the same basename: de-collide by content hash.
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  const ext = dot > 0 ? filename.slice(dot) : "";
+  const dedupName = `${stem}.${fileSha1(srcPath).slice(0, 8)}${ext}`;
+  const dedupPath = resolve(assetsDir, dedupName);
+  if (!existsSync(dedupPath)) {
+    copyFileSync(srcPath, dedupPath);
+    console.warn(
+      `Warning: "assets/${basename(assetsDir)}/${filename}" already exists from a different source file; ` +
+        `copied "${srcPath}" to "${dedupName}" instead. The draft references the correct content.`,
+    );
+  }
+  return dedupPath;
 }
 
 // --- Init (create new empty draft) ---
@@ -526,17 +578,13 @@ export function addAudio(
   const trackName = opts.trackName ?? "audio";
   const volume = opts.volume ?? 1.0;
 
-  // Copy file into draft assets directory
+  // Copy file into draft assets directory (collision-safe)
   const draftDir = dirname(filePath);
-  const filename = basename(opts.path) || "audio.mp3";
   const assetsDir = resolve(draftDir, "assets", "audio");
-  mkdirSync(assetsDir, { recursive: true });
-  const destPath = resolve(assetsDir, filename);
-  if (!existsSync(destPath)) {
-    copyFileSync(opts.path, destPath);
-  }
+  const destPath = copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
   // Use the local assets path — CapCut rewrites to placeholder on open
   const localPath = destPath;
+  const filename = basename(localPath);
 
   // Find or create audio track
   let track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
@@ -627,17 +675,13 @@ export function addVideo(
   const ext = opts.path.split(".").pop()?.toLowerCase() || "";
   const materialType = opts.type ?? (["jpg", "jpeg", "png", "webp", "bmp", "tiff"].includes(ext) ? "photo" : "video");
 
-  // Copy file into draft assets directory
+  // Copy file into draft assets directory (collision-safe)
   const draftDir = dirname(filePath);
-  const filename = basename(opts.path) || "media";
   const assetsDir = resolve(draftDir, "assets", "video");
-  mkdirSync(assetsDir, { recursive: true });
-  const destPath = resolve(assetsDir, filename);
-  if (!existsSync(destPath)) {
-    copyFileSync(opts.path, destPath);
-  }
+  const destPath = copyAssetDeduped(opts.path, assetsDir, "media");
   // Use the local assets path — CapCut rewrites to placeholder on open
   const localPath = destPath;
+  const filename = basename(localPath);
 
   // Find or create video track
   let track = draft.tracks.find((t) => t.type === "video" && t.name === trackName);
