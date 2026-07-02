@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { after, describe, it } from "node:test";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
@@ -103,6 +103,112 @@ describe("capcut lint", () => {
       const overlaps = r.json.issues.filter((i) => i.code === "caption-overlap");
       assert.ok(overlaps.length > 0, `expected caption-overlap error; got: ${JSON.stringify(r.json.issues)}`);
       assert.equal(r.status, 2);
+    });
+  });
+
+  describe("--fix auto-repair", () => {
+    function seedOverlappingCaptions(draftPath) {
+      const draft = JSON.parse(readFileSync(draftPath, "utf-8"));
+      let mat = draft.materials.texts?.[0];
+      if (!mat) {
+        mat = {
+          id: "fix-mat-1",
+          type: "text",
+          content: '{"text":"Hello","styles":[]}',
+          font_size: 15,
+          text_color: "#FFFFFF",
+          alignment: 1,
+        };
+        draft.materials.texts = [...(draft.materials.texts ?? []), mat];
+      }
+      let textTrack = draft.tracks.find((t) => t.type === "text");
+      if (!textTrack) {
+        textTrack = { id: "fix-text-track", type: "text", name: "captions", attribute: 0, segments: [] };
+        draft.tracks.push(textTrack);
+      }
+      const base = {
+        material_id: mat.id,
+        source_timerange: { start: 0, duration: 1_000_000 },
+        speed: 1,
+        volume: 1,
+        visible: true,
+        clip: { alpha: 1, rotation: 0, scale: { x: 1, y: 1 }, transform: { x: 0, y: 0 } },
+        extra_material_refs: [],
+        render_index: 0,
+      };
+      // Overlap: seg A ends at 2s, seg B starts at 1s (500ms overlap).
+      textTrack.segments.push({
+        ...base,
+        id: "fix-seg-1-aaaa-bbbb-cccc-dddddddddddd",
+        target_timerange: { start: 100_000_000, duration: 2_000_000 },
+      });
+      textTrack.segments.push({
+        ...base,
+        id: "fix-seg-2-aaaa-bbbb-cccc-dddddddddddd",
+        target_timerange: { start: 101_000_000, duration: 2_000_000 },
+      });
+      // A missing-material reference on a separate segment — not fixable.
+      textTrack.segments.push({
+        ...base,
+        id: "fix-seg-3-aaaa-bbbb-cccc-dddddddddddd",
+        material_id: "does-not-exist-in-any-materials",
+        target_timerange: { start: 200_000_000, duration: 1_000_000 },
+      });
+      writeFileSync(draftPath, JSON.stringify(draft));
+    }
+
+    describe("repairs fixable defects and writes atomically", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("trims overlapping captions, leaves non-fixable issues reported, and writes a .bak", () => {
+        seedOverlappingCaptions(fix.path);
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
+        assert.ok(r.json, `stdout should be JSON; got: ${r.stdout}`);
+        assert.ok(Array.isArray(r.json.fixed), "expected fixed[] in output");
+        const overlapFixed = r.json.fixed.filter((i) => i.code === "caption-overlap");
+        assert.ok(overlapFixed.length > 0, `expected caption-overlap in fixed; got: ${JSON.stringify(r.json.fixed)}`);
+
+        // The non-fixable missing-material remains and drives exit code 2.
+        const missing = r.json.issues.filter((i) => i.code === "missing-material");
+        assert.ok(missing.length > 0, "missing-material should remain reported");
+        assert.equal(missing[0].fixable, false);
+        assert.equal(r.status, 2);
+
+        // .bak snapshot created by saveDraft.
+        assert.ok(existsSync(`${fix.path}.bak`), "expected .bak to be written next to the draft");
+
+        // The on-disk draft no longer overlaps.
+        const repaired = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const track = repaired.tracks.find((t) => t.segments.some((s) => s.id.startsWith("fix-seg-1")));
+        const segs = [...track.segments].sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+        for (let i = 0; i < segs.length - 1; i++) {
+          const end = segs[i].target_timerange.start + segs[i].target_timerange.duration;
+          assert.ok(end <= segs[i + 1].target_timerange.start, `segments still overlap: ${JSON.stringify(segs)}`);
+        }
+      });
+    });
+
+    describe("--fix --dry-run", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("previews the plan without writing the draft or a .bak", () => {
+        seedOverlappingCaptions(fix.path);
+        const before = readFileSync(fix.path, "utf-8");
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--dry-run", "--no-check-paths"]);
+        assert.ok(r.json, `stdout should be JSON; got: ${r.stdout}`);
+        // dryRun stamp comes from the shared out() helper.
+        assert.equal(r.json.dryRun, true);
+        const overlapFixed = r.json.fixed.filter((i) => i.code === "caption-overlap");
+        assert.ok(overlapFixed.length > 0, "expected caption-overlap to appear in fixed[] under --dry-run");
+
+        const after = readFileSync(fix.path, "utf-8");
+        assert.equal(after, before, "--dry-run must not modify the draft");
+        assert.ok(!existsSync(`${fix.path}.bak`), "--dry-run must not write a .bak");
+      });
     });
   });
 

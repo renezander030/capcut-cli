@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `lint <project> --fix` — auto-repair mechanically-fixable draft defects (`cue-too-long`, `caption-overlap`). Trims over-long captions to the configured cap and shortens overlapping caption pairs so each ends where the next begins. Writes atomically with a `.bak` snapshot; combine with `--dry-run` to preview without touching the draft. Non-fixable issues (`missing-material`, `missing-file`, `line-too-long`, `caption-gap-too-small`) are still reported and continue to drive the exit code. Closes #40.
+
 ## [0.12.0] — 2026-06-27
 
 ### Added

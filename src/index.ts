@@ -80,7 +80,7 @@ import {
   uuid,
 } from "./factory.js";
 import { sanitizeDraftBundle } from "./fixture.js";
-import { DEFAULT_LINT_OPTIONS, type LintOptions, lintDraft, lintExitCode, summarize } from "./lint.js";
+import { DEFAULT_LINT_OPTIONS, fixDraft, type LintOptions, lintDraft, lintExitCode, summarize } from "./lint.js";
 import { migrateDraft } from "./migrate.js";
 import { probeMedia } from "./probe.js";
 import { runQuickstart } from "./quickstart.js";
@@ -194,6 +194,9 @@ Overview (start here):
                --max-cue-secs <n>  Caption duration cap (default 7)
                --min-gap-ms <n>    Min gap between captions (default 0)
                --no-check-paths    Skip local-file existence checks
+               --fix               Auto-repair mechanically-fixable issues
+                                   (cue-too-long, caption-overlap). Combine
+                                   with --dry-run to preview without writing.
              Exit codes: 0 clean · 1 warnings · 2 errors
 
 Browse:
@@ -576,6 +579,7 @@ interface Flags {
   maxCueSecs?: number;
   minGapMs?: number;
   noCheckPaths?: boolean;
+  fix?: boolean;
   // caption
   audio?: string;
   fromSegment?: string;
@@ -841,6 +845,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.minGapMs = parseFloat(args[++i]);
     } else if (a === "--no-check-paths") {
       flags.noCheckPaths = true;
+    } else if (a === "--fix") {
+      flags.fix = true;
     } else if (a === "--audio" && i + 1 < args.length) {
       flags.audio = args[++i];
     } else if (a === "--from-segment" && i + 1 < args.length) {
@@ -2018,7 +2024,7 @@ function cmdVersion(draft: Draft, flags: Flags): void {
   }
 }
 
-function cmdLint(draft: Draft, flags: Flags): { exitCode: number } {
+function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: number } {
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -2027,6 +2033,37 @@ function cmdLint(draft: Draft, flags: Flags): { exitCode: number } {
       flags.minGapMs !== undefined ? flags.minGapMs * 1000 : DEFAULT_LINT_OPTIONS.minGapBetweenCaptionsUs,
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
   };
+
+  if (flags.fix) {
+    const { fixed, remaining } = fixDraft(draft, opts);
+    // Only write if we actually repaired something. --dry-run (global) is
+    // honored by saveDraft, which leaves the file and its .bak untouched.
+    if (fixed.length > 0) saveDraft(filePath, draft);
+    const summary = summarize(remaining);
+    const exitCode = lintExitCode(summary);
+    if (flags.human) {
+      if (fixed.length === 0 && remaining.length === 0) {
+        console.log("OK — no issues found");
+      } else {
+        for (const i of fixed) {
+          const loc = i.location?.segment_id ? ` [${i.location.segment_id.slice(0, 8)}]` : "";
+          console.log(`FIXED   ${i.code.padEnd(22)}${loc}  ${i.message}`);
+        }
+        for (const i of remaining) {
+          const loc = i.location?.segment_id ? ` [${i.location.segment_id.slice(0, 8)}]` : "";
+          console.log(`${i.severity.toUpperCase().padEnd(7)} ${i.code.padEnd(22)}${loc}  ${i.message}`);
+        }
+        console.log("");
+        console.log(
+          `${fixed.length} fixed · ${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`,
+        );
+      }
+    } else {
+      out({ ok: summary.errors === 0, fixed, summary, issues: remaining }, flags);
+    }
+    return { exitCode };
+  }
+
   const issues = lintDraft(draft, opts);
   const summary = summarize(issues);
   const exitCode = lintExitCode(summary);
@@ -3193,7 +3230,7 @@ async function main(): Promise<void> {
       cmdVersion(draft, flags);
       break;
     case "lint": {
-      const { exitCode } = cmdLint(draft, flags);
+      const { exitCode } = cmdLint(draft, filePath, flags);
       process.exit(exitCode);
       break;
     }
