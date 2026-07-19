@@ -48,7 +48,7 @@ import {
 } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import { type DoctorCheck, draftDirs, runDoctor } from "./doctor.js";
-import type { Draft, Segment, Track } from "./draft.js";
+import type { Draft, MaterialText, Segment, Track } from "./draft.js";
 import {
   assertTargetsUnchangedOnDisk,
   commitDraftTargets,
@@ -1345,13 +1345,15 @@ function cmdTexts(draft: Draft, flags: Flags): void {
   const textTracks = getTracksByType(draft, "text");
   const data = textTracks.flatMap((track) =>
     track.segments.map((seg) => {
-      const mat = findMaterial(draft.materials.texts, seg.material_id);
+      const resolved = resolveSegmentTextMaterial(draft, seg);
+      const mat = resolved?.material ?? null;
       const t = seg.target_timerange;
       return {
         id: seg.id,
         start_us: t.start,
         duration_us: t.duration,
         text: mat ? extractText(mat.content) : "",
+        ...(resolved?.viaTemplate ? { text_material_id: mat?.id ?? null, template_material_id: seg.material_id } : {}),
       };
     }),
   );
@@ -1371,15 +1373,53 @@ function cmdTexts(draft: Draft, flags: Flags): void {
   }
 }
 
+function resolveSegmentTextMaterial(
+  draft: Draft,
+  seg: Segment,
+): { material: MaterialText; viaTemplate: boolean } | null {
+  const direct = findMaterial(draft.materials.texts, seg.material_id);
+  if (direct) return { material: direct, viaTemplate: false };
+
+  // CapCut 8.9+ caption templates put the segment on a text track but point its
+  // material_id at materials.text_templates[]. The actual editable text lives
+  // behind text_info_resources[].text_material_id in materials.texts[].
+  const templates = draft.materials.text_templates;
+  if (!Array.isArray(templates)) return null;
+  const template = findMaterial(templates as Array<{ id: string }>, seg.material_id) as Record<string, unknown> | null;
+  if (!template) return null;
+  const resources = template.text_info_resources;
+  if (!Array.isArray(resources)) return null;
+  for (const resource of resources) {
+    if (!resource || typeof resource !== "object") continue;
+    const textMaterialId = (resource as Record<string, unknown>).text_material_id;
+    if (typeof textMaterialId !== "string") continue;
+    const nested = findMaterial(draft.materials.texts, textMaterialId);
+    if (nested) return { material: nested, viaTemplate: true };
+  }
+  return null;
+}
+
 function cmdSetText(draft: Draft, filePath: string, segId: string, newText: string, flags: Flags, save = true): void {
   const result = findSegment(draft, segId);
   if (!result) die(`Segment not found: ${segId}`);
-  const mat = findMaterial(draft.materials.texts, result.segment.material_id);
-  if (!mat) die(`Text material not found for segment ${segId}`);
+  const resolved = resolveSegmentTextMaterial(draft, result.segment);
+  const mat = resolved?.material;
+  if (!mat) die(`Text material not found for segment ${segId} (including nested caption-template text)`);
   const oldText = extractText(mat.content);
   mat.content = updateTextContent(mat.content, newText);
+  if (typeof mat.base_content === "string") mat.base_content = updateTextContent(mat.base_content, newText);
+  if (typeof mat.recognize_text === "string") mat.recognize_text = newText;
   if (save) saveDraft(filePath, draft);
-  out({ ok: true, id: result.segment.id, old: oldText, new: newText }, flags);
+  out(
+    {
+      ok: true,
+      id: result.segment.id,
+      old: oldText,
+      new: newText,
+      ...(resolved?.viaTemplate ? { text_material_id: mat.id, template_material_id: result.segment.material_id } : {}),
+    },
+    flags,
+  );
 }
 
 function cmdShift(draft: Draft, filePath: string, segId: string, offsetStr: string, flags: Flags, save = true): void {
