@@ -4,7 +4,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [0.15.0] — 2026-07-24
 
-Four features in one release — the next slice of the opportunity backlog, bundled. Two of them deliberately change existing behaviour: mutating commands now refuse to write drafts beyond the collected version evidence (override with `--force-write`), and `--intensity` on `add-filter`/`add-effect` is now applied instead of silently ignored. With none of the new flags in play, everything else stays byte-identical to v0.14.0.
+Four features in one release — the next slice of the opportunity backlog, bundled. Two of them deliberately change existing behaviour: mutating commands now refuse to write drafts beyond the collected version evidence (override with `--force-write`), and `--intensity` on `add-filter`/`add-effect` is now applied instead of silently ignored. With none of the new flags in play, every written draft stays byte-identical to v0.14.0 (the `version` and `diagnose` reports gain additive fields and honest evidence labels — see Fixed).
 
 ### Added
 

@@ -39,6 +39,9 @@ describe("flag scoping — free-text positionals survive release flags (regressi
       "word",
       "--keep-track",
       "--keep-materials",
+      "--full",
+      "--bind",
+      "zzz",
       "end",
     ];
     const r = spawnCli(["add-text", src.path, "0s", "2s", ...words]);

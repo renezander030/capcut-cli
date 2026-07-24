@@ -545,6 +545,27 @@ describe("capcut lint", () => {
             resource_type: "line",
           },
         ];
+        // The two mask VARIANT arrays `migrate` relocates into: `common_masks`
+        // (legacy-to-new, JianYing 9.6+) and `masks` (new-to-legacy). Both are
+        // effect-shaped arrays the CLI writes, so both get swept.
+        draft.materials.common_masks = [
+          {
+            id: "bogus-common-masks-mat",
+            name: "Stale Migrated Mask",
+            type: "mask",
+            resource_id: "5555555555555555556",
+            resource_type: "line",
+          },
+        ];
+        draft.materials.masks = [
+          {
+            id: "bogus-legacy-masks-mat",
+            name: "Stale Legacy Mask",
+            type: "mask",
+            resource_id: "6666666666666666667",
+            resource_type: "line",
+          },
+        ];
         draft.materials.audio_effects = [
           {
             id: "bogus-sfx-mat",
@@ -569,9 +590,16 @@ describe("capcut lint", () => {
 
         const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
         const unknown = r.json.issues.filter((i) => i.code === "unknown-effect-slug");
-        assert.equal(unknown.length, 4, `expected 4 unknown-effect-slug issues; got: ${JSON.stringify(r.json.issues)}`);
+        assert.equal(unknown.length, 6, `expected 6 unknown-effect-slug issues; got: ${JSON.stringify(r.json.issues)}`);
         const materialIds = unknown.map((i) => i.location.material_id).sort();
-        assert.deepEqual(materialIds, ["bogus-bubble-mat", "bogus-mask-mat", "bogus-sfx-mat", "bogus-transition-mat"]);
+        assert.deepEqual(materialIds, [
+          "bogus-bubble-mat",
+          "bogus-common-masks-mat",
+          "bogus-legacy-masks-mat",
+          "bogus-mask-mat",
+          "bogus-sfx-mat",
+          "bogus-transition-mat",
+        ]);
         for (const i of unknown) {
           assert.equal(i.severity, "info");
           assert.equal(i.fixable, false);
@@ -602,6 +630,26 @@ describe("capcut lint", () => {
         draft.materials.common_mask = [
           {
             id: "enum-mask-mat",
+            name: "Split",
+            type: "mask",
+            resource_id: "7374020197990011409",
+            resource_type: "line",
+          },
+        ];
+        // Known mask ids in the migrate-relocated variant arrays must pass
+        // too — the enum table covers all three mask homes.
+        draft.materials.common_masks = [
+          {
+            id: "enum-common-masks-mat",
+            name: "Split",
+            type: "mask",
+            resource_id: "7374020197990011409",
+            resource_type: "line",
+          },
+        ];
+        draft.materials.masks = [
+          {
+            id: "enum-legacy-masks-mat",
             name: "Split",
             type: "mask",
             resource_id: "7374020197990011409",

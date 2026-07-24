@@ -203,6 +203,16 @@ export function assessWriteSafety(draft: Draft, storeVersion: string | null): Wr
   const reasons: string[] = [];
   if (app_source === "unknown" && rawSource !== undefined && (app_version !== null || schema_int !== null)) {
     reasons.push(`Unrecognized app source "${String(rawSource)}" — proceeding, but round-trip is unverified.`);
+  } else if (app_source === "unknown" && app_version !== null) {
+    // Markerless canonical (no `platform` block at all) whose effective app
+    // version comes from `last_modified_platform` or a newer readable sibling:
+    // an app build wrote part of this store, so a silent overwrite would hide
+    // that. (A markerless draft with no version marker anywhere stays silent —
+    // that is exactly what `capcut create` emits.)
+    reasons.push(
+      `Draft has no app-source marker but carries app version ${app_version} ` +
+        "(from last_modified_platform or a sibling file) — proceeding, but round-trip is unverified.",
+    );
   }
   if (schema_int !== null && schema_int < KNOWN_SCHEMA_INT_MAX) {
     reasons.push(`Older schema generation ${schema_int} — round-trip untested.`);

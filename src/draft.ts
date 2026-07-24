@@ -278,13 +278,19 @@ export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, opti
   }
 }
 
-export function saveDraft(filePath: string, draft: Draft, options: { backup?: boolean } = {}): void {
+export function saveDraft(
+  filePath: string,
+  draft: Draft,
+  options: { backup?: boolean; skipVersionGuard?: boolean } = {},
+): void {
   if (dryRun) {
     // Version guard, warning only: dry-run writes nothing, so it never blocks,
     // but the WARNING still previews what a real write would do. Draft-only
     // assessment (no store discovery) keeps dry-run free of extra I/O.
-    const safety = assessWriteSafety(draft, null);
-    if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+    if (options.skipVersionGuard !== true) {
+      const safety = assessWriteSafety(draft, null);
+      if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+    }
     // Normalize in memory (so any read-back is consistent) but write nothing.
     sortTracks(draft);
     return;
@@ -311,10 +317,16 @@ export function saveDraft(filePath: string, draft: Draft, options: { backup?: bo
   // newer app build trips the guard too. Markerless drafts (capcut create
   // output) never trigger. --force-write overrides, but the WARNING still
   // lands on stderr so a forced write is never silent.
-  const safety = assessWriteSafety(draft, store.version);
-  if (safety.action === "refuse" && !forceWrite) throw new Error(safety.reasons.join("\n"));
-  if (safety.action === "warn" || (safety.action === "refuse" && forceWrite)) {
-    process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+  // skipVersionGuard is for `restore`'s mirror re-sync ONLY: restoring a
+  // backup is the escape hatch, not the hazard (docs/version-support.md), and
+  // a mid-restore refusal would leave the canonical rolled back but the
+  // mirrors diverged.
+  if (options.skipVersionGuard !== true) {
+    const safety = assessWriteSafety(draft, store.version);
+    if (safety.action === "refuse" && !forceWrite) throw new Error(safety.reasons.join("\n"));
+    if (safety.action === "warn" || (safety.action === "refuse" && forceWrite)) {
+      process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+    }
   }
 
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);

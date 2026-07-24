@@ -191,8 +191,11 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
   // Same check for the other effect-shaped material arrays the CLI writes:
   // transitions, masks (resource_id only — mask materials carry no effect_id),
   // audio effects, and materials.filters (colour filters plus text_shape
-  // bubbles, which share that array).
-  for (const kind of ["transitions", "common_mask", "audio_effects", "filters"] as const) {
+  // bubbles, which share that array). Mask materials live under all three
+  // variant keys the CLI touches: `common_mask` (what the `mask` command
+  // writes), `common_masks` (JianYing 9.6+ / newer CapCut — `migrate`'s
+  // legacy-to-new target), and `masks` (`migrate`'s new-to-legacy target).
+  for (const kind of ["transitions", "common_mask", "common_masks", "masks", "audio_effects", "filters"] as const) {
     for (const mat of draft.materials[kind] ?? []) {
       const m = mat as { id?: string; name?: string; type?: string; effect_id?: string; resource_id?: string };
       const effectId = typeof m.effect_id === "string" ? m.effect_id : "";

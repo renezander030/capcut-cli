@@ -124,6 +124,50 @@ describe("write-time version guard", () => {
     assert.equal(JSON.parse(readFileSync(older.path, "utf-8")).tracks.length, 1, "a warn must still write");
   });
 
+  it("restore stays ungated on a multi-file store and re-syncs the guarded mirror", () => {
+    // Regression: the mirror re-sync goes through saveDraft, so an ungated
+    // single-file restore is not enough — a guarded draft WITH a sibling used
+    // to refuse mid-restore, after the canonical was already rolled back,
+    // leaving the store diverged.
+    const draft = baseDraft({ platform: { app_source: "cc", app_version: "10.8.0", os: "mac" } });
+    const f = project(draft, { "draft_info.json": JSON.stringify(draft, null, 2) });
+    after(f.cleanup);
+    const before = readFileSync(f.path, "utf-8");
+
+    const forced = spawnCli(["add-text", f.dir, "0", "2s", "hello guard", "--force-write"]);
+    assert.equal(forced.status, 0, `stderr: ${forced.stderr}`);
+    assert.equal(
+      JSON.parse(readFileSync(join(f.dir, "draft_info.json"), "utf-8")).tracks.length,
+      1,
+      "the forced write must land on the mirror too",
+    );
+
+    const restored = spawnCli(["restore", f.path]);
+    assert.equal(restored.status, 0, `restore must never be version-gated; stderr: ${restored.stderr}`);
+    assert.equal(readFileSync(f.path, "utf-8"), before, "restore must roll the canonical back");
+    assert.equal(
+      JSON.parse(readFileSync(join(f.dir, "draft_info.json"), "utf-8")).tracks.length,
+      0,
+      "restore must re-sync the guarded mirror, not leave the store diverged",
+    );
+  });
+
+  it("warns on a markerless canonical whose sibling mirror carries an app version", () => {
+    // A CLI-created (markerless) draft later rewritten by an app build that
+    // touches only draft_info.json must not be overwritten in silence: the
+    // effective version comes from the sibling, and app_source stays unknown
+    // (no ceiling), so the guard warns rather than refuses.
+    const mirror = baseDraft({ platform: { app_source: "cc", app_version: "10.8.0", os: "mac" } });
+    const f = project(baseDraft(), { "draft_info.json": JSON.stringify(mirror, null, 2) });
+    after(f.cleanup);
+
+    const r = spawnCli(["add-text", f.dir, "0", "2s", "x"]);
+    assert.equal(r.status, 0, `a markerless canonical must still write; stderr: ${r.stderr}`);
+    assert.match(r.stderr, /WARNING/, "overwriting an app-versioned mirror must not be silent");
+    assert.match(r.stderr, /10\.8\.0/, "the WARNING must name the sibling's app version");
+    assert.equal(JSON.parse(readFileSync(f.path, "utf-8")).tracks.length, 1);
+  });
+
   it("warns (not refuses) on an unrecognized app source that carries version markers", () => {
     const f = project(baseDraft({ platform: { app_source: "jy", app_version: "7.5.0", os: "windows" } }));
     after(f.cleanup);

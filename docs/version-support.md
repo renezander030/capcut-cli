@@ -53,7 +53,7 @@ Every mutating command (the `saveDraft` path, plus `sync-timelines --apply`, whi
 | JianYing effective version >= 6.0 (encrypted-draft era) | refuse |
 | CapCut effective version beyond the known range (> 9.x) | refuse |
 | Top-level `version` schema integer > 360000 | refuse |
-| Unrecognized `app_source` that carries version markers | warn, then write |
+| Unrecognized `app_source` that carries version markers — or no `app_source` at all while an effective app version arrives via `last_modified_platform` or a sibling file | warn, then write |
 | Top-level `version` schema integer older than 360000 | warn, then write |
 | Everything else — including markerless CLI-created drafts | write normally |
 

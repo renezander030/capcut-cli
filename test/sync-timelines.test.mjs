@@ -366,6 +366,16 @@ describe("sync-timelines", () => {
     const plan = spawnCli(["sync-timelines", dir]);
     assert.equal(plan.status, 0, `plan must stay read-only and allowed; stderr: ${plan.stderr}`);
 
+    // --apply --dry-run writes nothing, so it never blocks — but the preview
+    // must still carry the WARNING instead of previewing clean and then having
+    // the real --apply refuse (mirrors saveDraft's dry-run behaviour).
+    const preview = spawnCli(["sync-timelines", dir, "--apply", "--dry-run"]);
+    assert.equal(preview.status, 0, `dry-run must never block; stderr: ${preview.stderr}`);
+    assert.match(preview.stderr, /WARNING/, "dry-run must still preview the version boundary");
+    assert.match(preview.stderr, /newer than/);
+    assert.equal(readFileSync(join(dir, "draft_info.json"), "utf-8"), infoBefore, "dry-run must not write");
+    assert.ok(!existsSync(join(dir, "draft_info.json.bak")), "dry-run must not create backups");
+
     const refused = spawnCli(["sync-timelines", dir, "--apply"]);
     assert.equal(refused.status, 1, "the version boundary must refuse before any mirror write");
     assert.match(refused.stderr, /newer than/);

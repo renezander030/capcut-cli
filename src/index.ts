@@ -3115,6 +3115,14 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     }
   }
 
+  // Write-time version boundary: --apply writes mirrors directly (it bypasses
+  // saveDraft), so it re-runs the same guard. plan.version covers every
+  // readable candidate, including a mirror written by a newer app build.
+  // Evaluated BEFORE the dry-run return so the preview still carries the
+  // WARNING — dry-run writes nothing, so it never blocks (saveDraft's own
+  // dry-run path behaves the same; see docs/version-support.md).
+  const safety = assessWriteSafety(canonicalDraft, plan.version);
+
   if (isDryRun()) {
     const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from draft_content.json; nothing was written.`;
     out(
@@ -3132,15 +3140,12 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       },
       flags,
     );
+    if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     warnUnreconcilable();
     return 0;
   }
 
-  // Write-time version boundary: --apply writes mirrors directly (it bypasses
-  // saveDraft), so it re-runs the same guard. plan.version covers every
-  // readable candidate, including a mirror written by a newer app build.
-  const safety = assessWriteSafety(canonicalDraft, plan.version);
   if (safety.action === "refuse" && !flags.forceWrite) die(safety.reasons.join("\n"));
   if (safety.action === "warn" || (safety.action === "refuse" && flags.forceWrite)) {
     process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
@@ -3249,8 +3254,11 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
     if (!isDryRun()) {
       copyFileSync(target.path, filePath);
       if (hasSynchronizedSiblings) {
+        // skipVersionGuard: restore is the undo path and must never be gated
+        // (docs/version-support.md) — a refusal here would fire AFTER the
+        // canonical was already rolled back, leaving the mirrors diverged.
         const restored = loadDraft(filePath);
-        saveDraft(restored.filePath, restored.draft, { backup: false });
+        saveDraft(restored.filePath, restored.draft, { backup: false, skipVersionGuard: true });
       }
     }
     out({ ok: true, restored: filePath, from: target.path, step: flags.step }, flags);
@@ -3264,8 +3272,9 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
   if (!isDryRun()) {
     copyFileSync(bakPath, filePath);
     if (hasSynchronizedSiblings) {
+      // skipVersionGuard: see the --step branch above — restore stays ungated.
       const restored = loadDraft(filePath);
-      saveDraft(restored.filePath, restored.draft, { backup: false });
+      saveDraft(restored.filePath, restored.draft, { backup: false, skipVersionGuard: true });
     }
   }
   out({ ok: true, restored: filePath, from: bakPath }, flags);
