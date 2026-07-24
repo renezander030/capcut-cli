@@ -72,7 +72,7 @@ export const GLOBAL_OPTION_SPECS: OptionSpec[] = [
     type: "boolean",
     required: false,
     default: false,
-    description: "Override editor-running and changed-on-disk safety checks.",
+    description: "Override editor-running, changed-on-disk, and version-boundary safety checks.",
   },
 ];
 
@@ -173,6 +173,7 @@ const usages = {
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
   cut: "capcut cut <project> <start> <end> --out <path>",
   duplicate: "capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]",
+  remove: "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]",
   keyframe: "capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] | --batch",
   transition: "capcut transition <project> <id> <slug> [--duration <time>]",
   mask: "capcut mask <project> <id> <slug> [options] | --off",
@@ -184,9 +185,9 @@ const usages = {
   "mix-mode": "capcut mix-mode <project> <id> <mode>",
   "audio-fade": "capcut audio-fade <project> <id> [--in <seconds>] [--fade-out <seconds>]",
   "add-cover": "capcut add-cover <project> <image> [--time <milliseconds>]",
-  "add-filter": "capcut add-filter <project> <slug> <start> <duration> [options]",
+  "add-filter": "capcut add-filter <project> <slug-or-name> (<start> <duration> | --full) [options]",
   "bubble-text": "capcut bubble-text <project> <id> --bubble <slug>",
-  "add-effect": "capcut add-effect <project> <slug> <start> <duration> [options]",
+  "add-effect": "capcut add-effect <project> <slug-or-name> (<start> <duration> | --full) [options]",
   "save-template": "capcut save-template <project> <id> <name> --out <path>",
   "apply-template": "capcut apply-template <project> <template> <start> <duration> [text] [options]",
   "make-preset": "capcut make-preset <project> <text-segment-id> --out <preset.json>",
@@ -284,6 +285,10 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Create a fresh same-type track directly above the source (the default).",
     ),
   ],
+  remove: [
+    option("keep_track", ["--keep-track"], "boolean", "Keep the segment's track even when it becomes empty."),
+    option("keep_materials", ["--keep-materials"], "boolean", "Skip the orphan-material sweep (run prune later)."),
+  ],
   keyframe: [
     option("batch", ["--batch"], "boolean", "Read JSONL keyframes from stdin."),
     option(
@@ -332,13 +337,36 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("fade_out", ["--fade-out"], "number", "Fade-out seconds."),
   ],
   "add-cover": [option("time", ["--time"], "number", "Cover timestamp in milliseconds.")],
-  "add-filter": [TRACK_NAME],
+  "add-filter": [
+    TRACK_NAME,
+    option("resource_id", ["--resource-id"], "string", "Raw catalogue resource ID (skips slug lookup)."),
+    option("effect_id", ["--effect-id"], "string", "Raw effect ID (defaults to --resource-id)."),
+    option("intensity", ["--intensity"], "number", "Filter strength 0-1 (default 1)."),
+    option("full", ["--full"], "boolean", "Apply to the whole timeline (start 0, duration = draft duration).", {
+      default: false,
+    }),
+  ],
   "bubble-text": [
     option("bubble", ["--bubble"], "enum", "Bubble slug."),
     option("effect_id", ["--effect-id"], "string", "Custom effect ID."),
     option("resource_id", ["--resource-id"], "string", "Custom resource ID."),
   ],
-  "add-effect": [TRACK_NAME, option("params", ["--params"], "json", "Effect parameter array.")],
+  "add-effect": [
+    TRACK_NAME,
+    option("params", ["--params"], "json", "Effect parameter array."),
+    option("resource_id", ["--resource-id"], "string", "Raw catalogue resource ID (skips slug lookup)."),
+    option("effect_id", ["--effect-id"], "string", "Raw effect ID (defaults to --resource-id)."),
+    option("intensity", ["--intensity"], "number", "Effect strength 0-1 (default 1)."),
+    option("full", ["--full"], "boolean", "Apply to the whole timeline (start 0, duration = draft duration).", {
+      default: false,
+    }),
+    option(
+      "bind",
+      ["--bind"],
+      "string",
+      "Experimental: attach to one segment instead of the whole frame (segment ID).",
+    ),
+  ],
   "save-template": [OUT],
   "make-preset": [OUT],
   "apply-template": [
@@ -517,16 +545,23 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --highlight-words, --keyword-color, --keyword-size, --color-cycle
 //                       -> caption, import-srt (v0.14 keyword emphasis)
 //   --new-track          -> duplicate
+//   --keep-track, --keep-materials -> remove
+//   --full               -> add-filter, add-effect (v0.15 whole-timeline range)
+//   --bind               -> add-effect (v0.15 per-segment attachment)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--apply",
+  "--bind",
   "--color-cycle",
   "--easing",
   "--format",
+  "--full",
   "--granularity",
   "--highlight-words",
   "--json",
+  "--keep-materials",
+  "--keep-track",
   "--keyword-color",
   "--keyword-size",
   "--limit",
@@ -560,6 +595,7 @@ const mutating = new Set([
   "crop",
   "cut",
   "duplicate",
+  "remove",
   "keyframe",
   "transition",
   "mask",

@@ -89,4 +89,39 @@ describe("CapCut 8.7 draft store", () => {
     assert.equal(report.project_dir, "<project>");
     assert.ok(report.candidates.every((candidate) => !JSON.stringify(candidate).includes(f.dir)));
   });
+
+  it("diagnose surfaces the version write guard as a field and a next_action", () => {
+    const f = fixture();
+    after(f.cleanup);
+    const inRange = diagnoseDraftStore(f.dir);
+    assert.equal(inRange.write_guard, "ok");
+    assert.ok(!inRange.next_actions.join(" ").includes("Version boundary"));
+
+    const dir = mkdtempSync(join(tmpdir(), "capcut-store-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    const beyond = {
+      id: "draft-108",
+      name: "beyond-range",
+      duration: 1_000_000,
+      fps: 30,
+      canvas_config: { width: 1080, height: 1920, ratio: "9:16" },
+      platform: { app_source: "cc", app_version: "10.8.0", os: "mac" },
+      tracks: [],
+      materials: {
+        videos: [],
+        audios: [],
+        texts: [],
+        speeds: [],
+        material_animations: [],
+        audio_fades: [],
+        transitions: [],
+      },
+    };
+    writeFileSync(join(dir, "draft_content.json"), JSON.stringify(beyond, null, 2));
+    const report = diagnoseDraftStore(dir);
+    assert.equal(report.write_guard, "refuse");
+    const advice = report.next_actions.join(" ");
+    assert.match(advice, /refuse without --force-write/);
+    assert.match(advice, /capcut fixture/, "the next_action must carry the fixture-collection CTA");
+  });
 });

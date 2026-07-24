@@ -340,6 +340,55 @@ describe("sync-timelines", () => {
     assert.match(r.stderr, /draft_content\.json/);
   });
 
+  it("names the draft_info-primary layout (newer Mac builds) when only draft_info.json is readable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-sync-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(join(dir, "draft_info.json"), JSON.stringify(staleDraft(), null, 2));
+
+    const r = spawnCli(["sync-timelines", dir]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /timeline lives in draft_info\.json/);
+    assert.match(r.stderr, /Mac/);
+    assert.match(r.stderr, /capcut diagnose/);
+    assert.match(r.stderr, /capcut fixture/, "the error must carry the fixture-collection CTA");
+  });
+
+  it("--apply refuses a beyond-range project without --force-write (version write guard)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-sync-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    const platform = { app_source: "cc", app_version: "10.8.0", os: "mac" };
+    writeFileSync(join(dir, "draft_content.json"), JSON.stringify({ ...canonicalDraft(), platform }, null, 2));
+    writeFileSync(join(dir, "draft_info.json"), JSON.stringify({ ...staleDraft(), platform }, null, 2));
+    const past = new Date(Date.now() - 3_600_000);
+    utimesSync(join(dir, "draft_info.json"), past, past);
+    const infoBefore = readFileSync(join(dir, "draft_info.json"), "utf-8");
+
+    const plan = spawnCli(["sync-timelines", dir]);
+    assert.equal(plan.status, 0, `plan must stay read-only and allowed; stderr: ${plan.stderr}`);
+
+    // --apply --dry-run writes nothing, so it never blocks — but the preview
+    // must still carry the WARNING instead of previewing clean and then having
+    // the real --apply refuse (mirrors saveDraft's dry-run behaviour).
+    const preview = spawnCli(["sync-timelines", dir, "--apply", "--dry-run"]);
+    assert.equal(preview.status, 0, `dry-run must never block; stderr: ${preview.stderr}`);
+    assert.match(preview.stderr, /WARNING/, "dry-run must still preview the version boundary");
+    assert.match(preview.stderr, /newer than/);
+    assert.equal(readFileSync(join(dir, "draft_info.json"), "utf-8"), infoBefore, "dry-run must not write");
+    assert.ok(!existsSync(join(dir, "draft_info.json.bak")), "dry-run must not create backups");
+
+    const refused = spawnCli(["sync-timelines", dir, "--apply"]);
+    assert.equal(refused.status, 1, "the version boundary must refuse before any mirror write");
+    assert.match(refused.stderr, /newer than/);
+    assert.match(refused.stderr, /--force-write/);
+    assert.equal(readFileSync(join(dir, "draft_info.json"), "utf-8"), infoBefore, "refusal must not write");
+    assert.ok(!existsSync(join(dir, "draft_info.json.bak")), "refusal must not create backups");
+
+    const forced = spawnCli(["sync-timelines", dir, "--apply", "--force-write"]);
+    assert.equal(forced.status, 0, `stderr: ${forced.stderr}`);
+    assert.match(forced.stderr, /WARNING/, "a forced apply must never be silent");
+    assert.equal(JSON.parse(readFileSync(join(dir, "draft_info.json"), "utf-8")).id, "guid-canonical");
+  });
+
   it("refuses --apply while the editor is running unless --force-write", {
     skip: process.platform === "win32",
   }, async () => {

@@ -92,6 +92,8 @@ import {
   initDraft,
   mixModeSlugs,
   planDraftRegistration,
+  pruneOrphanMaterials,
+  removeSegment,
   resolveAssetPath,
   saveTemplate,
   setAudioFade,
@@ -115,7 +117,7 @@ import { collapseKaraokeRuns, cueWords, parseSrt, renderSrt, renderVtt, type Seg
 import { diagnoseDraftStore, discoverDraftStore, editorProcesses, planTimelineSync } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import { translateDraft } from "./translate.js";
-import { detectVersion } from "./version.js";
+import { assessWriteSafety, detectVersion } from "./version.js";
 
 export const COMMANDS = [
   "info",
@@ -141,6 +143,7 @@ export const COMMANDS = [
   "crop",
   "cut",
   "duplicate",
+  "remove",
   "keyframe",
   "transition",
   "mask",
@@ -207,7 +210,8 @@ Global flags:
   -q, --quiet     No output on success, exit code only (write commands)
   --dry-run       Preview a mutating command: print the result (with
                   "dryRun":true) but leave the draft and its .bak untouched
-  --force-write   Override editor-running and changed-on-disk safety checks
+  --force-write   Override editor-running, changed-on-disk, and
+                  version-boundary safety checks
   --jianying      Use JianYing enum namespace (default: CapCut) for
                   transition, mask, text-anim, image-anim, add-effect, enums
 
@@ -357,6 +361,13 @@ Edit:
              per-segment companion (speed, canvas, mask, ...) are cloned with
              fresh ids, so edits like crop/mix-mode on the copy never touch
              the source segment.
+  remove     <project> <segment-id> [--keep-track] [--keep-materials]
+             Delete a segment in place. A track left empty by the removal is
+             dropped too (--keep-track keeps it). Materials no surviving
+             segment references are swept in the same pass prune runs —
+             including materials that were already orphaned (--keep-materials
+             skips the sweep). Recomputes the project duration to the max
+             remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
@@ -470,13 +481,23 @@ Tracks (Phase 2):
              star, heart, burst (or pass --effect-id / --resource-id
              explicitly from your own CapCut draft).
              Discovery: capcut enums --bubbles
-  add-filter <project> <slug> <start> <duration> [options]
+  add-filter <project> <slug-or-name> (<start> <duration> | --full) [options]
              Colour filter on a dedicated filter track. Slugs (capcut):
                vintage, warm, cool, bw, sepia, vivid, contrast, faded,
                dramatic, soft (+ enums --filters --jianying for 468 more).
              Options:
                --track-name <s>      Filter track name (default: "filter")
                --jianying            Use the JianYing namespace
+               --resource-id <id>    Raw catalogue resource ID (skips slug
+                                     lookup; wins over a matching slug). The
+                                     <slug-or-name> positional becomes the
+                                     display name. CapCut must have the
+                                     resource in its store cache.
+               --effect-id <id>      Raw effect ID (defaults to --resource-id;
+                                     requires --resource-id)
+               --intensity <n>       Filter strength 0-1 (default 1)
+               --full                Whole timeline (start 0, duration = draft
+                                     duration); wins over <start> <duration>
   add-cover  <project> <image-path> [--time <ms>]
              Set the draft's cover frame (thumbnail) to an image. Writes a
              cover object on the draft root with {path, type, time, time_ms,
@@ -497,13 +518,26 @@ Tracks (Phase 2):
                --scale <n>           Uniform scale (default 1)
                --rotation <deg>      Clockwise rotation
                --track-name <s>      Sticker track name (default: "sticker")
-  add-effect <project> <slug> <start> <duration> [options]
+  add-effect <project> <slug-or-name> (<start> <duration> | --full) [options]
              Scene/character effect on an effect track. Slugs:
                shake, vhs, cinematic, light-leak, film-grain, chromatic,
                vignette.
              Options:
                --params <json-array> Effect parameters (0-100 each)
                --track-name <s>      Effect track name (default: "effect")
+               --resource-id <id>    Raw catalogue resource ID (skips slug
+                                     lookup; wins over a matching slug; raw
+                                     ids are scene effects). The <slug-or-name>
+                                     positional becomes the display name.
+                                     CapCut must have the resource in its
+                                     store cache.
+               --effect-id <id>      Raw effect ID (defaults to --resource-id;
+                                     requires --resource-id)
+               --intensity <n>       Effect strength 0-1 (default 1)
+               --full                Whole timeline (start 0, duration = draft
+                                     duration); wins over <start> <duration>
+               --bind <segment-id>   Experimental: attach the effect to one
+                                     segment instead of the whole frame
 
 Templates:
   save-template <project> <id> <name> --out <path>
@@ -739,6 +773,9 @@ interface Flags {
   resourceId?: string;
   // effect
   params?: string;
+  bind?: string;
+  // add-filter / add-effect whole-timeline range
+  full?: boolean;
   // enums
   enumCategory?: Category;
   jianying?: boolean;
@@ -831,6 +868,9 @@ interface Flags {
   reset?: boolean;
   // duplicate
   newTrack?: boolean;
+  // remove
+  keepTrack?: boolean;
+  keepMaterials?: boolean;
 }
 
 // Map CLI enum flags -> enums.json category key. Order matters for HELP text.
@@ -1024,6 +1064,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.resourceId = args[++i];
     } else if (a === "--params" && i + 1 < args.length) {
       flags.params = args[++i];
+    } else if (a === "--bind" && i + 1 < args.length) {
+      flags.bind = args[++i];
+    } else if (a === "--full") {
+      flags.full = true;
     } else if (a === "--style-ref" && i + 1 < args.length) {
       flags.styleRef = args[++i];
     } else if (a === "--time-offset" && i + 1 < args.length) {
@@ -1186,6 +1230,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.reset = true;
     } else if (a === "--new-track") {
       flags.newTrack = true;
+    } else if (a === "--keep-track") {
+      flags.keepTrack = true;
+    } else if (a === "--keep-materials") {
+      flags.keepMaterials = true;
     } else {
       const hit = ENUM_FLAG_MAP.find((f) => f.flag === a);
       if (hit) {
@@ -2026,24 +2074,56 @@ function cmdAddSticker(draft: Draft, filePath: string, positional: string[], fla
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
 }
 
+// Shared by add-filter / add-effect: --full applies over the whole timeline.
+// --full wins over explicit <start> <duration> when both are given (crop
+// precedent: --rect beats --ratio when both are given).
+function fullTimelineRange(draft: Draft): { start: number; duration: number } {
+  if (typeof draft.duration !== "number" || draft.duration <= 0) {
+    die(`--full: draft has no duration (add media first)`);
+  }
+  return { start: 0, duration: draft.duration };
+}
+
+// Shared by add-filter / add-effect: --intensity must be a real number in
+// [0, 1] — a NaN (e.g. `--intensity abc`) must die, not get written into JSON.
+function validateIntensityFlag(intensity: number | undefined): void {
+  if (intensity !== undefined && (Number.isNaN(intensity) || intensity < 0 || intensity > 1)) {
+    die(`--intensity must be a number in range [0, 1]`);
+  }
+}
+
 function cmdAddEffect(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
   const slug = positional[2];
   const startStr = positional[3];
   const durStr = positional[4];
   const ns: Namespace = flags.jianying ? "jianying" : "capcut";
-  if (!slug || !startStr || !durStr)
+  if (!slug || (!flags.full && (!startStr || !durStr)))
     die(
-      `Usage: capcut add-effect <project> <slug> <start> <duration> [--params <json-array>] [--jianying]\nFeatured slugs: ${effectSlugs().join(", ")}`,
+      `Usage: capcut add-effect <project> <slug-or-name> (<start> <duration> | --full) [--params <json-array>] [--jianying]\nFeatured slugs: ${effectSlugs().join(", ")}`,
     );
-  const start = parseTimeInput(startStr);
-  const duration = parseTimeInput(durStr);
+  if (flags.effectId && !flags.resourceId) die(`--effect-id requires --resource-id`);
+  validateIntensityFlag(flags.intensity);
+  const { start, duration } = flags.full
+    ? fullTimelineRange(draft)
+    : { start: parseTimeInput(startStr), duration: parseTimeInput(durStr) };
   let params: number[] | undefined;
   if (flags.params) {
     const parsed = JSON.parse(flags.params);
     if (!Array.isArray(parsed)) die(`--params must be a JSON array of numbers`);
     params = parsed.map((v) => Number(v));
   }
-  const result = addEffect(draft, { slug, start, duration, params, trackName: flags.trackName, namespace: ns });
+  const result = addEffect(draft, {
+    slug,
+    start,
+    duration,
+    params,
+    trackName: flags.trackName,
+    namespace: ns,
+    resourceId: flags.resourceId,
+    effectId: flags.effectId,
+    intensity: flags.intensity,
+    bindSegmentId: flags.bind,
+  });
   saveDraft(filePath, draft);
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
 }
@@ -2091,18 +2171,24 @@ function cmdAddFilter(draft: Draft, filePath: string, positional: string[], flag
   const startStr = positional[3];
   const durStr = positional[4];
   const ns: Namespace = flags.jianying ? "jianying" : "capcut";
-  if (!slug || !startStr || !durStr)
+  if (!slug || (!flags.full && (!startStr || !durStr)))
     die(
-      `Usage: capcut add-filter <project> <slug> <start> <duration> [--track-name <name>] [--jianying]\nFeatured slugs: ${filterSlugs(ns).join(", ")}`,
+      `Usage: capcut add-filter <project> <slug-or-name> (<start> <duration> | --full) [--track-name <name>] [--jianying]\nFeatured slugs: ${filterSlugs(ns).join(", ")}`,
     );
-  const start = parseTimeInput(startStr);
-  const duration = parseTimeInput(durStr);
+  if (flags.effectId && !flags.resourceId) die(`--effect-id requires --resource-id`);
+  validateIntensityFlag(flags.intensity);
+  const { start, duration } = flags.full
+    ? fullTimelineRange(draft)
+    : { start: parseTimeInput(startStr), duration: parseTimeInput(durStr) };
   const result = addFilter(draft, {
     slug,
     start,
     duration,
+    intensity: flags.intensity,
     trackName: flags.trackName,
     namespace: ns,
+    resourceId: flags.resourceId,
+    effectId: flags.effectId,
   });
   saveDraft(filePath, draft);
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
@@ -2203,6 +2289,29 @@ function cmdDuplicate(draft: Draft, filePath: string, positional: string[], flag
       track_name: result.trackName,
       new_track: result.createdTrack,
       cloned_materials: result.clonedMaterials,
+    },
+    flags,
+  );
+}
+
+function cmdRemove(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  const result = removeSegment(draft, positional[2], {
+    keepTrack: flags.keepTrack,
+    keepMaterials: flags.keepMaterials,
+  });
+  saveDraft(filePath, draft);
+  out(
+    {
+      ok: true,
+      removed_segment_id: result.segmentId,
+      track_id: result.trackId,
+      track_name: result.trackName,
+      track_type: result.trackType,
+      track_removed: result.trackRemoved,
+      materials_removed: result.materialsRemoved,
+      materials_by_type: result.materialsByType,
+      duration_before_us: result.durationBefore,
+      duration_after_us: result.durationAfter,
     },
     flags,
   );
@@ -2525,9 +2634,12 @@ function cmdVersion(draft: Draft, flags: Flags): void {
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
     console.log(`OS:           ${v.os ?? "(unknown)"}`);
     console.log(`Support:      ${v.support.status}`);
+    console.log(`Evidence:     ${v.support.evidence}`);
+    console.log(`Write guard:  ${v.support.write_guard}${v.support.beyond_known_range ? " (beyond known range)" : ""}`);
     console.log(`Mask field:   ${v.schema.mask_field}`);
     console.log(`Text-ranges:  ${v.schema.has_text_ranges ? "yes" : "no"}`);
     console.log(`Audio fades:  ${v.schema.has_audio_fades ? "yes" : "no"}`);
+    console.log(`Schema int:   ${v.schema.schema_int ?? "(absent)"}`);
     if (v.support.notes.length > 0) {
       console.log("");
       for (const n of v.support.notes) console.log(`  - ${n}`);
@@ -3043,6 +3155,14 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     }
   }
 
+  // Write-time version boundary: --apply writes mirrors directly (it bypasses
+  // saveDraft), so it re-runs the same guard. plan.version covers every
+  // readable candidate, including a mirror written by a newer app build.
+  // Evaluated BEFORE the dry-run return so the preview still carries the
+  // WARNING — dry-run writes nothing, so it never blocks (saveDraft's own
+  // dry-run path behaves the same; see docs/version-support.md).
+  const safety = assessWriteSafety(canonicalDraft, plan.version);
+
   if (isDryRun()) {
     const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from draft_content.json; nothing was written.`;
     out(
@@ -3060,9 +3180,15 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       },
       flags,
     );
+    if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     warnUnreconcilable();
     return 0;
+  }
+
+  if (safety.action === "refuse" && !flags.forceWrite) die(safety.reasons.join("\n"));
+  if (safety.action === "warn" || (safety.action === "refuse" && flags.forceWrite)) {
+    process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
   }
 
   // Optimistic concurrency: neither the canonical source nor a mirror we are
@@ -3168,8 +3294,11 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
     if (!isDryRun()) {
       copyFileSync(target.path, filePath);
       if (hasSynchronizedSiblings) {
+        // skipVersionGuard: restore is the undo path and must never be gated
+        // (docs/version-support.md) — a refusal here would fire AFTER the
+        // canonical was already rolled back, leaving the mirrors diverged.
         const restored = loadDraft(filePath);
-        saveDraft(restored.filePath, restored.draft, { backup: false });
+        saveDraft(restored.filePath, restored.draft, { backup: false, skipVersionGuard: true });
       }
     }
     out({ ok: true, restored: filePath, from: target.path, step: flags.step }, flags);
@@ -3183,8 +3312,9 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
   if (!isDryRun()) {
     copyFileSync(bakPath, filePath);
     if (hasSynchronizedSiblings) {
+      // skipVersionGuard: see the --step branch above — restore stays ungated.
       const restored = loadDraft(filePath);
-      saveDraft(restored.filePath, restored.draft, { backup: false });
+      saveDraft(restored.filePath, restored.draft, { backup: false, skipVersionGuard: true });
     }
   }
   out({ ok: true, restored: filePath, from: bakPath }, flags);
@@ -3193,31 +3323,11 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
 // `prune` removes materials no segment references. The referenced set is the
 // union of every segment's material_id AND its extra_material_refs[] (the latter
 // is what keeps masks/effects/animations/fades from being wrongly deleted).
+// The sweep itself lives in pruneOrphanMaterials (shared with `remove`).
 function cmdPrune(draft: Draft, filePath: string, flags: Flags): void {
-  const referenced = new Set<string>();
-  for (const track of draft.tracks) {
-    for (const seg of track.segments) {
-      if (seg.material_id) referenced.add(seg.material_id);
-      for (const ref of seg.extra_material_refs ?? []) referenced.add(ref);
-    }
-  }
-  const byType: Record<string, { removed: number; kept: number }> = {};
-  let removedTotal = 0;
-  for (const [type, arr] of Object.entries(draft.materials)) {
-    if (!Array.isArray(arr)) continue;
-    const before = arr.length;
-    const kept = arr.filter((m) => {
-      const id = (m as { id?: unknown }).id;
-      // Keep anything without a string id (can't prove it's orphaned) or that is referenced.
-      return typeof id !== "string" || referenced.has(id);
-    });
-    const removed = before - kept.length;
-    if (removed > 0) (draft.materials as Record<string, unknown[]>)[type] = kept;
-    byType[type] = { removed, kept: kept.length };
-    removedTotal += removed;
-  }
-  if (removedTotal > 0) saveDraft(filePath, draft);
-  out({ ok: true, removed: removedTotal, by_type: byType }, flags);
+  const { removed, byType } = pruneOrphanMaterials(draft);
+  if (removed > 0) saveDraft(filePath, draft);
+  out({ ok: true, removed, by_type: byType }, flags);
 }
 
 // `relink` repairs broken media paths. Two modes (combinable):
@@ -3406,6 +3516,7 @@ const SUMMARIES: Record<string, string> = {
   crop: "Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset).",
   cut: "Extract a time range into a new standalone draft.",
   duplicate: "Duplicate a segment at its same timeline position onto a track above the source.",
+  remove: "Remove a segment, its emptied track, and the materials that orphans.",
   keyframe: "Add a keyframe (position/scale/rotation/alpha/volume); single or --batch.",
   transition: "Add a transition between segments.",
   mask: "Apply a mask (linear/circle/heart/...) with geometry flags, or --off.",
@@ -4128,6 +4239,10 @@ async function main(): Promise<void> {
       requireArgs(positional, 3, "capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]");
       cmdDuplicate(draft, filePath, positional, flags);
       break;
+    case "remove":
+      requireArgs(positional, 3, "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]");
+      cmdRemove(draft, filePath, positional, flags);
+      break;
     case "keyframe":
       requireArgs(positional, 3, "capcut keyframe <project> <id> <property> <time> <value>");
       cmdKeyframe(draft, filePath, positional, flags);
@@ -4173,7 +4288,11 @@ async function main(): Promise<void> {
       cmdAddCover(draft, filePath, positional, flags);
       break;
     case "add-filter":
-      requireArgs(positional, 5, "capcut add-filter <project> <slug> <start> <duration>");
+      requireArgs(
+        positional,
+        flags.full ? 3 : 5,
+        "capcut add-filter <project> <slug-or-name> (<start> <duration> | --full)",
+      );
       cmdAddFilter(draft, filePath, positional, flags);
       break;
     case "bubble-text":
@@ -4181,7 +4300,11 @@ async function main(): Promise<void> {
       cmdBubbleText(draft, filePath, positional, flags);
       break;
     case "add-effect":
-      requireArgs(positional, 5, "capcut add-effect <project> <slug> <start> <duration>");
+      requireArgs(
+        positional,
+        flags.full ? 3 : 5,
+        "capcut add-effect <project> <slug-or-name> (<start> <duration> | --full)",
+      );
       cmdAddEffect(draft, filePath, positional, flags);
       break;
     case "save-template":

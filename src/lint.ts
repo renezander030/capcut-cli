@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { imageAnimCatalogue } from "./decorators.js";
+import { bubbleCatalogue, imageAnimCatalogue } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
 import { extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
@@ -188,6 +188,67 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
       pushUnknown(`${a.type ?? "?"} animation`, a.name ?? "?", effectId || resourceId, container.id ?? "");
     }
   }
+  // Same check for the other effect-shaped material arrays the CLI writes:
+  // transitions, masks (resource_id only — mask materials carry no effect_id),
+  // audio effects, and materials.filters (colour filters plus text_shape
+  // bubbles, which share that array). Mask materials live under all three
+  // variant keys the CLI touches: `common_mask` (what the `mask` command
+  // writes), `common_masks` (JianYing 9.6+ / newer CapCut — `migrate`'s
+  // legacy-to-new target), and `masks` (`migrate`'s new-to-legacy target).
+  for (const kind of ["transitions", "common_mask", "common_masks", "masks", "audio_effects", "filters"] as const) {
+    for (const mat of draft.materials[kind] ?? []) {
+      const m = mat as { id?: string; name?: string; type?: string; effect_id?: string; resource_id?: string };
+      const effectId = typeof m.effect_id === "string" ? m.effect_id : "";
+      const resourceId = typeof m.resource_id === "string" ? m.resource_id : "";
+      if (!effectId && !resourceId) continue;
+      if (known.has(effectId) || known.has(resourceId)) continue;
+      pushUnknown(m.type ?? kind, m.name ?? "?", effectId || resourceId, m.id ?? "");
+    }
+  }
+
+  // pyJianYingDraft#192: font resource ids CapCut doesn't know are silently
+  // replaced with the default font. Same trust model as unknown-effect-slug:
+  // info-only (store/system fonts on app-authored drafts are legitimate),
+  // report-only (a repair would guess the author's font). The capcut-namespace
+  // fonts table is empty, so ids are effectively checked against the jianying
+  // table; a resolvable on-disk font path silences the check because CapCut
+  // loads the file regardless of id.
+  for (const mat of draft.materials.texts ?? []) {
+    const m = mat as {
+      id?: string;
+      content?: string;
+      font_id?: string;
+      font_resource_id?: string;
+      font_path?: string;
+    };
+    const candidates = new Set<string>();
+    const paths: string[] = [];
+    if (typeof m.font_id === "string" && m.font_id) candidates.add(m.font_id);
+    if (typeof m.font_resource_id === "string" && m.font_resource_id) candidates.add(m.font_resource_id);
+    if (typeof m.font_path === "string" && m.font_path) paths.push(m.font_path);
+    if (typeof m.content === "string") {
+      try {
+        const parsed = JSON.parse(m.content) as { styles?: Array<{ font?: { id?: string; path?: string } }> };
+        for (const s of parsed.styles ?? []) {
+          if (s.font?.id) candidates.add(s.font.id);
+          if (s.font?.path) paths.push(s.font.path);
+        }
+      } catch {
+        // Unparseable content is missing-material territory, not ours.
+      }
+    }
+    if (candidates.size === 0) continue; // no font id set — default font, fine
+    if ([...candidates].some((id) => known.has(id))) continue; // any known id → resolvable
+    // A font with an on-disk file resolves regardless of id (CapCut loads from path).
+    if (opts.checkLocalPaths && paths.some((p) => fileExists(p))) continue;
+    issues.push({
+      severity: "info",
+      code: "unknown-font-id",
+      message: `Text material ${shortId(m.id ?? "")} uses font id ${[...candidates][0]} not in the bundled font table and no resolvable font path — fine for store/system fonts, but ids set programmatically from a stale table may silently fall back to the default font (pyJianYingDraft#192)`,
+      fixable: FIXABLE_CODES.has("unknown-font-id"),
+      location: { material_id: m.id ?? "" },
+    });
+  }
 
   return issues;
 }
@@ -227,7 +288,7 @@ function knownEffectIds(): Set<string> {
       }
     }
   }
-  for (const e of [...effectCatalogue(), ...filterCatalogue(), ...imageAnimCatalogue()]) {
+  for (const e of [...effectCatalogue(), ...filterCatalogue(), ...imageAnimCatalogue(), ...bubbleCatalogue()]) {
     add(e.effect_id);
     add(e.resource_id);
   }

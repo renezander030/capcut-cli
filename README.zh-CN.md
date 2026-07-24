@@ -24,9 +24,9 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **v0.14.0 新增：** 把片段复制到源轨道上方的叠加轨道（`duplicate`）、为已有草稿修复缺失的注册信息（`register`）、读取并编辑素材裁剪（`crop --ratio | --rect`）、字幕逐词关键词强调与逐条底色轮换（`caption`/`import-srt` 的 `--highlight-words`、`--keyword-size`、`--color-cycle`），以及所有读取路径兼容 UTF-8 BOM。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.15.0 新增：** 写入时版本护栏，拒绝写入超出已验证范围或已知不兼容的草稿（`--force-write` 可覆盖）、就地删除片段并回收由此孤立的素材（`remove`）、滤镜与特效支持原始资源 ID、强度调节与整条时间线范围（`add-filter`/`add-effect` 的 `--resource-id`、`--intensity`、`--full`）、实验性逐片段绑定（仅 `add-effect` 的 `--bind`），以及 `lint` 未知 slug 检查扩展到转场、蒙版、音效、气泡与字体。完整说明见 [更新日志](./CHANGELOG.md)。
 
-> **v0.13.0 新增：** CapCut ≥ 8.7 时间线镜像修复（`sync-timelines`）、逐词字幕导出（`export-srt --granularity word`，支持 SRT + VTT）、CapCut 原生关键帧缓动（`keyframe --easing`）、确定性镜头切分检测（`detect-scenes`）、可移植文字样式预设（`make-preset` + `--preset`），以及 `lint --fix` 自动修复。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.14.0 新增：** 把片段复制到源轨道上方的叠加轨道（`duplicate`）、为已有草稿修复缺失的注册信息（`register`）、读取并编辑素材裁剪（`crop --ratio | --rect`）、字幕逐词关键词强调与逐条底色轮换（`caption`/`import-srt` 的 `--highlight-words`、`--keyword-size`、`--color-cycle`），以及所有读取路径兼容 UTF-8 BOM。完整说明见 [更新日志](./CHANGELOG.md)。
 
 ## 安装
 

@@ -1286,6 +1286,114 @@ export function cutProject(draft: Draft, opts: CutOptions): { kept: number; remo
   return { kept, removed };
 }
 
+// --- Remove (single segment) ---
+
+/**
+ * Orphan-material GC shared by `prune` and `remove`: drop every material entry
+ * that no surviving segment references via material_id or extra_material_refs
+ * (the latter is what keeps masks/effects/animations/fades from being wrongly
+ * deleted). Entries without a string id are kept (can't prove they're
+ * orphaned). Behavior-identical extraction of the original cmdPrune loop; the
+ * caller decides whether a nonzero `removed` warrants a save.
+ */
+export function pruneOrphanMaterials(draft: Draft): {
+  removed: number;
+  byType: Record<string, { removed: number; kept: number }>;
+} {
+  const referenced = new Set<string>();
+  for (const track of draft.tracks) {
+    for (const seg of track.segments) {
+      if (seg.material_id) referenced.add(seg.material_id);
+      for (const ref of seg.extra_material_refs ?? []) referenced.add(ref);
+    }
+  }
+  const byType: Record<string, { removed: number; kept: number }> = {};
+  let removedTotal = 0;
+  for (const [type, arr] of Object.entries(draft.materials)) {
+    if (!Array.isArray(arr)) continue;
+    const before = arr.length;
+    const kept = arr.filter((m) => {
+      const id = (m as { id?: unknown }).id;
+      // Keep anything without a string id (can't prove it's orphaned) or that is referenced.
+      return typeof id !== "string" || referenced.has(id);
+    });
+    const removed = before - kept.length;
+    if (removed > 0) (draft.materials as Record<string, unknown[]>)[type] = kept;
+    byType[type] = { removed, kept: kept.length };
+    removedTotal += removed;
+  }
+  return { removed: removedTotal, byType };
+}
+
+export interface RemoveSegmentOptions {
+  keepTrack?: boolean;
+  keepMaterials?: boolean;
+}
+
+export interface RemoveSegmentResult {
+  segmentId: string;
+  trackId: string;
+  trackName: string;
+  trackType: string;
+  trackRemoved: boolean;
+  materialsRemoved: number;
+  materialsByType: Record<string, { removed: number; kept: number }>;
+  durationBefore: number;
+  durationAfter: number;
+}
+
+/**
+ * Remove one segment in place: splice it out of its track, drop the track when
+ * it becomes empty (unless keepTrack — cutProject already removes empty tracks
+ * wholesale, so CapCut tolerates it), GC newly-orphaned materials with the same
+ * conservative sweep prune uses (unless keepMaterials; a material any surviving
+ * segment still references is never deleted), and recompute draft.duration as
+ * the max segment end across ALL tracks (0 when no segments remain, same as a
+ * fresh init draft).
+ */
+export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOptions = {}): RemoveSegmentResult {
+  const found = findSegment(draft, segId);
+  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const { track, segment, index } = found;
+  const durationBefore = draft.duration;
+
+  track.segments.splice(index, 1);
+  let trackRemoved = false;
+  if (track.segments.length === 0 && !opts.keepTrack) {
+    draft.tracks = draft.tracks.filter((t) => t !== track);
+    trackRemoved = true;
+  }
+
+  let materialsRemoved = 0;
+  let materialsByType: Record<string, { removed: number; kept: number }> = {};
+  if (!opts.keepMaterials) {
+    const swept = pruneOrphanMaterials(draft);
+    materialsRemoved = swept.removed;
+    materialsByType = swept.byType;
+  }
+
+  let maxEnd = 0;
+  for (const t of draft.tracks) {
+    for (const seg of t.segments) {
+      const end = seg.target_timerange.start + seg.target_timerange.duration;
+      if (end > maxEnd) maxEnd = end;
+    }
+  }
+  draft.duration = maxEnd;
+
+  return {
+    segmentId: segment.id,
+    trackId: track.id,
+    trackName: track.name,
+    trackType: track.type,
+    trackRemoved,
+    materialsRemoved,
+    materialsByType,
+    durationBefore,
+    durationAfter: maxEnd,
+  };
+}
+
 // --- Templates ---
 
 export interface Template {
@@ -1736,6 +1844,14 @@ export interface AddEffectOptions {
   params?: number[];
   trackName?: string;
   namespace?: Namespace;
+  /** Raw store/catalogue resource ID — skips slug lookup; `slug` becomes the display name. */
+  resourceId?: string;
+  /** Raw effect ID; defaults to `resourceId`. Only meaningful with `resourceId`. */
+  effectId?: string;
+  /** Effect strength 0..1 (material `value`); default 1. */
+  intensity?: number;
+  /** Experimental: bind the effect to one segment (`apply_target_type: 0`) instead of the whole frame. */
+  bindSegmentId?: string;
 }
 
 export function addEffect(
@@ -1747,7 +1863,19 @@ export function addEffect(
   // are video_effect; character effects are face_effect. --jianying skips the
   // inline layer entirely since those effect_ids are CapCut-specific.
   const ns: Namespace = opts.namespace ?? "capcut";
-  let meta: VideoEffectMeta | null = ns === "capcut" ? (VIDEO_EFFECTS[opts.slug] ?? null) : null;
+  // Raw-resource-id escape hatch: skip catalogue lookup entirely (explicit
+  // beats implicit — a raw id wins even when the slug also exists). Raw ids
+  // are scene effects (video_effect); face effects stay slug-only.
+  let meta: VideoEffectMeta | null = opts.resourceId
+    ? {
+        name: opts.slug,
+        effect_id: opts.effectId ?? opts.resourceId,
+        resource_id: opts.resourceId,
+        effect_type: "video_effect",
+      }
+    : ns === "capcut"
+      ? (VIDEO_EFFECTS[opts.slug] ?? null)
+      : null;
   if (!meta) {
     const scene = findEnum("scene_effects", opts.slug, ns);
     const char = scene ? null : findEnum("character_effects", opts.slug, ns);
@@ -1764,6 +1892,15 @@ export function addEffect(
       resource_id: hit.resource_id,
       effect_type: scene ? "video_effect" : "face_effect",
     };
+  }
+
+  // Validate --bind before mutating the draft; resolve short-prefix ids to the
+  // full segment id so the written reference never dangles.
+  let bindSegmentId = "";
+  if (opts.bindSegmentId) {
+    const bound = findSegment(draft, opts.bindSegmentId);
+    if (!bound) throw new Error(`Segment not found: ${opts.bindSegmentId}`);
+    bindSegmentId = bound.segment.id;
   }
 
   const segId = uuid();
@@ -1786,8 +1923,12 @@ export function addEffect(
 
   const effectMaterial = {
     adjust_params: (opts.params || []).map((v, i) => ({ name: `param_${i}`, value: v, default_value: v })),
-    apply_target_type: 2, // track/global scope
+    // 2 = track/global scope; 0 = segment-scoped when --bind is given (fork
+    // evidence only — same value upstream writes for segment-scoped bubbles).
+    apply_target_type: bindSegmentId ? 0 : 2,
     apply_time_range: null,
+    // Only present when bound, so the unbound path stays byte-identical.
+    ...(bindSegmentId ? { bind_segment_id: bindSegmentId } : {}),
     category_id: "",
     category_name: "",
     common_keyframes: [],
@@ -1799,11 +1940,13 @@ export function addEffect(
     platform: "all",
     render_index: 11000,
     resource_id: meta.resource_id,
-    source_platform: 0,
+    // 1 marks store-downloaded resources (addSticker precedent); slug path
+    // keeps 0 byte-for-byte.
+    source_platform: opts.resourceId ? 1 : 0,
     time_range: null,
     track_render_index: 0,
     type: meta.effect_type,
-    value: 1.0,
+    value: opts.intensity ?? 1.0,
     version: "",
   };
   if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
@@ -2143,6 +2286,10 @@ export interface AddFilterOptions {
   intensity?: number; // 0..1
   trackName?: string;
   namespace?: Namespace;
+  /** Raw store/catalogue resource ID — skips slug lookup; `slug` becomes the display name. */
+  resourceId?: string;
+  /** Raw effect ID; defaults to `resourceId`. Only meaningful with `resourceId`. */
+  effectId?: string;
 }
 
 export function addFilter(
@@ -2150,7 +2297,15 @@ export function addFilter(
   opts: AddFilterOptions,
 ): { segmentId: string; materialId: string; trackId: string; name: string } {
   const ns: Namespace = opts.namespace ?? "capcut";
-  let meta: FilterMeta | null = ns === "capcut" ? (VIDEO_FILTERS[opts.slug.toLowerCase()] ?? null) : null;
+  // Raw-resource-id escape hatch: skip catalogue lookup entirely (explicit
+  // beats implicit — a raw id wins even when the slug also exists).
+  // effect_id defaulting to resource_id matches the inline registry, where
+  // every filter's effect_id mirrors its resource_id.
+  let meta: FilterMeta | null = opts.resourceId
+    ? { name: opts.slug, effect_id: opts.effectId ?? opts.resourceId, resource_id: opts.resourceId }
+    : ns === "capcut"
+      ? (VIDEO_FILTERS[opts.slug.toLowerCase()] ?? null)
+      : null;
   if (!meta) {
     const hit = findEnum("filters", opts.slug, ns);
     if (!hit?.name || !hit.effect_id || !hit.resource_id) {
@@ -2193,7 +2348,9 @@ export function addFilter(
     platform: "all",
     render_index: 11000,
     resource_id: meta.resource_id,
-    source_platform: 0,
+    // 1 marks store-downloaded resources (addSticker precedent); slug path
+    // keeps 0 byte-for-byte.
+    source_platform: opts.resourceId ? 1 : 0,
     time_range: null,
     track_render_index: 0,
     type: "filter",

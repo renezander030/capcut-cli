@@ -27,6 +27,7 @@
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | yes | Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset). |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | yes | Extract a time range into a new standalone draft. |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | yes | Duplicate a segment at its same timeline position onto a track above the source. |
+| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials]` | yes | Remove a segment, its emptied track, and the materials that orphans. |
 | `keyframe` | `capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] \| --batch` | yes | Add a keyframe (position/scale/rotation/alpha/volume); single or --batch. |
 | `transition` | `capcut transition <project> <id> <slug> [--duration <time>]` | yes | Add a transition between segments. |
 | `mask` | `capcut mask <project> <id> <slug> [options] \| --off` | yes | Apply a mask (linear/circle/heart/...) with geometry flags, or --off. |
@@ -38,9 +39,9 @@
 | `mix-mode` | `capcut mix-mode <project> <id> <mode>` | yes | Set a video segment's blend mode. |
 | `audio-fade` | `capcut audio-fade <project> <id> [--in <seconds>] [--fade-out <seconds>]` | yes | Add fade-in/fade-out to an audio segment (--in / --fade-out). |
 | `add-cover` | `capcut add-cover <project> <image> [--time <milliseconds>]` | yes | Set the project cover/thumbnail from a local image. |
-| `add-filter` | `capcut add-filter <project> <slug> <start> <duration> [options]` | yes | Add a colour filter on its own track. |
+| `add-filter` | `capcut add-filter <project> <slug-or-name> (<start> <duration> \| --full) [options]` | yes | Add a colour filter on its own track. |
 | `bubble-text` | `capcut bubble-text <project> <id> --bubble <slug>` | yes | Apply a speech-bubble shape to a text segment. |
-| `add-effect` | `capcut add-effect <project> <slug> <start> <duration> [options]` | yes | Add a scene effect on its own track. |
+| `add-effect` | `capcut add-effect <project> <slug-or-name> (<start> <duration> \| --full) [options]` | yes | Add a scene effect on its own track. |
 | `save-template` | `capcut save-template <project> <id> <name> --out <path>` | no | Extract a segment as a reusable template JSON. |
 | `apply-template` | `capcut apply-template <project> <template> <start> <duration> [text] [options]` | yes | Stamp a template into a project with new timing/text. |
 | `make-preset` | `capcut make-preset <project> <text-segment-id> --out <preset.json>` | no | Extract a text segment's styling as a reusable preset JSON (apply via --preset). |
