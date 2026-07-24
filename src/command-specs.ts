@@ -173,6 +173,7 @@ const usages = {
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
   cut: "capcut cut <project> <start> <end> --out <path>",
   duplicate: "capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]",
+  remove: "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]",
   keyframe: "capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] | --batch",
   transition: "capcut transition <project> <id> <slug> [--duration <time>]",
   mask: "capcut mask <project> <id> <slug> [options] | --off",
@@ -283,6 +284,10 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "boolean",
       "Create a fresh same-type track directly above the source (the default).",
     ),
+  ],
+  remove: [
+    option("keep_track", ["--keep-track"], "boolean", "Keep the segment's track even when it becomes empty."),
+    option("keep_materials", ["--keep-materials"], "boolean", "Skip the orphan-material sweep (run prune later)."),
   ],
   keyframe: [
     option("batch", ["--batch"], "boolean", "Read JSONL keyframes from stdin."),
@@ -517,6 +522,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --highlight-words, --keyword-color, --keyword-size, --color-cycle
 //                       -> caption, import-srt (v0.14 keyword emphasis)
 //   --new-track          -> duplicate
+//   --keep-track, --keep-materials -> remove
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -527,6 +533,8 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--granularity",
   "--highlight-words",
   "--json",
+  "--keep-materials",
+  "--keep-track",
   "--keyword-color",
   "--keyword-size",
   "--limit",
@@ -560,6 +568,7 @@ const mutating = new Set([
   "crop",
   "cut",
   "duplicate",
+  "remove",
   "keyframe",
   "transition",
   "mask",

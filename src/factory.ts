@@ -1286,6 +1286,114 @@ export function cutProject(draft: Draft, opts: CutOptions): { kept: number; remo
   return { kept, removed };
 }
 
+// --- Remove (single segment) ---
+
+/**
+ * Orphan-material GC shared by `prune` and `remove`: drop every material entry
+ * that no surviving segment references via material_id or extra_material_refs
+ * (the latter is what keeps masks/effects/animations/fades from being wrongly
+ * deleted). Entries without a string id are kept (can't prove they're
+ * orphaned). Behavior-identical extraction of the original cmdPrune loop; the
+ * caller decides whether a nonzero `removed` warrants a save.
+ */
+export function pruneOrphanMaterials(draft: Draft): {
+  removed: number;
+  byType: Record<string, { removed: number; kept: number }>;
+} {
+  const referenced = new Set<string>();
+  for (const track of draft.tracks) {
+    for (const seg of track.segments) {
+      if (seg.material_id) referenced.add(seg.material_id);
+      for (const ref of seg.extra_material_refs ?? []) referenced.add(ref);
+    }
+  }
+  const byType: Record<string, { removed: number; kept: number }> = {};
+  let removedTotal = 0;
+  for (const [type, arr] of Object.entries(draft.materials)) {
+    if (!Array.isArray(arr)) continue;
+    const before = arr.length;
+    const kept = arr.filter((m) => {
+      const id = (m as { id?: unknown }).id;
+      // Keep anything without a string id (can't prove it's orphaned) or that is referenced.
+      return typeof id !== "string" || referenced.has(id);
+    });
+    const removed = before - kept.length;
+    if (removed > 0) (draft.materials as Record<string, unknown[]>)[type] = kept;
+    byType[type] = { removed, kept: kept.length };
+    removedTotal += removed;
+  }
+  return { removed: removedTotal, byType };
+}
+
+export interface RemoveSegmentOptions {
+  keepTrack?: boolean;
+  keepMaterials?: boolean;
+}
+
+export interface RemoveSegmentResult {
+  segmentId: string;
+  trackId: string;
+  trackName: string;
+  trackType: string;
+  trackRemoved: boolean;
+  materialsRemoved: number;
+  materialsByType: Record<string, { removed: number; kept: number }>;
+  durationBefore: number;
+  durationAfter: number;
+}
+
+/**
+ * Remove one segment in place: splice it out of its track, drop the track when
+ * it becomes empty (unless keepTrack — cutProject already removes empty tracks
+ * wholesale, so CapCut tolerates it), GC newly-orphaned materials with the same
+ * conservative sweep prune uses (unless keepMaterials; a material any surviving
+ * segment still references is never deleted), and recompute draft.duration as
+ * the max segment end across ALL tracks (0 when no segments remain, same as a
+ * fresh init draft).
+ */
+export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOptions = {}): RemoveSegmentResult {
+  const found = findSegment(draft, segId);
+  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const { track, segment, index } = found;
+  const durationBefore = draft.duration;
+
+  track.segments.splice(index, 1);
+  let trackRemoved = false;
+  if (track.segments.length === 0 && !opts.keepTrack) {
+    draft.tracks = draft.tracks.filter((t) => t !== track);
+    trackRemoved = true;
+  }
+
+  let materialsRemoved = 0;
+  let materialsByType: Record<string, { removed: number; kept: number }> = {};
+  if (!opts.keepMaterials) {
+    const swept = pruneOrphanMaterials(draft);
+    materialsRemoved = swept.removed;
+    materialsByType = swept.byType;
+  }
+
+  let maxEnd = 0;
+  for (const t of draft.tracks) {
+    for (const seg of t.segments) {
+      const end = seg.target_timerange.start + seg.target_timerange.duration;
+      if (end > maxEnd) maxEnd = end;
+    }
+  }
+  draft.duration = maxEnd;
+
+  return {
+    segmentId: segment.id,
+    trackId: track.id,
+    trackName: track.name,
+    trackType: track.type,
+    trackRemoved,
+    materialsRemoved,
+    materialsByType,
+    durationBefore,
+    durationAfter: maxEnd,
+  };
+}
+
 // --- Templates ---
 
 export interface Template {

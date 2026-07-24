@@ -92,6 +92,8 @@ import {
   initDraft,
   mixModeSlugs,
   planDraftRegistration,
+  pruneOrphanMaterials,
+  removeSegment,
   resolveAssetPath,
   saveTemplate,
   setAudioFade,
@@ -141,6 +143,7 @@ export const COMMANDS = [
   "crop",
   "cut",
   "duplicate",
+  "remove",
   "keyframe",
   "transition",
   "mask",
@@ -358,6 +361,13 @@ Edit:
              per-segment companion (speed, canvas, mask, ...) are cloned with
              fresh ids, so edits like crop/mix-mode on the copy never touch
              the source segment.
+  remove     <project> <segment-id> [--keep-track] [--keep-materials]
+             Delete a segment in place. A track left empty by the removal is
+             dropped too (--keep-track keeps it). Materials no surviving
+             segment references are swept in the same pass prune runs —
+             including materials that were already orphaned (--keep-materials
+             skips the sweep). Recomputes the project duration to the max
+             remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
@@ -832,6 +842,9 @@ interface Flags {
   reset?: boolean;
   // duplicate
   newTrack?: boolean;
+  // remove
+  keepTrack?: boolean;
+  keepMaterials?: boolean;
 }
 
 // Map CLI enum flags -> enums.json category key. Order matters for HELP text.
@@ -1187,6 +1200,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.reset = true;
     } else if (a === "--new-track") {
       flags.newTrack = true;
+    } else if (a === "--keep-track") {
+      flags.keepTrack = true;
+    } else if (a === "--keep-materials") {
+      flags.keepMaterials = true;
     } else {
       const hit = ENUM_FLAG_MAP.find((f) => f.flag === a);
       if (hit) {
@@ -2164,6 +2181,29 @@ function cmdDuplicate(draft: Draft, filePath: string, positional: string[], flag
       track_name: result.trackName,
       new_track: result.createdTrack,
       cloned_materials: result.clonedMaterials,
+    },
+    flags,
+  );
+}
+
+function cmdRemove(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+  const result = removeSegment(draft, positional[2], {
+    keepTrack: flags.keepTrack,
+    keepMaterials: flags.keepMaterials,
+  });
+  saveDraft(filePath, draft);
+  out(
+    {
+      ok: true,
+      removed_segment_id: result.segmentId,
+      track_id: result.trackId,
+      track_name: result.trackName,
+      track_type: result.trackType,
+      track_removed: result.trackRemoved,
+      materials_removed: result.materialsRemoved,
+      materials_by_type: result.materialsByType,
+      duration_before_us: result.durationBefore,
+      duration_after_us: result.durationAfter,
     },
     flags,
   );
@@ -3166,31 +3206,11 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
 // `prune` removes materials no segment references. The referenced set is the
 // union of every segment's material_id AND its extra_material_refs[] (the latter
 // is what keeps masks/effects/animations/fades from being wrongly deleted).
+// The sweep itself lives in pruneOrphanMaterials (shared with `remove`).
 function cmdPrune(draft: Draft, filePath: string, flags: Flags): void {
-  const referenced = new Set<string>();
-  for (const track of draft.tracks) {
-    for (const seg of track.segments) {
-      if (seg.material_id) referenced.add(seg.material_id);
-      for (const ref of seg.extra_material_refs ?? []) referenced.add(ref);
-    }
-  }
-  const byType: Record<string, { removed: number; kept: number }> = {};
-  let removedTotal = 0;
-  for (const [type, arr] of Object.entries(draft.materials)) {
-    if (!Array.isArray(arr)) continue;
-    const before = arr.length;
-    const kept = arr.filter((m) => {
-      const id = (m as { id?: unknown }).id;
-      // Keep anything without a string id (can't prove it's orphaned) or that is referenced.
-      return typeof id !== "string" || referenced.has(id);
-    });
-    const removed = before - kept.length;
-    if (removed > 0) (draft.materials as Record<string, unknown[]>)[type] = kept;
-    byType[type] = { removed, kept: kept.length };
-    removedTotal += removed;
-  }
-  if (removedTotal > 0) saveDraft(filePath, draft);
-  out({ ok: true, removed: removedTotal, by_type: byType }, flags);
+  const { removed, byType } = pruneOrphanMaterials(draft);
+  if (removed > 0) saveDraft(filePath, draft);
+  out({ ok: true, removed, by_type: byType }, flags);
 }
 
 // `relink` repairs broken media paths. Two modes (combinable):
@@ -3379,6 +3399,7 @@ const SUMMARIES: Record<string, string> = {
   crop: "Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset).",
   cut: "Extract a time range into a new standalone draft.",
   duplicate: "Duplicate a segment at its same timeline position onto a track above the source.",
+  remove: "Remove a segment, its emptied track, and the materials that orphans.",
   keyframe: "Add a keyframe (position/scale/rotation/alpha/volume); single or --batch.",
   transition: "Add a transition between segments.",
   mask: "Apply a mask (linear/circle/heart/...) with geometry flags, or --off.",
@@ -4100,6 +4121,10 @@ async function main(): Promise<void> {
     case "duplicate":
       requireArgs(positional, 3, "capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]");
       cmdDuplicate(draft, filePath, positional, flags);
+      break;
+    case "remove":
+      requireArgs(positional, 3, "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]");
+      cmdRemove(draft, filePath, positional, flags);
       break;
     case "keyframe":
       requireArgs(positional, 3, "capcut keyframe <project> <id> <property> <time> <value>");
