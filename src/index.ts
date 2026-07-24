@@ -481,13 +481,23 @@ Tracks (Phase 2):
              star, heart, burst (or pass --effect-id / --resource-id
              explicitly from your own CapCut draft).
              Discovery: capcut enums --bubbles
-  add-filter <project> <slug> <start> <duration> [options]
+  add-filter <project> <slug-or-name> (<start> <duration> | --full) [options]
              Colour filter on a dedicated filter track. Slugs (capcut):
                vintage, warm, cool, bw, sepia, vivid, contrast, faded,
                dramatic, soft (+ enums --filters --jianying for 468 more).
              Options:
                --track-name <s>      Filter track name (default: "filter")
                --jianying            Use the JianYing namespace
+               --resource-id <id>    Raw catalogue resource ID (skips slug
+                                     lookup; wins over a matching slug). The
+                                     <slug-or-name> positional becomes the
+                                     display name. CapCut must have the
+                                     resource in its store cache.
+               --effect-id <id>      Raw effect ID (defaults to --resource-id;
+                                     requires --resource-id)
+               --intensity <n>       Filter strength 0-1 (default 1)
+               --full                Whole timeline (start 0, duration = draft
+                                     duration); wins over <start> <duration>
   add-cover  <project> <image-path> [--time <ms>]
              Set the draft's cover frame (thumbnail) to an image. Writes a
              cover object on the draft root with {path, type, time, time_ms,
@@ -508,13 +518,26 @@ Tracks (Phase 2):
                --scale <n>           Uniform scale (default 1)
                --rotation <deg>      Clockwise rotation
                --track-name <s>      Sticker track name (default: "sticker")
-  add-effect <project> <slug> <start> <duration> [options]
+  add-effect <project> <slug-or-name> (<start> <duration> | --full) [options]
              Scene/character effect on an effect track. Slugs:
                shake, vhs, cinematic, light-leak, film-grain, chromatic,
                vignette.
              Options:
                --params <json-array> Effect parameters (0-100 each)
                --track-name <s>      Effect track name (default: "effect")
+               --resource-id <id>    Raw catalogue resource ID (skips slug
+                                     lookup; wins over a matching slug; raw
+                                     ids are scene effects). The <slug-or-name>
+                                     positional becomes the display name.
+                                     CapCut must have the resource in its
+                                     store cache.
+               --effect-id <id>      Raw effect ID (defaults to --resource-id;
+                                     requires --resource-id)
+               --intensity <n>       Effect strength 0-1 (default 1)
+               --full                Whole timeline (start 0, duration = draft
+                                     duration); wins over <start> <duration>
+               --bind <segment-id>   Experimental: attach the effect to one
+                                     segment instead of the whole frame
 
 Templates:
   save-template <project> <id> <name> --out <path>
@@ -750,6 +773,9 @@ interface Flags {
   resourceId?: string;
   // effect
   params?: string;
+  bind?: string;
+  // add-filter / add-effect whole-timeline range
+  full?: boolean;
   // enums
   enumCategory?: Category;
   jianying?: boolean;
@@ -1038,6 +1064,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.resourceId = args[++i];
     } else if (a === "--params" && i + 1 < args.length) {
       flags.params = args[++i];
+    } else if (a === "--bind" && i + 1 < args.length) {
+      flags.bind = args[++i];
+    } else if (a === "--full") {
+      flags.full = true;
     } else if (a === "--style-ref" && i + 1 < args.length) {
       flags.styleRef = args[++i];
     } else if (a === "--time-offset" && i + 1 < args.length) {
@@ -2004,24 +2034,56 @@ function cmdAddSticker(draft: Draft, filePath: string, positional: string[], fla
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
 }
 
+// Shared by add-filter / add-effect: --full applies over the whole timeline.
+// --full wins over explicit <start> <duration> when both are given (crop
+// precedent: --rect beats --ratio when both are given).
+function fullTimelineRange(draft: Draft): { start: number; duration: number } {
+  if (typeof draft.duration !== "number" || draft.duration <= 0) {
+    die(`--full: draft has no duration (add media first)`);
+  }
+  return { start: 0, duration: draft.duration };
+}
+
+// Shared by add-filter / add-effect: --intensity must be a real number in
+// [0, 1] — a NaN (e.g. `--intensity abc`) must die, not get written into JSON.
+function validateIntensityFlag(intensity: number | undefined): void {
+  if (intensity !== undefined && (Number.isNaN(intensity) || intensity < 0 || intensity > 1)) {
+    die(`--intensity must be a number in range [0, 1]`);
+  }
+}
+
 function cmdAddEffect(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
   const slug = positional[2];
   const startStr = positional[3];
   const durStr = positional[4];
   const ns: Namespace = flags.jianying ? "jianying" : "capcut";
-  if (!slug || !startStr || !durStr)
+  if (!slug || (!flags.full && (!startStr || !durStr)))
     die(
-      `Usage: capcut add-effect <project> <slug> <start> <duration> [--params <json-array>] [--jianying]\nFeatured slugs: ${effectSlugs().join(", ")}`,
+      `Usage: capcut add-effect <project> <slug-or-name> (<start> <duration> | --full) [--params <json-array>] [--jianying]\nFeatured slugs: ${effectSlugs().join(", ")}`,
     );
-  const start = parseTimeInput(startStr);
-  const duration = parseTimeInput(durStr);
+  if (flags.effectId && !flags.resourceId) die(`--effect-id requires --resource-id`);
+  validateIntensityFlag(flags.intensity);
+  const { start, duration } = flags.full
+    ? fullTimelineRange(draft)
+    : { start: parseTimeInput(startStr), duration: parseTimeInput(durStr) };
   let params: number[] | undefined;
   if (flags.params) {
     const parsed = JSON.parse(flags.params);
     if (!Array.isArray(parsed)) die(`--params must be a JSON array of numbers`);
     params = parsed.map((v) => Number(v));
   }
-  const result = addEffect(draft, { slug, start, duration, params, trackName: flags.trackName, namespace: ns });
+  const result = addEffect(draft, {
+    slug,
+    start,
+    duration,
+    params,
+    trackName: flags.trackName,
+    namespace: ns,
+    resourceId: flags.resourceId,
+    effectId: flags.effectId,
+    intensity: flags.intensity,
+    bindSegmentId: flags.bind,
+  });
   saveDraft(filePath, draft);
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
 }
@@ -2069,18 +2131,24 @@ function cmdAddFilter(draft: Draft, filePath: string, positional: string[], flag
   const startStr = positional[3];
   const durStr = positional[4];
   const ns: Namespace = flags.jianying ? "jianying" : "capcut";
-  if (!slug || !startStr || !durStr)
+  if (!slug || (!flags.full && (!startStr || !durStr)))
     die(
-      `Usage: capcut add-filter <project> <slug> <start> <duration> [--track-name <name>] [--jianying]\nFeatured slugs: ${filterSlugs(ns).join(", ")}`,
+      `Usage: capcut add-filter <project> <slug-or-name> (<start> <duration> | --full) [--track-name <name>] [--jianying]\nFeatured slugs: ${filterSlugs(ns).join(", ")}`,
     );
-  const start = parseTimeInput(startStr);
-  const duration = parseTimeInput(durStr);
+  if (flags.effectId && !flags.resourceId) die(`--effect-id requires --resource-id`);
+  validateIntensityFlag(flags.intensity);
+  const { start, duration } = flags.full
+    ? fullTimelineRange(draft)
+    : { start: parseTimeInput(startStr), duration: parseTimeInput(durStr) };
   const result = addFilter(draft, {
     slug,
     start,
     duration,
+    intensity: flags.intensity,
     trackName: flags.trackName,
     namespace: ns,
+    resourceId: flags.resourceId,
+    effectId: flags.effectId,
   });
   saveDraft(filePath, draft);
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
@@ -4171,7 +4239,11 @@ async function main(): Promise<void> {
       cmdAddCover(draft, filePath, positional, flags);
       break;
     case "add-filter":
-      requireArgs(positional, 5, "capcut add-filter <project> <slug> <start> <duration>");
+      requireArgs(
+        positional,
+        flags.full ? 3 : 5,
+        "capcut add-filter <project> <slug-or-name> (<start> <duration> | --full)",
+      );
       cmdAddFilter(draft, filePath, positional, flags);
       break;
     case "bubble-text":
@@ -4179,7 +4251,11 @@ async function main(): Promise<void> {
       cmdBubbleText(draft, filePath, positional, flags);
       break;
     case "add-effect":
-      requireArgs(positional, 5, "capcut add-effect <project> <slug> <start> <duration>");
+      requireArgs(
+        positional,
+        flags.full ? 3 : 5,
+        "capcut add-effect <project> <slug-or-name> (<start> <duration> | --full)",
+      );
       cmdAddEffect(draft, filePath, positional, flags);
       break;
     case "save-template":

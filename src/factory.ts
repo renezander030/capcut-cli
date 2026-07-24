@@ -1844,6 +1844,14 @@ export interface AddEffectOptions {
   params?: number[];
   trackName?: string;
   namespace?: Namespace;
+  /** Raw store/catalogue resource ID — skips slug lookup; `slug` becomes the display name. */
+  resourceId?: string;
+  /** Raw effect ID; defaults to `resourceId`. Only meaningful with `resourceId`. */
+  effectId?: string;
+  /** Effect strength 0..1 (material `value`); default 1. */
+  intensity?: number;
+  /** Experimental: bind the effect to one segment (`apply_target_type: 0`) instead of the whole frame. */
+  bindSegmentId?: string;
 }
 
 export function addEffect(
@@ -1855,7 +1863,19 @@ export function addEffect(
   // are video_effect; character effects are face_effect. --jianying skips the
   // inline layer entirely since those effect_ids are CapCut-specific.
   const ns: Namespace = opts.namespace ?? "capcut";
-  let meta: VideoEffectMeta | null = ns === "capcut" ? (VIDEO_EFFECTS[opts.slug] ?? null) : null;
+  // Raw-resource-id escape hatch: skip catalogue lookup entirely (explicit
+  // beats implicit — a raw id wins even when the slug also exists). Raw ids
+  // are scene effects (video_effect); face effects stay slug-only.
+  let meta: VideoEffectMeta | null = opts.resourceId
+    ? {
+        name: opts.slug,
+        effect_id: opts.effectId ?? opts.resourceId,
+        resource_id: opts.resourceId,
+        effect_type: "video_effect",
+      }
+    : ns === "capcut"
+      ? (VIDEO_EFFECTS[opts.slug] ?? null)
+      : null;
   if (!meta) {
     const scene = findEnum("scene_effects", opts.slug, ns);
     const char = scene ? null : findEnum("character_effects", opts.slug, ns);
@@ -1872,6 +1892,15 @@ export function addEffect(
       resource_id: hit.resource_id,
       effect_type: scene ? "video_effect" : "face_effect",
     };
+  }
+
+  // Validate --bind before mutating the draft; resolve short-prefix ids to the
+  // full segment id so the written reference never dangles.
+  let bindSegmentId = "";
+  if (opts.bindSegmentId) {
+    const bound = findSegment(draft, opts.bindSegmentId);
+    if (!bound) throw new Error(`Segment not found: ${opts.bindSegmentId}`);
+    bindSegmentId = bound.segment.id;
   }
 
   const segId = uuid();
@@ -1894,8 +1923,12 @@ export function addEffect(
 
   const effectMaterial = {
     adjust_params: (opts.params || []).map((v, i) => ({ name: `param_${i}`, value: v, default_value: v })),
-    apply_target_type: 2, // track/global scope
+    // 2 = track/global scope; 0 = segment-scoped when --bind is given (fork
+    // evidence only — same value upstream writes for segment-scoped bubbles).
+    apply_target_type: bindSegmentId ? 0 : 2,
     apply_time_range: null,
+    // Only present when bound, so the unbound path stays byte-identical.
+    ...(bindSegmentId ? { bind_segment_id: bindSegmentId } : {}),
     category_id: "",
     category_name: "",
     common_keyframes: [],
@@ -1907,11 +1940,13 @@ export function addEffect(
     platform: "all",
     render_index: 11000,
     resource_id: meta.resource_id,
-    source_platform: 0,
+    // 1 marks store-downloaded resources (addSticker precedent); slug path
+    // keeps 0 byte-for-byte.
+    source_platform: opts.resourceId ? 1 : 0,
     time_range: null,
     track_render_index: 0,
     type: meta.effect_type,
-    value: 1.0,
+    value: opts.intensity ?? 1.0,
     version: "",
   };
   if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
@@ -2251,6 +2286,10 @@ export interface AddFilterOptions {
   intensity?: number; // 0..1
   trackName?: string;
   namespace?: Namespace;
+  /** Raw store/catalogue resource ID — skips slug lookup; `slug` becomes the display name. */
+  resourceId?: string;
+  /** Raw effect ID; defaults to `resourceId`. Only meaningful with `resourceId`. */
+  effectId?: string;
 }
 
 export function addFilter(
@@ -2258,7 +2297,15 @@ export function addFilter(
   opts: AddFilterOptions,
 ): { segmentId: string; materialId: string; trackId: string; name: string } {
   const ns: Namespace = opts.namespace ?? "capcut";
-  let meta: FilterMeta | null = ns === "capcut" ? (VIDEO_FILTERS[opts.slug.toLowerCase()] ?? null) : null;
+  // Raw-resource-id escape hatch: skip catalogue lookup entirely (explicit
+  // beats implicit — a raw id wins even when the slug also exists).
+  // effect_id defaulting to resource_id matches the inline registry, where
+  // every filter's effect_id mirrors its resource_id.
+  let meta: FilterMeta | null = opts.resourceId
+    ? { name: opts.slug, effect_id: opts.effectId ?? opts.resourceId, resource_id: opts.resourceId }
+    : ns === "capcut"
+      ? (VIDEO_FILTERS[opts.slug.toLowerCase()] ?? null)
+      : null;
   if (!meta) {
     const hit = findEnum("filters", opts.slug, ns);
     if (!hit?.name || !hit.effect_id || !hit.resource_id) {
@@ -2301,7 +2348,9 @@ export function addFilter(
     platform: "all",
     render_index: 11000,
     resource_id: meta.resource_id,
-    source_platform: 0,
+    // 1 marks store-downloaded resources (addSticker precedent); slug path
+    // keeps 0 byte-for-byte.
+    source_platform: opts.resourceId ? 1 : 0,
     time_range: null,
     track_render_index: 0,
     type: "filter",
