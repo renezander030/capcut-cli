@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
@@ -513,6 +514,340 @@ describe("capcut lint", () => {
           !r.json.issues.some((i) => i.code === "unknown-effect-slug"),
           `expected no unknown-effect-slug; got: ${JSON.stringify(r.json.issues)}`,
         );
+      });
+    });
+
+    describe("flags unknown ids in transitions, masks, audio effects and bubbles", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("reports all four arrays as info, without failing the exit code", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.transitions = [
+          {
+            id: "bogus-transition-mat",
+            name: "Stale Transition",
+            type: "transition",
+            effect_id: "1111111111111111112",
+            resource_id: "1111111111111111112",
+            duration: 500_000,
+            is_overlap: true,
+          },
+        ];
+        // Deliberately no effect_id: mask materials carry resource_id only,
+        // pinning the effect_id || resource_id fallback.
+        draft.materials.common_mask = [
+          {
+            id: "bogus-mask-mat",
+            name: "Stale Mask",
+            type: "mask",
+            resource_id: "2222222222222222223",
+            resource_type: "line",
+          },
+        ];
+        draft.materials.audio_effects = [
+          {
+            id: "bogus-sfx-mat",
+            name: "Stale SFX",
+            type: "audio_effect",
+            effect_id: "3333333333333333334",
+            resource_id: "3333333333333333334",
+          },
+        ];
+        draft.materials.filters = [
+          {
+            id: "bogus-bubble-mat",
+            name: "Stale Bubble",
+            type: "text_shape",
+            effect_id: "4444444444444444445",
+            resource_id: "4444444444444444445",
+            apply_target_type: 0,
+            value: 1.0,
+          },
+        ];
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        const unknown = r.json.issues.filter((i) => i.code === "unknown-effect-slug");
+        assert.equal(unknown.length, 4, `expected 4 unknown-effect-slug issues; got: ${JSON.stringify(r.json.issues)}`);
+        const materialIds = unknown.map((i) => i.location.material_id).sort();
+        assert.deepEqual(materialIds, ["bogus-bubble-mat", "bogus-mask-mat", "bogus-sfx-mat", "bogus-transition-mat"]);
+        for (const i of unknown) {
+          assert.equal(i.severity, "info");
+          assert.equal(i.fixable, false);
+        }
+        assert.equal(r.json.summary.errors, 0);
+        assert.equal(r.json.summary.warnings, 0);
+        assert.equal(r.status, 0);
+      });
+    });
+
+    describe("passes on known transition/mask/sfx/bubble ids", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("accepts enum-table ids and the inline bubble catalogue", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        // From enums.json capcut: transitions "Montage Snippets", masks "Split"
+        // (resource_id only, like real mask materials), audio_effects "Big House".
+        draft.materials.transitions = [
+          {
+            id: "enum-transition-mat",
+            name: "Montage Snippets",
+            type: "transition",
+            effect_id: "460B9343-B792-4c38-B6F5-6886C031B8D2",
+            resource_id: "7481553072678784311",
+          },
+        ];
+        draft.materials.common_mask = [
+          {
+            id: "enum-mask-mat",
+            name: "Split",
+            type: "mask",
+            resource_id: "7374020197990011409",
+            resource_type: "line",
+          },
+        ];
+        draft.materials.audio_effects = [
+          {
+            id: "enum-sfx-mat",
+            name: "Big House",
+            type: "audio_effect",
+            effect_id: "8954C5C2-A0BB-4915-8CB2-B422445DCB71",
+            resource_id: "7350559836590838274",
+          },
+        ];
+        // From the inline bubble catalogue (rectangle) — pins the
+        // bubbleCatalogue() registration in knownEffectIds().
+        draft.materials.filters = [
+          {
+            id: "catalogue-bubble-mat",
+            name: "Rectangle",
+            type: "text_shape",
+            effect_id: "7137268628230638087",
+            resource_id: "7137268628230638087",
+          },
+        ];
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.ok(
+          !r.json.issues.some((i) => i.code === "unknown-effect-slug"),
+          `expected no unknown-effect-slug; got: ${JSON.stringify(r.json.issues)}`,
+        );
+      });
+    });
+
+    describe("CLI-written decorations never self-flag", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("transition + mask + sfx + bubble applied via CLI lint clean", () => {
+        const videoSegs = spawnCli(["segments", fix.path, "--track", "video"]).json ?? [];
+        assert.ok(videoSegs.length >= 2, "fixture should have two video segments");
+        const t = spawnCli(["transition", fix.path, videoSegs[0].id.slice(0, 8), "montage-snippets"]);
+        assert.equal(t.status, 0, `transition failed: ${t.stderr}`);
+        const m = spawnCli(["mask", fix.path, videoSegs[0].id.slice(0, 8), "circle"]);
+        assert.equal(m.status, 0, `mask failed: ${m.stderr}`);
+        const s = spawnCli(["add-sfx", fix.path, "big-house", "1s", "2s"]);
+        assert.equal(s.status, 0, `add-sfx failed: ${s.stderr}`);
+        const texts = spawnCli(["texts", fix.path]).json ?? [];
+        assert.ok(texts.length > 0, "fixture should have text segments");
+        const b = spawnCli(["bubble-text", fix.path, texts[0].id.slice(0, 8), "--bubble", "rectangle"]);
+        assert.equal(b.status, 0, `bubble-text failed: ${b.stderr}`);
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.ok(
+          !r.json.issues.some((i) => i.code === "unknown-effect-slug" || i.code === "unknown-font-id"),
+          `CLI-written materials must not self-flag; got: ${JSON.stringify(r.json.issues)}`,
+        );
+      });
+    });
+  });
+
+  describe("unknown-font-id detection", () => {
+    // Orphan text materials (no segment references them): the font check scans
+    // materials.texts directly, and an unreferenced material triggers no
+    // missing-material or caption rules.
+    function fontMat(id, extra) {
+      return { id, type: "text", font_size: 15, text_color: "#FFFFFF", alignment: 1, ...extra };
+    }
+
+    describe("flags a font id missing from the bundled table", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("reports one info issue and keeps exit code 0", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.texts.push(
+          fontMat("bogus-font-mat", {
+            content: JSON.stringify({
+              text: "hi",
+              styles: [{ font: { id: "9999999999999999998", path: "/nonexistent/font.ttf" } }],
+            }),
+          }),
+        );
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        const fonts = r.json.issues.filter((i) => i.code === "unknown-font-id");
+        assert.equal(fonts.length, 1, `expected 1 unknown-font-id issue; got: ${JSON.stringify(r.json.issues)}`);
+        assert.equal(fonts[0].severity, "info");
+        assert.equal(fonts[0].fixable, false);
+        assert.equal(fonts[0].location.material_id, "bogus-font-mat");
+        assert.equal(r.json.summary.errors, 0);
+        assert.equal(r.json.summary.warnings, 0);
+        assert.equal(r.status, 0);
+      });
+    });
+
+    describe("passes on known jianying font ids", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("accepts both resource_id (span style) and effect_id (flat field) forms", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.texts.push(
+          // jianying fonts CC-Captial resource_id, span-style form.
+          fontMat("known-font-span-mat", {
+            content: JSON.stringify({ text: "hi", styles: [{ font: { id: "7418508570066424330" } }] }),
+          }),
+          // jianying fonts CC-Captial effect_id, flat-field form.
+          fontMat("known-font-flat-mat", {
+            content: JSON.stringify({ text: "hi", styles: [] }),
+            font_id: "84086581",
+          }),
+        );
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.ok(
+          !r.json.issues.some((i) => i.code === "unknown-font-id"),
+          `expected no unknown-font-id; got: ${JSON.stringify(r.json.issues)}`,
+        );
+      });
+    });
+
+    describe("resolvable font path silences the unknown id", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("skips when the path exists, reports again under --no-check-paths", () => {
+        const fontFile = join(fix.dir, "local-font.ttf");
+        writeFileSync(fontFile, "not really a font");
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.texts.push(
+          fontMat("local-font-mat", {
+            content: JSON.stringify({
+              text: "hi",
+              styles: [{ font: { id: "9999999999999999997", path: fontFile } }],
+            }),
+          }),
+        );
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const withPaths = spawnCli(["lint", fix.path]);
+        assert.ok(
+          !withPaths.json.issues.some((i) => i.code === "unknown-font-id"),
+          `on-disk font path should silence the check; got: ${JSON.stringify(withPaths.json.issues)}`,
+        );
+
+        // --no-check-paths keeps lint fs-free: only the id-table verdict remains.
+        const noPaths = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.equal(noPaths.json.issues.filter((i) => i.code === "unknown-font-id").length, 1);
+      });
+    });
+
+    describe("per-material granularity", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("emits one issue per material even when every span repeats the font", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.texts.push(
+          fontMat("karaoke-font-mat", {
+            content: JSON.stringify({
+              text: "one two three",
+              styles: [
+                { font: { id: "9999999999999999996" } },
+                { font: { id: "9999999999999999996" } },
+                { font: { id: "9999999999999999996" } },
+              ],
+            }),
+          }),
+        );
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.equal(r.json.issues.filter((i) => i.code === "unknown-font-id").length, 1);
+      });
+    });
+
+    describe("no font set", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("stays silent on materials without any font id", () => {
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.ok(
+          !r.json.issues.some((i) => i.code === "unknown-font-id"),
+          `fixture has no font ids; got: ${JSON.stringify(r.json.issues)}`,
+        );
+      });
+    });
+
+    describe("malformed content", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("still flags via the flat font_id field and does not crash", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.texts.push(
+          fontMat("broken-content-mat", { content: "not-json", font_id: "9999999999999999995" }),
+        );
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.equal(r.status, 0);
+        const fonts = r.json.issues.filter((i) => i.code === "unknown-font-id");
+        assert.equal(fonts.length, 1);
+        assert.equal(fonts[0].location.material_id, "broken-content-mat");
+      });
+    });
+
+    describe("--fix neutrality for new codes", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("never claims to fix unknown-effect-slug or unknown-font-id", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        draft.materials.transitions = [
+          {
+            id: "fixrun-transition-mat",
+            name: "Stale",
+            type: "transition",
+            effect_id: "1111111111111111119",
+            resource_id: "1111111111111111119",
+          },
+        ];
+        draft.materials.texts.push(
+          fontMat("fixrun-font-mat", {
+            content: JSON.stringify({ text: "hi", styles: [{ font: { id: "9999999999999999994" } }] }),
+          }),
+        );
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
+        for (const code of ["unknown-effect-slug", "unknown-font-id"]) {
+          assert.ok(
+            !r.json.fixed.some((i) => i.code === code),
+            `${code} must never appear in fixed[]; got: ${JSON.stringify(r.json.fixed)}`,
+          );
+          assert.ok(
+            r.json.issues.some((i) => i.code === code),
+            `${code} must remain reported after --fix; got: ${JSON.stringify(r.json.issues)}`,
+          );
+        }
       });
     });
   });
