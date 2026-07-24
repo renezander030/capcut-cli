@@ -72,7 +72,7 @@ export const GLOBAL_OPTION_SPECS: OptionSpec[] = [
     type: "boolean",
     required: false,
     default: false,
-    description: "Override editor-running and changed-on-disk safety checks.",
+    description: "Override editor-running, changed-on-disk, and version-boundary safety checks.",
   },
 ];
 

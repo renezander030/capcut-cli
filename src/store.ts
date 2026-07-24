@@ -5,6 +5,7 @@ import { platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
+import { assessWriteSafety, atLeast } from "./version.js";
 
 const STANDARD_FILES = ["draft_content.json", "draft_info.json", "draft_meta_info.json", "template-2.tmp"] as const;
 
@@ -42,6 +43,7 @@ export interface DraftStoreReport {
   version: string | null;
   modern_storage: boolean;
   diverged: boolean;
+  write_guard: "ok" | "warn" | "refuse";
   editor_running: string[];
   candidates: Array<{
     file: string;
@@ -158,23 +160,6 @@ function parseCandidate(path: string): DraftCandidate {
       error: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-function versionTuple(version: string | null): number[] {
-  return (version ?? "")
-    .split(".")
-    .map((part) => Number.parseInt(part, 10))
-    .filter(Number.isFinite);
-}
-
-function atLeast(version: string | null, wanted: string): boolean {
-  const a = versionTuple(version);
-  const b = versionTuple(wanted);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const diff = (a[i] ?? 0) - (b[i] ?? 0);
-    if (diff !== 0) return diff > 0;
-  }
-  return true;
 }
 
 function candidatePaths(input: string): { projectDir: string; requested: string | null; paths: string[] } {
@@ -371,6 +356,18 @@ export function planTimelineSync(input: string): TimelineSyncResult {
   const store = discoverDraftStore(input);
   const canonical = store.targets.find((candidate) => candidate.name === "draft_content.json");
   if (!canonical?.draft) {
+    // draft_info-primary layout: reported as the primary project file on newer
+    // Mac builds. Messaging only — promoting draft_info.json to a first-class
+    // sync canonical needs a real fixture first.
+    if (store.targets.some((candidate) => candidate.name === "draft_info.json" && candidate.draft)) {
+      throw new Error(
+        "This project has no readable draft_content.json; its timeline lives in draft_info.json " +
+          "(reported as the primary project file on newer Mac builds). sync-timelines reconciles mirrors " +
+          "FROM draft_content.json and cannot run here. Normal edit commands can target the draft_info.json " +
+          "directly; run `capcut diagnose <project>` and consider contributing a fixture: " +
+          "`capcut fixture <project> --out <dir>`.",
+      );
+    }
     throw new Error(
       "sync-timelines needs a readable draft_content.json (the canonical timeline source). " +
         "Run `capcut diagnose <project>` to inspect what is on disk.",
@@ -433,7 +430,11 @@ export function planTimelineSync(input: string): TimelineSyncResult {
 export function diagnoseDraftStore(input: string): DraftStoreReport {
   const store = discoverDraftStore(input);
   const running = editorProcesses();
+  const safety = store.canonical.draft ? assessWriteSafety(store.canonical.draft, store.version) : null;
   const actions: string[] = [];
+  if (safety?.action === "refuse") {
+    actions.push(`Version boundary: mutating commands will refuse without --force-write. ${safety.reasons.join(" ")}`);
+  }
   if (store.diverged)
     actions.push(
       "Timeline files diverge. Close CapCut and back up the project folder, then run `capcut sync-timelines <project>` " +
@@ -461,6 +462,7 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
     version: store.version,
     modern_storage: store.modernStorage,
     diverged: store.diverged,
+    write_guard: safety?.action ?? "ok",
     editor_running: running,
     candidates: store.candidates.map((candidate) => ({
       file: candidate.name,

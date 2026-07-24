@@ -115,7 +115,7 @@ import { collapseKaraokeRuns, cueWords, parseSrt, renderSrt, renderVtt, type Seg
 import { diagnoseDraftStore, discoverDraftStore, editorProcesses, planTimelineSync } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import { translateDraft } from "./translate.js";
-import { detectVersion } from "./version.js";
+import { assessWriteSafety, detectVersion } from "./version.js";
 
 export const COMMANDS = [
   "info",
@@ -207,7 +207,8 @@ Global flags:
   -q, --quiet     No output on success, exit code only (write commands)
   --dry-run       Preview a mutating command: print the result (with
                   "dryRun":true) but leave the draft and its .bak untouched
-  --force-write   Override editor-running and changed-on-disk safety checks
+  --force-write   Override editor-running, changed-on-disk, and
+                  version-boundary safety checks
   --jianying      Use JianYing enum namespace (default: CapCut) for
                   transition, mask, text-anim, image-anim, add-effect, enums
 
@@ -2485,9 +2486,12 @@ function cmdVersion(draft: Draft, flags: Flags): void {
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
     console.log(`OS:           ${v.os ?? "(unknown)"}`);
     console.log(`Support:      ${v.support.status}`);
+    console.log(`Evidence:     ${v.support.evidence}`);
+    console.log(`Write guard:  ${v.support.write_guard}${v.support.beyond_known_range ? " (beyond known range)" : ""}`);
     console.log(`Mask field:   ${v.schema.mask_field}`);
     console.log(`Text-ranges:  ${v.schema.has_text_ranges ? "yes" : "no"}`);
     console.log(`Audio fades:  ${v.schema.has_audio_fades ? "yes" : "no"}`);
+    console.log(`Schema int:   ${v.schema.schema_int ?? "(absent)"}`);
     if (v.support.notes.length > 0) {
       console.log("");
       for (const n of v.support.notes) console.log(`  - ${n}`);
@@ -3023,6 +3027,15 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     warnUnreconcilable();
     return 0;
+  }
+
+  // Write-time version boundary: --apply writes mirrors directly (it bypasses
+  // saveDraft), so it re-runs the same guard. plan.version covers every
+  // readable candidate, including a mirror written by a newer app build.
+  const safety = assessWriteSafety(canonicalDraft, plan.version);
+  if (safety.action === "refuse" && !flags.forceWrite) die(safety.reasons.join("\n"));
+  if (safety.action === "warn" || (safety.action === "refuse" && flags.forceWrite)) {
+    process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
   }
 
   // Optimistic concurrency: neither the canonical source nor a mirror we are

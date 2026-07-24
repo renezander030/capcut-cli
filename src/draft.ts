@@ -22,6 +22,7 @@ import {
   isManagedDraftPath,
   serializeDraftCandidate,
 } from "./store.js";
+import { assessWriteSafety } from "./version.js";
 
 export interface Timerange {
   start: number;
@@ -279,6 +280,11 @@ export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, opti
 
 export function saveDraft(filePath: string, draft: Draft, options: { backup?: boolean } = {}): void {
   if (dryRun) {
+    // Version guard, warning only: dry-run writes nothing, so it never blocks,
+    // but the WARNING still previews what a real write would do. Draft-only
+    // assessment (no store discovery) keeps dry-run free of extra I/O.
+    const safety = assessWriteSafety(draft, null);
+    if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
     // Normalize in memory (so any read-back is consistent) but write nothing.
     sortTracks(draft);
     return;
@@ -296,6 +302,19 @@ export function saveDraft(filePath: string, draft: Draft, options: { backup?: bo
           "or pass --force-write if you accept that the app may overwrite the change.",
       );
     }
+  }
+
+  // Write-time version boundary: refuse when the draft's detected version or
+  // schema generation is beyond the registry's evidence or known-broken (new
+  // app builds are reported to reject tool-written drafts as corrupted).
+  // store.version covers every readable sibling, so a mirror written by a
+  // newer app build trips the guard too. Markerless drafts (capcut create
+  // output) never trigger. --force-write overrides, but the WARNING still
+  // lands on stderr so a forced write is never silent.
+  const safety = assessWriteSafety(draft, store.version);
+  if (safety.action === "refuse" && !forceWrite) throw new Error(safety.reasons.join("\n"));
+  if (safety.action === "warn" || (safety.action === "refuse" && forceWrite)) {
+    process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
   }
 
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);

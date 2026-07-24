@@ -20,15 +20,16 @@ Run `capcut version <project>` for schema flags and `capcut diagnose <project> -
 | 6.5–8.0 | expected-compatible | unverified | No committed app-created fixtures. Enum/schema changes appear additive. |
 | 8.7 Windows | reported + synthetic-tested | adapter shipped, real validation pending | Issue #35 reports that `draft_content.json` edits may be ignored in favour of `template-2.tmp` / `draft_meta_info.json`. v0.11 discovers nested/string JSON timeline envelopes, selects modern storage, synchronizes every readable target, and provides `diagnose --bundle` and `fixture --out` (one-command sanitized bundle). v0.13 adds `sync-timelines` to reconcile an already-drifted mirror (plan by default, `--apply` to write); `diagnose` names it as the remedy. A reporter-provided real folder is still required before marking this fixture-tested. |
 | 9.x | expected-compatible | unverified | `common_masks` may coexist with legacy mask fields. Use `version`, `diagnose`, and `migrate`; do not treat this row as desktop-app verification. |
+| 10.x (Mac and Windows) | reported | write-guarded | New builds are reported to reject tool-written drafts as corrupted ("内容已损坏"; pyJianYingDraft#177, #194 for the JianYing 10.8 counterpart; Mac primary file reported as `draft_info.json`, Jianying-CapCut2XML#4). No fixture exists; mutating commands refuse without `--force-write`. Fixture wanted — see the write guard section below. |
 
-There is no blanket “6.x–9.x tested” claim. Only versions with committed fixtures receive that label.
+There is no blanket “6.x–9.x tested” claim. Only versions with committed fixtures receive that label. The `capcut version` registry mirrors this table: 6.2.8 reports `fixture-tested`, 8.7.0 `synthetic-tested`, and 6.5.0/7.0.0/8.0.0/9.0.0 report `untested` + `expected-compatible` rather than a tested claim.
 
 ## JianYing (`platform.app_source == "lv"`)
 
 | Version | Evidence | Status | Notes |
 |---|---|---|---|
 | 5.9.x | community-reported | expected-compatible | Last widely used plaintext line; no sanitized app-created fixture is currently committed. |
-| 6.0+ | reported | known-broken for encrypted files | `capcut decrypt` detects encryption and explains the workaround; it does not decrypt the file. Plaintext/exported variants can still be inspected normally. |
+| 6.0+ | reported | known-broken for encrypted files | `capcut decrypt` detects encryption and explains the workaround; it does not decrypt the file. Plaintext/exported variants can still be inspected normally, but the write guard refuses mutating writes even on plaintext variants without `--force-write` — the 6.0+ app is the encrypted-draft era and a plaintext write may be ignored or shown as corrupted. |
 
 ## v0.11 storage and write safety
 
@@ -42,6 +43,23 @@ There is no blanket “6.x–9.x tested” claim. Only versions with committed f
 It recognizes a timeline at the root or inside a shallow object/string JSON envelope. For CapCut 8.7+, readable `template-2.tmp` / `draft_meta_info.json` timelines take precedence; older versions retain the content/info preference. Every readable timeline target is synchronized by one atomic save.
 
 Writes use same-directory temporary files, fsync, and rename. Before committing, the CLI refuses if a target changed since it was loaded. Managed CapCut/JianYing draft paths are also protected while the desktop editor is detected. `--force-write` is an explicit override, not a default recovery path.
+
+## Write-time version guard
+
+Every mutating command (the `saveDraft` path, plus `sync-timelines --apply`, which writes mirrors directly) assesses the draft's version markers before writing. The effective version is the numeric max of `platform.app_version`, `last_modified_platform.app_version`, and the newest readable sibling file, so a mirror written by a newer app build trips the guard too. First matching row wins; a missing or unparseable marker simply never triggers its row:
+
+| Condition | Action |
+|---|---|
+| JianYing effective version >= 6.0 (encrypted-draft era) | refuse |
+| CapCut effective version beyond the known range (> 9.x) | refuse |
+| Top-level `version` schema integer > 360000 | refuse |
+| Unrecognized `app_source` that carries version markers | warn, then write |
+| Top-level `version` schema integer older than 360000 | warn, then write |
+| Everything else — including markerless CLI-created drafts | write normally |
+
+The schema-integer boundary (360000) is the constant observed across all known real CapCut 8.x fixtures in a sanitized reference corpus. Evidence level: **reported** — those fixtures are not committed in this repo, so a larger value only means "a generation nothing here has evidence for", not a verified incompatibility.
+
+`--force-write` overrides a refusal, but the WARNING still lands on stderr so a forced write is never silent. `--dry-run` never blocks (it writes nothing) and still prints the WARNING. Refusal messages end with a fixture-collection call to action: if the project opens fine in your app, `capcut fixture <project> --out <dir>` builds a redacted bundle that can move the version to fixture-tested. `restore` and read-only commands are never gated — restoring a backup is the escape hatch, not the hazard. The guard invents no version markers: `capcut create` output stays markerless and is never stamped with a `platform` or `version` field.
 
 ## Schema feature detection
 
