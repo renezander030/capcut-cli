@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -65,7 +65,7 @@
       "type": "boolean",
       "required": false,
       "default": false,
-      "description": "Override editor-running and changed-on-disk safety checks."
+      "description": "Override editor-running, changed-on-disk, and version-boundary safety checks."
     }
   ],
   "commands": [
@@ -1114,6 +1114,53 @@
       }
     },
     {
+      "name": "remove",
+      "summary": "Remove a segment, its emptied track, and the materials that orphans.",
+      "usage": "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "segment-id",
+          "type": "id",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "name": "keep_track",
+          "flags": [
+            "--keep-track"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Keep the segment's track even when it becomes empty."
+        },
+        {
+          "name": "keep_materials",
+          "flags": [
+            "--keep-materials"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Skip the orphan-material sweep (run prune later)."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "keyframe",
       "summary": "Add a keyframe (position/scale/rotation/alpha/volume); single or --batch.",
       "usage": "capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] | --batch",
@@ -2053,7 +2100,7 @@
     {
       "name": "add-filter",
       "summary": "Add a colour filter on its own track.",
-      "usage": "capcut add-filter <project> <slug> <start> <duration> [options]",
+      "usage": "capcut add-filter <project> <slug-or-name> (<start> <duration> | --full) [options]",
       "positionals": [
         {
           "name": "project",
@@ -2061,7 +2108,7 @@
           "required": true
         },
         {
-          "name": "slug",
+          "name": "slug-or-name",
           "type": "string",
           "required": true
         },
@@ -2085,6 +2132,43 @@
           "type": "string",
           "required": false,
           "description": "Target track name."
+        },
+        {
+          "name": "resource_id",
+          "flags": [
+            "--resource-id"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Raw catalogue resource ID (skips slug lookup)."
+        },
+        {
+          "name": "effect_id",
+          "flags": [
+            "--effect-id"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Raw effect ID (defaults to --resource-id)."
+        },
+        {
+          "name": "intensity",
+          "flags": [
+            "--intensity"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Filter strength 0-1 (default 1)."
+        },
+        {
+          "name": "full",
+          "flags": [
+            "--full"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Apply to the whole timeline (start 0, duration = draft duration).",
+          "default": false
         }
       ],
       "mutates": true,
@@ -2157,7 +2241,7 @@
     {
       "name": "add-effect",
       "summary": "Add a scene effect on its own track.",
-      "usage": "capcut add-effect <project> <slug> <start> <duration> [options]",
+      "usage": "capcut add-effect <project> <slug-or-name> (<start> <duration> | --full) [options]",
       "positionals": [
         {
           "name": "project",
@@ -2165,7 +2249,7 @@
           "required": true
         },
         {
-          "name": "slug",
+          "name": "slug-or-name",
           "type": "string",
           "required": true
         },
@@ -2198,6 +2282,52 @@
           "type": "json",
           "required": false,
           "description": "Effect parameter array."
+        },
+        {
+          "name": "resource_id",
+          "flags": [
+            "--resource-id"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Raw catalogue resource ID (skips slug lookup)."
+        },
+        {
+          "name": "effect_id",
+          "flags": [
+            "--effect-id"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Raw effect ID (defaults to --resource-id)."
+        },
+        {
+          "name": "intensity",
+          "flags": [
+            "--intensity"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Effect strength 0-1 (default 1)."
+        },
+        {
+          "name": "full",
+          "flags": [
+            "--full"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Apply to the whole timeline (start 0, duration = draft duration).",
+          "default": false
+        },
+        {
+          "name": "bind",
+          "flags": [
+            "--bind"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Experimental: attach to one segment instead of the whole frame (segment ID)."
         }
       ],
       "mutates": true,
