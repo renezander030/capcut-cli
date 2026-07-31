@@ -4,6 +4,7 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { effectCatalogue, filterCatalogue } from "./factory.js";
+import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
 
@@ -14,6 +15,10 @@ export interface LintIssue {
   code: string;
   message: string;
   fixable: boolean;
+  /** Concrete remediation one-liner for report-only issues (the user runs it
+   * deliberately — unlike --fix, it may touch content or need a human input
+   * such as the replacement media directory). */
+  suggested_command?: string;
   location?: {
     track?: string;
     segment_id?: string;
@@ -26,12 +31,21 @@ export interface LintIssue {
 // is necessary but not sufficient for fixable:true — line-too-long and
 // caption-gap-too-small are additionally stamped per instance, so an issue is
 // only marked fixable when fixDraft can actually clear that exact instance.
+// dangling-companion-ref is always safely fixable: the repair drops a ref
+// that points at nothing — never a segment, never a material.
 //
 // Deliberately NOT here: missing-material and missing-file (the only safe
-// repair would delete user timeline content or guess a path — report-only;
-// `relink` and `replace` are the intended repairs), and unknown-effect-slug
-// (repair would mean guessing which resource the author meant).
-const FIXABLE_CODES = new Set<string>(["cue-too-long", "caption-overlap", "caption-gap-too-small", "line-too-long"]);
+// repair would delete user timeline content or guess a path — report-only,
+// each carrying a suggested_command; `remove`, `relink`, and `replace-media`
+// are the intended deliberate repairs), and unknown-effect-slug (repair
+// would mean guessing which resource the author meant).
+const FIXABLE_CODES = new Set<string>([
+  "cue-too-long",
+  "caption-overlap",
+  "caption-gap-too-small",
+  "line-too-long",
+  "dangling-companion-ref",
+]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
 // draft default. Below roughly one frame (33,333us at 30fps) CapCut cannot
@@ -46,6 +60,10 @@ export interface LintOptions {
   maxCueDurationUs: number;
   minGapBetweenCaptionsUs: number;
   checkLocalPaths: boolean;
+  /** ffprobe local media that exists (VFR/unreadable checks). Best-effort:
+   * silently skipped when ffprobe is unavailable. Default true. */
+  probeMedia?: boolean;
+  ffprobeCmd?: string;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -53,6 +71,7 @@ export const DEFAULT_LINT_OPTIONS: LintOptions = {
   maxCueDurationUs: 7_000_000, // 7s; longer caps are hard to read
   minGapBetweenCaptionsUs: 0, // overlap = error; gap = no rule by default
   checkLocalPaths: true,
+  probeMedia: true,
 };
 
 export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS): LintIssue[] {
@@ -67,7 +86,27 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
         code: "missing-material",
         message: `Segment ${shortId(s.id)} references material ${shortId(s.material_id)} that does not exist in any materials.*`,
         fixable: FIXABLE_CODES.has("missing-material"),
+        suggested_command: `capcut remove <project> ${shortId(s.id)}`,
         location: { track: seg.track.name, segment_id: s.id, material_id: s.material_id },
+      });
+    }
+  }
+
+  // Companion refs that resolve to nothing — the leftover of a partial edit
+  // (hand-edited JSON, an interrupted tool, a material deleted without its
+  // refs). Unlike missing-material this never involves timeline content: the
+  // ref points at nothing, so dropping it is always safe and --fix does.
+  for (const seg of allSegments(draft)) {
+    const s = seg.segment;
+    for (const ref of s.extra_material_refs ?? []) {
+      if (typeof ref !== "string" || ref === "") continue;
+      if (materialExistsAnywhere(draft, ref)) continue;
+      issues.push({
+        severity: "warning",
+        code: "dangling-companion-ref",
+        message: `Segment ${shortId(s.id)} carries companion ref ${shortId(ref)} in extra_material_refs that resolves to no material — the app's behaviour on it is undefined`,
+        fixable: FIXABLE_CODES.has("dangling-companion-ref"),
+        location: { track: seg.track.name, segment_id: s.id, material_id: ref },
       });
     }
   }
@@ -135,9 +174,13 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
   }
 
   if (opts.checkLocalPaths) {
+    // Media probing (VFR / unreadable) is best-effort: only files that exist,
+    // only when ffprobe runs — a host without ffprobe lints exactly as before.
+    const probeCmd = opts.ffprobeCmd ?? "ffprobe";
+    const shouldProbe = (opts.probeMedia ?? true) && ffprobeAvailable(probeCmd);
     for (const kind of ["videos", "audios"] as const) {
       for (const mat of draft.materials[kind] ?? []) {
-        const m = mat as { id: string; path?: string };
+        const m = mat as { id: string; path?: string; type?: string };
         if (typeof m.path !== "string" || m.path.length === 0) continue;
         if (m.path.startsWith("http://") || m.path.startsWith("https://")) continue;
         if (!fileExists(m.path)) {
@@ -146,6 +189,32 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
             code: "missing-file",
             message: `Material ${shortId(m.id)} (${kind}) references file that doesn't exist: ${m.path}`,
             fixable: FIXABLE_CODES.has("missing-file"),
+            suggested_command: `capcut relink <project> --dir <directory-containing-the-files>`,
+            location: { material_id: m.id, path: m.path },
+          });
+          continue;
+        }
+        if (!shouldProbe) continue;
+        const probe = probeMedia(m.path, probeCmd);
+        if (probe === null) {
+          issues.push({
+            severity: "info",
+            code: "media-unreadable",
+            message: `Material ${shortId(m.id)} (${kind}) exists but ffprobe cannot parse it: ${m.path} — the app import or render may fail on it`,
+            fixable: FIXABLE_CODES.has("media-unreadable"),
+            suggested_command: `ffmpeg -i "${m.path}" -c:v libx264 -c:a aac <reencoded>.mp4`,
+            location: { material_id: m.id, path: m.path },
+          });
+        } else if (kind === "videos" && m.type !== "photo" && probe.hasVideo && isVfr(probe)) {
+          issues.push({
+            severity: "info",
+            code: "vfr-media",
+            message:
+              `Material ${shortId(m.id)} references variable-frame-rate media (avg ${probe.avgFps?.toFixed(2)} fps ` +
+              `vs base ${probe.baseFps?.toFixed(2)}): ${m.path} — preview/render timing can drift and frame-based ` +
+              "pipelines fail on missing frames; normalize to constant frame rate before editing",
+            fixable: FIXABLE_CODES.has("vfr-media"),
+            suggested_command: `ffmpeg -i "${m.path}" -fps_mode cfr -r 30 -c:a copy <normalized>.mp4`,
             location: { material_id: m.id, path: m.path },
           });
         }
@@ -435,6 +504,18 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
           }
         }
       }
+    }
+  }
+
+  // Pass 4b (order-independent of the caption passes): drop dangling
+  // companion refs — an extra_material_refs entry that resolves to no
+  // material. Removes the REF only, never a segment or a material.
+  for (const track of draft.tracks) {
+    for (const s of track.segments) {
+      if (!Array.isArray(s.extra_material_refs)) continue;
+      s.extra_material_refs = s.extra_material_refs.filter(
+        (ref) => typeof ref === "string" && ref !== "" && materialExistsAnywhere(draft, ref),
+      );
     }
   }
 

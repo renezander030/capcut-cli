@@ -2768,6 +2768,8 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
     minGapBetweenCaptionsUs:
       flags.minGapMs !== undefined ? flags.minGapMs * 1000 : DEFAULT_LINT_OPTIONS.minGapBetweenCaptionsUs,
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
+    probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
+    ffprobeCmd: flags.ffprobeCmd,
   };
 
   if (flags.fix) {
@@ -2788,6 +2790,7 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
         for (const i of remaining) {
           const loc = i.location?.segment_id ? ` [${i.location.segment_id.slice(0, 8)}]` : "";
           console.log(`${i.severity.toUpperCase().padEnd(7)} ${i.code.padEnd(22)}${loc}  ${i.message}`);
+          if (i.suggested_command) console.log(`        try: ${i.suggested_command}`);
         }
         console.log("");
         console.log(
@@ -2810,6 +2813,7 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
       for (const i of issues) {
         const loc = i.location?.segment_id ? ` [${i.location.segment_id.slice(0, 8)}]` : "";
         console.log(`${i.severity.toUpperCase().padEnd(7)} ${i.code.padEnd(22)}${loc}  ${i.message}`);
+        if (i.suggested_command) console.log(`        try: ${i.suggested_command}`);
       }
       console.log("");
       console.log(`${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`);
