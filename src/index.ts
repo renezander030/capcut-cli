@@ -105,7 +105,15 @@ import {
 } from "./factory.js";
 import { sanitizeDraftBundle } from "./fixture.js";
 import { draftToOtio } from "./interchange.js";
-import { DEFAULT_LINT_OPTIONS, fixDraft, type LintOptions, lintDraft, lintExitCode, summarize } from "./lint.js";
+import {
+  DEFAULT_LINT_OPTIONS,
+  fixDraft,
+  knownEffectIds,
+  type LintOptions,
+  lintDraft,
+  lintExitCode,
+  summarize,
+} from "./lint.js";
 import { migrateDraft } from "./migrate.js";
 import { applyTextPreset, extractTextPreset, loadPresetFile, type TextStylePreset } from "./preset.js";
 import { probeMedia } from "./probe.js";
@@ -119,6 +127,7 @@ import { collapseKaraokeRuns, cueWords, parseSrt, renderSrt, renderVtt, type Seg
 import { diagnoseDraftStore, discoverDraftStore, editorProcesses, planTimelineSync } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import { translateDraft } from "./translate.js";
+import { harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } from "./user-enums.js";
 import { assessWriteSafety, detectVersion } from "./version.js";
 
 export const COMMANDS = [
@@ -186,6 +195,7 @@ export const COMMANDS = [
   "describe",
   "completions",
   "enums",
+  "harvest-enums",
   "doctor",
   "diagnose",
   "fixture",
@@ -377,6 +387,12 @@ Edit:
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
 
 Maintenance & inspection:
+  harvest-enums <project> [--apply] [--catalogue <path>]
+             Learn store resource ids from an app-authored draft into the
+             per-user catalogue (~/.config/capcut-cli/user-enums.json):
+             harvested ids stop lint-flagging as unknown, and named effects/
+             filters/transitions/masks/sfx become writable slugs. Plan by
+             default; --apply writes the catalogue (never the draft).
   prune      <project>                          Remove materials no segment references
   register   <project-dir> [--apply] [--drafts <dir>]  Repair an EXISTING draft's
              registration metadata so the CapCut app lists it again (init only
@@ -741,6 +757,7 @@ interface Flags {
   rectWidth?: number;
   roundCorner?: number;
   maskField?: "masks" | "common_mask" | "common_masks";
+  catalogue?: string;
   // text-style
   alpha?: number;
   vertical?: boolean;
@@ -1020,6 +1037,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
         throw new Error("--mask-field must be masks|common_mask|common_masks");
       }
       flags.maskField = field as Flags["maskField"];
+    } else if (a === "--catalogue" && i + 1 < args.length) {
+      flags.catalogue = args[++i];
     } else if (a === "--alpha" && i + 1 < args.length) {
       flags.alpha = parseFloat(args[++i]);
     } else if (a === "--vertical") {
@@ -1581,6 +1600,54 @@ function cmdOpacity(draft: Draft, filePath: string, segId: string, alphaStr: str
   result.segment.clip.alpha = alpha;
   if (save) saveDraft(filePath, draft);
   out({ ok: true, id: result.segment.id, old_opacity: old, new_opacity: alpha }, flags);
+}
+
+// `harvest-enums` reads effect/filter/transition/mask/sfx/font resource ids
+// out of a draft (typically app-authored, using store resources the bundled
+// table cannot know) into the per-user catalogue: every harvested id joins
+// lint's known-id set, and named entries from cleanly-mapped kinds become
+// writable slugs (GuanYixuan/pyCapCut#12). Plan by default; --apply writes
+// the catalogue file — the draft itself is never written.
+function cmdHarvestEnums(draft: Draft, flags: Flags): void {
+  const cataloguePath = userEnumsPath(flags.catalogue);
+  const { error } = loadUserEnums(cataloguePath);
+  const { found, known, candidates } = harvestDraft(draft, knownEffectIds());
+  const writable = candidates.filter((candidate) => candidate.slug !== "").length;
+  const base = {
+    catalogue: cataloguePath,
+    catalogue_error: error,
+    found,
+    known,
+    new: candidates,
+    writable_slugs: writable,
+    id_only: candidates.length - writable,
+  };
+  if (!flags.apply) {
+    out({ ok: error === null, applied: false, ...base }, flags);
+    if (!flags.quiet) {
+      process.stderr.write(
+        candidates.length === 0
+          ? "No new resource ids — every id in this draft is already known.\n"
+          : `Would add ${candidates.length} entries (${writable} writable slugs). Re-run with --apply to write.\n`,
+      );
+      if (error) process.stderr.write(`WARNING: ${error}\n`);
+    }
+    return;
+  }
+  if (error) {
+    die(
+      `Refusing to rewrite a catalogue that did not parse (${error}). ` +
+        `Fix or remove ${cataloguePath}, then re-run.`,
+    );
+  }
+  if (isDryRun()) {
+    out({ ok: true, applied: false, would_add: candidates.length, ...base }, flags);
+    if (!flags.quiet) process.stderr.write("Dry run — nothing was written.\n");
+    return;
+  }
+  const { added, duplicates, total } = mergeUserEnums(cataloguePath, candidates);
+  out({ ok: true, applied: true, added, duplicates, total, ...base }, flags);
+  if (!flags.quiet) process.stderr.write(`Catalogue updated: ${cataloguePath} (+${added}, ${total} total)\n`);
 }
 
 // Read-only NLE handoff: the draft's video/audio cut as OpenTimelineIO JSON.
@@ -3564,6 +3631,8 @@ const SUMMARIES: Record<string, string> = {
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
   "export-timeline":
     "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
+  "harvest-enums":
+    "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
   materials: "List material types and counts; filter with --type.",
   segment: "Full detail for one segment and its material.",
   material: "Full detail for one material.",
@@ -4263,6 +4332,9 @@ async function main(): Promise<void> {
       break;
     case "export-timeline":
       cmdExportTimeline(draft, flags);
+      break;
+    case "harvest-enums":
+      cmdHarvestEnums(draft, flags);
       break;
     case "materials":
       cmdMaterials(draft, flags);

@@ -212,6 +212,7 @@ const usages = {
   describe: "capcut describe",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
+  "harvest-enums": "capcut harvest-enums <project> [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
   fixture: "capcut fixture <project> --out <dir>",
@@ -454,6 +455,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
+  "harvest-enums": [
+    option("apply", ["--apply"], "boolean", "Write the new entries into the user catalogue (default: plan only)."),
+    option(
+      "catalogue",
+      ["--catalogue"],
+      "path",
+      "User catalogue file (default: ~/.config/capcut-cli/user-enums.json, or $CAPCUT_CLI_USER_ENUMS).",
+    ),
+  ],
   relink: [
     option("dir", ["--dir"], "path", "Directory containing replacement files."),
     option("from", ["--from"], "path", "Old path prefix."),
@@ -558,11 +568,13 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --full               -> add-filter, add-effect (v0.15 whole-timeline range)
 //   --bind               -> add-effect (v0.15 per-segment attachment)
 //   --mask-field         -> mask (v0.16 explicit mask array variant)
+//   --catalogue          -> harvest-enums (v0.16 user catalogue path)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--apply",
   "--bind",
+  "--catalogue",
   "--color-cycle",
   "--easing",
   "--format",

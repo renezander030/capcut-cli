@@ -4,6 +4,7 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { effectCatalogue, filterCatalogue } from "./factory.js";
+import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
 
 export type Severity = "error" | "warning" | "info";
@@ -318,7 +319,11 @@ const ENUM_CATEGORIES: Category[] = [
 
 let knownIdCache: Set<string> | null = null;
 
-function knownEffectIds(): Set<string> {
+// Exported for harvest-enums, which needs the same known-id set to decide
+// what is genuinely new. Cached per process: the CLI computes it before any
+// catalogue write, so a same-process harvest --apply never reads its own
+// output as already-known.
+export function knownEffectIds(): Set<string> {
   if (knownIdCache) return knownIdCache;
   const ids = new Set<string>();
   const add = (id?: string) => {
@@ -336,6 +341,9 @@ function knownEffectIds(): Set<string> {
     add(e.effect_id);
     add(e.resource_id);
   }
+  // Harvested ids (slug-mapped kinds arrive via listEnum above; id-only kinds
+  // — animations, bubbles, fonts — only here).
+  for (const id of allUserEnumIds()) ids.add(id);
   knownIdCache = ids;
   return ids;
 }
