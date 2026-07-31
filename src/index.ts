@@ -104,6 +104,7 @@ import {
   uuid,
 } from "./factory.js";
 import { sanitizeDraftBundle } from "./fixture.js";
+import { draftToOtio } from "./interchange.js";
 import { DEFAULT_LINT_OPTIONS, fixDraft, type LintOptions, lintDraft, lintExitCode, summarize } from "./lint.js";
 import { migrateDraft } from "./migrate.js";
 import { applyTextPreset, extractTextPreset, loadPresetFile, type TextStylePreset } from "./preset.js";
@@ -135,6 +136,7 @@ export const COMMANDS = [
   "trim",
   "opacity",
   "export-srt",
+  "export-timeline",
   "materials",
   "segment",
   "material",
@@ -370,6 +372,7 @@ Edit:
              skips the sweep). Recomputes the project duration to the max
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
+  export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
 
@@ -687,6 +690,12 @@ Subtitles (Phase 3):
              Word timings are real where the draft stores them (caption
              --karaoke word segments); elsewhere they are interpolated within
              each cue, weighted by word character length.
+  export-timeline <project> [--out <file.otio>]
+             Export video/audio tracks as OpenTimelineIO JSON (stdout, or
+             --out): clip order, trims, gaps, and speed (LinearTimeWarp) —
+             the exit ramp when an app build rejects the draft. DaVinci
+             Resolve imports .otio natively. Text tracks are skipped with a
+             pointer to export-srt.
 
 Navigation: info → tracks/materials → segments → segment <id>
             info → materials --type X → material <id>
@@ -1572,6 +1581,29 @@ function cmdOpacity(draft: Draft, filePath: string, segId: string, alphaStr: str
   result.segment.clip.alpha = alpha;
   if (save) saveDraft(filePath, draft);
   out({ ok: true, id: result.segment.id, old_opacity: old, new_opacity: alpha }, flags);
+}
+
+// Read-only NLE handoff: the draft's video/audio cut as OpenTimelineIO JSON.
+// Raw document on stdout (pipe-able, like export-srt); --out writes the file
+// and prints a JSON summary instead. Skips are reported on stderr, never
+// silent (text tracks point at export-srt).
+function cmdExportTimeline(draft: Draft, flags: Flags): void {
+  const { doc, stats } = draftToOtio(draft);
+  const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+  if (flags.out) {
+    writeFileSync(flags.out, serialized, "utf-8");
+    out(
+      { ok: true, out: flags.out, tracks: stats.tracks, clips: stats.clips, gaps: stats.gaps, skipped: stats.skipped },
+      flags,
+    );
+  } else {
+    process.stdout.write(serialized);
+  }
+  if (!flags.quiet) {
+    for (const skip of stats.skipped) {
+      process.stderr.write(`skipped track "${skip.track}" (${skip.type}): ${skip.reason}\n`);
+    }
+  }
 }
 
 function cmdExportSrt(draft: Draft, flags: Flags): void {
@@ -3530,6 +3562,8 @@ const SUMMARIES: Record<string, string> = {
   trim: "Trim a segment to a start/duration window.",
   opacity: "Set a segment's opacity (0.0-1.0).",
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
+  "export-timeline":
+    "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
   materials: "List material types and counts; filter with --type.",
   segment: "Full detail for one segment and its material.",
   material: "Full detail for one material.",
@@ -4226,6 +4260,9 @@ async function main(): Promise<void> {
       break;
     case "export-srt":
       cmdExportSrt(draft, flags);
+      break;
+    case "export-timeline":
+      cmdExportTimeline(draft, flags);
       break;
     case "materials":
       cmdMaterials(draft, flags);

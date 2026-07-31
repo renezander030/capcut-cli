@@ -164,6 +164,7 @@ const usages = {
   trim: "capcut trim <project> <id> <start> <duration>",
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
+  "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
   materials: "capcut materials <project> [--type <type>]",
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
@@ -395,6 +396,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     }),
     option("format", ["--format"], "enum", "Subtitle output format.", { values: ["srt", "vtt"], default: "srt" }),
   ],
+  "export-timeline": [OUT],
   "import-srt": [
     TRACK_NAME,
     STYLE_REF,
@@ -643,7 +645,7 @@ const mutating = new Set([
 ]);
 
 const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
-const textOutputs = new Set(["export-srt", "completions"]);
+const textOutputs = new Set(["export-srt", "export-timeline", "completions"]);
 const fileOutputs = new Set(["render", "translate", "compile", "cut", "save-template", "make-preset"]);
 
 function inferType(name: string): ArgumentType {
