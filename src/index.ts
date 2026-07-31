@@ -38,6 +38,7 @@ import {
   imageAnimSlugs,
   KARAOKE_HIGHLIGHT_COLOR,
   keyframeProperties,
+  MASK_FIELDS,
   maskSlugs,
   parseKeyframeValue,
   setBgBlur,
@@ -612,7 +613,8 @@ Translate (v0.4 — multi-language draft clone):
 Migrate (v0.4 — survive JianYing/CapCut version jumps):
   migrate    <project> --from <ver> --to <ver>
              Apply known schema migrations. Implemented: mask <-> common_masks
-             across the JianYing 5.9 / CapCut 9.6 boundary.
+             across the JianYing 5.9 / CapCut 9.6 boundary, consolidating the
+             CapCut-variant common_mask[] into the target array too.
 
 Sound effects + chroma (v0.5):
   add-sfx    <project> <slug> <start> <duration> [options]
@@ -729,6 +731,7 @@ interface Flags {
   invert?: boolean;
   rectWidth?: number;
   roundCorner?: number;
+  maskField?: "masks" | "common_mask" | "common_masks";
   // text-style
   alpha?: number;
   vertical?: boolean;
@@ -1002,6 +1005,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.rectWidth = parseFloat(args[++i]);
     } else if (a === "--round-corner" && i + 1 < args.length) {
       flags.roundCorner = parseFloat(args[++i]);
+    } else if (a === "--mask-field" && i + 1 < args.length) {
+      const field = args[++i];
+      if (!["masks", "common_mask", "common_masks"].includes(field)) {
+        throw new Error("--mask-field must be masks|common_mask|common_masks");
+      }
+      flags.maskField = field as Flags["maskField"];
     } else if (a === "--alpha" && i + 1 < args.length) {
       flags.alpha = parseFloat(args[++i]);
     } else if (a === "--vertical") {
@@ -1951,7 +1960,9 @@ function cmdMask(draft: Draft, filePath: string, positional: string[], flags: Fl
     const found = findSegment(draft, segId);
     if (!found) die(`Segment not found: ${segId}`);
     const seg = found.segment;
-    const masksArr = (draft.materials.common_mask || []) as Array<Record<string, unknown>>;
+    // Strip refs across every mask array variant, not only the CLI's write
+    // target — the mask may have been written by the app or an older CLI.
+    const masksArr = MASK_FIELDS.flatMap((field) => (draft.materials[field] || []) as Array<Record<string, unknown>>);
     const before = (seg.extra_material_refs || []).length;
     seg.extra_material_refs = (seg.extra_material_refs || []).filter(
       (r) => !masksArr.some((m) => (m as { id?: string }).id === r),
@@ -1970,6 +1981,7 @@ function cmdMask(draft: Draft, filePath: string, positional: string[], flags: Fl
     invert: flags.invert,
     rectWidth: flags.rectWidth,
     roundCorner: flags.roundCorner,
+    field: flags.maskField,
   };
   const result = addMask(draft, segId, slug, opts, ns);
   saveDraft(filePath, draft);

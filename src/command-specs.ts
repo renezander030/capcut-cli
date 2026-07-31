@@ -313,6 +313,13 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("invert", ["--invert"], "boolean", "Invert mask."),
     option("rect_width", ["--rect-width"], "number", "Rectangle width."),
     option("round_corner", ["--round-corner"], "number", "Rectangle corner radius."),
+    option(
+      "mask_field",
+      ["--mask-field"],
+      "enum",
+      "Materials array to write the mask into (default: auto — an already-populated variant, else version evidence).",
+      { values: ["masks", "common_mask", "common_masks"] },
+    ),
   ],
   "bg-blur": [option("off", ["--off"], "boolean", "Remove background blur.")],
   "text-style": [...TEXT_STYLE, PRESET],
@@ -548,6 +555,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --keep-track, --keep-materials -> remove
 //   --full               -> add-filter, add-effect (v0.15 whole-timeline range)
 //   --bind               -> add-effect (v0.15 per-segment attachment)
+//   --mask-field         -> mask (v0.16 explicit mask array variant)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -565,6 +573,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keyword-color",
   "--keyword-size",
   "--limit",
+  "--mask-field",
   "--min-gap",
   "--new-track",
   "--preset",

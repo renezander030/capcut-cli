@@ -4,6 +4,7 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { effectCatalogue, filterCatalogue } from "./factory.js";
+import { atLeast } from "./version.js";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -248,6 +249,49 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
       fixable: FIXABLE_CODES.has("unknown-font-id"),
       location: { material_id: m.id ?? "" },
     });
+  }
+
+  // pyJianYingDraft#160: mask materials live in one of three variant arrays
+  // and the app reads exactly one, so entries in a variant the installed build
+  // does not read silently never appear in the UI. Split-across-variants is
+  // flagged for every app; the wrong-single-variant case is flagged only where
+  // the boundary is evidence-backed (JianYing 9.6 renamed masks[] ->
+  // common_masks[]) — CapCut single-variant drafts are never flagged, because
+  // `common_mask` is the CLI's own CapCut-verified write target. Info-severity
+  // and report-only: `capcut migrate` is the repair, and guessing would move
+  // app-authored materials.
+  const maskVariants = ["masks", "common_mask", "common_masks"] as const;
+  const populatedMaskVariants = maskVariants.filter((key) => {
+    const arr = (draft.materials as Record<string, unknown>)[key];
+    return Array.isArray(arr) && arr.length > 0;
+  });
+  if (populatedMaskVariants.length > 1) {
+    issues.push({
+      severity: "info",
+      code: "mask-field-mismatch",
+      message:
+        `Mask materials are split across ${populatedMaskVariants.map((key) => `materials.${key}`).join(" and ")} — ` +
+        "the app reads only one array, so part of the masks will silently not appear. " +
+        "Consolidate with `capcut migrate --from <ver> --to <ver>`",
+      fixable: FIXABLE_CODES.has("mask-field-mismatch"),
+    });
+  } else if (populatedMaskVariants.length === 1 && draft.platform?.app_source === "lv") {
+    const version = draft.platform.app_version ?? null;
+    const actual = populatedMaskVariants[0];
+    if (version) {
+      const expected = atLeast(version, "9.6") ? "common_masks" : "masks";
+      if (actual !== expected) {
+        const hint = expected === "common_masks" ? "--from 5.9 --to 9.6" : "--from 9.6 --to 5.9";
+        issues.push({
+          severity: "info",
+          code: "mask-field-mismatch",
+          message:
+            `Masks live in materials.${actual} but JianYing ${version} reads materials.${expected} — they will ` +
+            `silently not appear in the app (pyJianYingDraft#160). Run \`capcut migrate ${hint}\``,
+          fixable: FIXABLE_CODES.has("mask-field-mismatch"),
+        });
+      }
+    }
   }
 
   return issues;
