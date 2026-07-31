@@ -24,9 +24,9 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **v0.15.0 新增：** 写入时版本护栏，拒绝写入超出已验证范围或已知不兼容的草稿（`--force-write` 可覆盖）、就地删除片段并回收由此孤立的素材（`remove`）、滤镜与特效支持原始资源 ID、强度调节与整条时间线范围（`add-filter`/`add-effect` 的 `--resource-id`、`--intensity`、`--full`）、实验性逐片段绑定（仅 `add-effect` 的 `--bind`），以及 `lint` 未知 slug 检查扩展到转场、蒙版、音效、气泡与字体。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.16.0 新增：** 完整支持较新 Mac 版本的草稿布局（以 `draft_info.json` 为主文件，覆盖编辑命令、`sync-timelines`、`register` 与 `diagnose`）、按版本证据选择蒙版数组并新增 `--mask-field` 与 lint 不匹配检查、把时间线导出为 OpenTimelineIO（`export-timeline`，DaVinci Resolve 可直接导入）、从应用生成的草稿学习商店特效 ID（`harvest-enums`）、`lint` 新增可变帧率与不可读媒体检查并给出具体的 ffmpeg 修复命令，以及安全自动修复悬空素材引用（`lint --fix`）。完整说明见 [更新日志](./CHANGELOG.md)。
 
-> **v0.14.0 新增：** 把片段复制到源轨道上方的叠加轨道（`duplicate`）、为已有草稿修复缺失的注册信息（`register`）、读取并编辑素材裁剪（`crop --ratio | --rect`）、字幕逐词关键词强调与逐条底色轮换（`caption`/`import-srt` 的 `--highlight-words`、`--keyword-size`、`--color-cycle`），以及所有读取路径兼容 UTF-8 BOM。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.15.0 新增：** 写入时版本护栏，拒绝写入超出已验证范围或已知不兼容的草稿（`--force-write` 可覆盖）、就地删除片段并回收由此孤立的素材（`remove`）、滤镜与特效支持原始资源 ID、强度调节与整条时间线范围（`add-filter`/`add-effect` 的 `--resource-id`、`--intensity`、`--full`）、实验性逐片段绑定（仅 `add-effect` 的 `--bind`），以及 `lint` 未知 slug 检查扩展到转场、蒙版、音效、气泡与字体。完整说明见 [更新日志](./CHANGELOG.md)。
 
 ## 安装
 

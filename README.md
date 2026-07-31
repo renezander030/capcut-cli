@@ -24,9 +24,9 @@ JSON in, JSON out: every command reads and writes the local draft store directly
 - **Library** — `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"` (typed, zero-dep)
 - **Queue runner** — `capcut serve` reads JSONL jobs from stdin, for [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **New in v0.15.0:** a write-time version guard that refuses beyond-evidence or known-broken drafts unless `--force-write`, in-place segment deletion with orphaned-material cleanup (`remove`), raw store resource ids, working `--intensity`, and whole-timeline `--full` on `add-filter`/`add-effect`, experimental per-segment `--bind` on `add-effect`, and `lint` unknown-slug coverage extended to transitions, masks, sound effects, bubbles, and fonts. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.16.0:** first-class support for the newer Mac draft layout (`draft_info.json`-primary) across edits, `sync-timelines`, `register`, and `diagnose`, version-aware mask writes with `--mask-field` and a lint mismatch check, the cut exported as OpenTimelineIO (`export-timeline`) for DaVinci Resolve handoff, learning store effect ids from app-authored drafts (`harvest-enums`), VFR and unreadable-media checks in `lint` with concrete ffmpeg fixes, and safe auto-repair of dangling companion refs (`lint --fix`). Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.14.0:** duplicate a segment onto an overlay track above its source (`duplicate`), repair missing draft registration on existing drafts (`register`), read + edit the source-material crop (`crop --ratio | --rect`), per-word keyword emphasis and per-cue colour cycling for captions (`--highlight-words`, `--keyword-size`, `--color-cycle` on `caption`/`import-srt`), and UTF-8 BOM tolerance on every file the CLI reads. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.15.0:** a write-time version guard that refuses beyond-evidence or known-broken drafts unless `--force-write`, in-place segment deletion with orphaned-material cleanup (`remove`), raw store resource ids, working `--intensity`, and whole-timeline `--full` on `add-filter`/`add-effect`, experimental per-segment `--bind` on `add-effect`, and `lint` unknown-slug coverage extended to transitions, masks, sound effects, bubbles, and fonts. Full details in the [changelog](./CHANGELOG.md).
 
 ## Install
 
