@@ -26,6 +26,13 @@ export interface DraftCandidate {
   error?: string;
 }
 
+/** Which primary project file drives this store: draft_content.json (the
+ * layout every pre-Mac-10.x build uses), draft_info.json with no
+ * draft_content.json beside it (reported as the primary project file on newer
+ * Mac builds — jianying-mcp#5, pyJianYingDraft#177/#194), or neither
+ * (timeline readable only from a mirror such as template-2.tmp). */
+export type DraftStoreLayout = "content-primary" | "info-primary" | "unknown";
+
 export interface DraftStore {
   projectDir: string;
   canonical: DraftCandidate;
@@ -34,6 +41,7 @@ export interface DraftStore {
   version: string | null;
   modernStorage: boolean;
   diverged: boolean;
+  layout: DraftStoreLayout;
 }
 
 export interface DraftStoreReport {
@@ -43,6 +51,7 @@ export interface DraftStoreReport {
   version: string | null;
   modern_storage: boolean;
   diverged: boolean;
+  layout: DraftStoreLayout;
   write_guard: "ok" | "warn" | "refuse";
   editor_running: string[];
   candidates: Array<{
@@ -99,7 +108,10 @@ function findTimeline(value: unknown, path: string[] = [], depth = 0): { draft: 
   return null;
 }
 
-function parseCandidate(path: string): DraftCandidate {
+// Exported for factory.ts (register): read one file into a DraftCandidate —
+// BOM-stripped, envelope-aware — without the sibling discovery a full
+// discoverDraftStore would do.
+export function parseCandidate(path: string): DraftCandidate {
   const name = path.split(/[\\/]/).pop() ?? path;
   if (!existsSync(path)) {
     return {
@@ -204,6 +216,8 @@ export function discoverDraftStore(input: string): DraftStore {
   canonical ??= parseable[0];
 
   const timelineHashes = new Set(parseable.map((candidate) => candidate.timelineHash).filter(Boolean));
+  const contentReadable = parseable.some((candidate) => candidate.name === "draft_content.json");
+  const infoReadable = parseable.some((candidate) => candidate.name === "draft_info.json");
   return {
     projectDir,
     canonical,
@@ -212,6 +226,7 @@ export function discoverDraftStore(input: string): DraftStore {
     version,
     modernStorage,
     diverged: timelineHashes.size > 1,
+    layout: contentReadable ? "content-primary" : infoReadable ? "info-primary" : "unknown",
   };
 }
 
@@ -299,6 +314,10 @@ export interface TimelineSyncPlan {
   canonical_path: string;
   version: string | null;
   modern_storage: boolean;
+  layout: DraftStoreLayout;
+  /** Set when the canonical is not draft_content.json (draft_info-primary
+   * layout): names the promotion and carries the fixture CTA. */
+  canonical_note: string | null;
   in_sync: boolean;
   /** Drifted mirrors whose mtime is newer than draft_content.json's. CapCut
    * >= 8.7 writes the mirrors on save, so a newer drifted mirror may hold app
@@ -333,8 +352,9 @@ function syncTarget(candidate: DraftCandidate, state: TimelineSyncTarget["state"
 
 /**
  * Plan for `sync-timelines` (issue #39, symptom #35): draft_content.json is
- * canonical; every other readable timeline target is compared against it by
- * timeline hash. Direction is always draft_content.json -> mirror, but each
+ * canonical (draft_info.json on the draft_info-primary Mac layout — see
+ * DraftStoreLayout); every other readable timeline target is compared against
+ * it by timeline hash. Direction is always draft_content.json -> mirror, but each
  * target's mtime is surfaced: CapCut >= 8.7 writes the mirrors on save, so a
  * drifted mirror NEWER than draft_content.json may hold app edits that the
  * repair would roll back (canonical_stale / newer_mirrors flag this; --apply
@@ -354,25 +374,30 @@ export function planTimelineSync(input: string): TimelineSyncResult {
     );
   }
   const store = discoverDraftStore(input);
-  const canonical = store.targets.find((candidate) => candidate.name === "draft_content.json");
+  // draft_content.json is the sync canonical. On the draft_info-primary layout
+  // (no draft_content.json; newer Mac builds drive the project from
+  // draft_info.json — jianying-mcp#5, pyJianYingDraft#177/#194) draft_info.json
+  // is promoted to canonical so the repair works there too instead of refusing
+  // (pre-v0.16 behaviour). Round-trip evidence for that layout is
+  // synthetic-only, so the plan carries a canonical_note with the fixture CTA.
+  const canonical =
+    store.targets.find((candidate) => candidate.name === "draft_content.json") ??
+    (store.layout === "info-primary"
+      ? store.targets.find((candidate) => candidate.name === "draft_info.json")
+      : undefined);
   if (!canonical?.draft) {
-    // draft_info-primary layout: reported as the primary project file on newer
-    // Mac builds. Messaging only — promoting draft_info.json to a first-class
-    // sync canonical needs a real fixture first.
-    if (store.targets.some((candidate) => candidate.name === "draft_info.json" && candidate.draft)) {
-      throw new Error(
-        "This project has no readable draft_content.json; its timeline lives in draft_info.json " +
-          "(reported as the primary project file on newer Mac builds). sync-timelines reconciles mirrors " +
-          "FROM draft_content.json and cannot run here. Normal edit commands can target the draft_info.json " +
-          "directly; run `capcut diagnose <project>` and consider contributing a fixture: " +
-          "`capcut fixture <project> --out <dir>`.",
-      );
-    }
     throw new Error(
-      "sync-timelines needs a readable draft_content.json (the canonical timeline source). " +
+      "sync-timelines needs a readable draft_content.json or draft_info.json (the canonical timeline source). " +
         "Run `capcut diagnose <project>` to inspect what is on disk.",
     );
   }
+  const canonicalNote =
+    canonical.name === "draft_info.json"
+      ? "draft_info.json is the canonical source: this project has no draft_content.json (draft_info-primary " +
+        "layout, reported as the primary project file on newer Mac builds). Round-trip evidence for this layout " +
+        "is synthetic-only — if this project opens fine in your app, contribute a bundle: " +
+        "`capcut fixture <project> --out <dir>`."
+      : null;
   const canonicalDraft = canonical.draft;
   const canonicalMtime = canonical.mtime ? Date.parse(canonical.mtime) : Number.NaN;
 
@@ -414,6 +439,8 @@ export function planTimelineSync(input: string): TimelineSyncResult {
       canonical_path: canonical.path,
       version: store.version,
       modern_storage: store.modernStorage,
+      layout: store.layout,
+      canonical_note: canonicalNote,
       in_sync: drifted.length === 0,
       newer_mirrors: newerMirrors,
       canonical_stale: newerMirrors.length > 0,
@@ -451,6 +478,14 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
         "(plan only) to review the repair before deciding whether to --apply.",
     );
   }
+  if (store.layout === "info-primary") {
+    actions.push(
+      "No draft_content.json: the timeline lives in draft_info.json (draft_info-primary layout, reported as the " +
+        "primary project file on newer Mac builds). Edit commands, register, and sync-timelines treat it as " +
+        "canonical, but round-trip evidence for this layout is synthetic-only — if this project opens fine in " +
+        "your app, contribute a bundle: `capcut fixture <project> --out <dir>`.",
+    );
+  }
   if (running.length > 0) actions.push(`Close ${running.join(" / ")} before editing this managed draft.`);
   if (actions.length === 0)
     actions.push("Storage targets are readable and agree. A normal CLI write will synchronize them.");
@@ -462,6 +497,7 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
     version: store.version,
     modern_storage: store.modernStorage,
     diverged: store.diverged,
+    layout: store.layout,
     write_guard: safety?.action ?? "ok",
     editor_running: running,
     candidates: store.candidates.map((candidate) => ({

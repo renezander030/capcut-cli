@@ -6,7 +6,7 @@ import { uuidHex } from "./decorators.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
-import { isManagedDraftPath } from "./store.js";
+import { isManagedDraftPath, parseCandidate } from "./store.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
 
 /**
@@ -278,7 +278,10 @@ export interface RegistrationTarget {
 
 export interface RegistrationPlan {
   project_dir: string;
+  /** Path of the identity source (draft_content.json, or draft_info.json on
+   * the draft_info-primary Mac layout). Field name kept for compatibility. */
   content_path: string;
+  identity_source: string;
   draft_id: string;
   draft_name: string;
   duration_us: number;
@@ -364,10 +367,11 @@ function registrationFixes(
 /**
  * Plan for `capcut register`: report whether an existing draft's
  * draft_meta_info.json sidecar and root_meta_info.json entry are present and
- * agree with draft_content.json (the read-only id/name/duration source), and
- * prepare the exact writes --apply would make. Accepts a project directory or
- * its draft_content.json path; any other explicitly named file is rejected so
- * the plan and the write always cover the same target set. An unreadable
+ * agree with the identity source (draft_content.json — or draft_info.json on
+ * the draft_info-primary Mac layout; read-only either way), and prepare the
+ * exact writes --apply would make. Accepts a project directory or its primary
+ * timeline file path; any other explicitly named file is rejected so the plan
+ * and the write always cover the same target set. An unreadable
  * root_meta_info.json is never rewritten (it lists EVERY draft); it is
  * reported blocked instead — as is everything when the draft does not live
  * inside a known store root.
@@ -377,33 +381,56 @@ export function planDraftRegistration(
   options: { draftsDir?: string; now?: number } = {},
 ): RegistrationResult {
   const resolved = resolve(input);
-  if (existsSync(resolved) && statSync(resolved).isFile() && basename(resolved) !== "draft_content.json") {
+  if (
+    existsSync(resolved) &&
+    statSync(resolved).isFile() &&
+    !["draft_content.json", "draft_info.json"].includes(basename(resolved))
+  ) {
     throw new Error(
-      `register repairs a draft's registration metadata from draft_content.json and cannot target ${basename(resolved)} directly. ` +
+      `register repairs a draft's registration metadata from the project's primary timeline file and cannot target ${basename(resolved)} directly. ` +
         `Pass the project directory instead: capcut register ${dirname(resolved)}`,
     );
   }
   const projectDir = existsSync(resolved) && statSync(resolved).isFile() ? dirname(resolved) : resolved;
   const contentPath = resolve(projectDir, "draft_content.json");
-  if (!existsSync(contentPath)) {
-    throw new Error(
-      "register needs a readable draft_content.json (the id/name/duration source). " +
-        "Run `capcut diagnose <project>` to inspect what is on disk.",
-    );
-  }
+  const infoPath = resolve(projectDir, "draft_info.json");
+  let identitySource = "draft_content.json";
+  let identityPath = contentPath;
   let content: Record<string, unknown>;
-  try {
-    content = JSON.parse(stripBom(readFileSync(contentPath, "utf-8"))) as Record<string, unknown>;
-  } catch (error) {
+  if (existsSync(contentPath)) {
+    try {
+      content = JSON.parse(stripBom(readFileSync(contentPath, "utf-8"))) as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(
+        `register needs a readable draft_content.json (the id/name/duration source), but it did not parse: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  } else if (existsSync(infoPath)) {
+    // draft_info-primary layout (no draft_content.json; newer Mac builds drive
+    // the project from draft_info.json): derive the identity from
+    // draft_info.json instead — the same read-only contract, envelope-aware.
+    const candidate = parseCandidate(infoPath);
+    if (!candidate.draft) {
+      throw new Error(
+        "register needs a readable draft_content.json or draft_info.json (the id/name/duration source), " +
+          `but draft_info.json did not contain a readable timeline${candidate.error ? `: ${candidate.error}` : ""}. ` +
+          "Run `capcut diagnose <project>` to inspect what is on disk.",
+      );
+    }
+    content = candidate.draft as unknown as Record<string, unknown>;
+    identitySource = "draft_info.json";
+    identityPath = infoPath;
+  } else {
     throw new Error(
-      `register needs a readable draft_content.json (the id/name/duration source), but it did not parse: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      "register needs a readable draft_content.json or draft_info.json (the id/name/duration source). " +
+        "Run `capcut diagnose <project>` to inspect what is on disk.",
     );
   }
   if (typeof content.id !== "string" || content.id === "") {
     throw new Error(
-      'register cannot derive a draft id: draft_content.json has no "id". Refusing to invent one — ' +
+      `register cannot derive a draft id: ${identitySource} has no "id". Refusing to invent one — ` +
         "run `capcut diagnose <project>` to inspect the draft.",
     );
   }
@@ -414,7 +441,7 @@ export function planDraftRegistration(
   const opts: RegisterOptions = {
     draftsDir: storeRoot ?? dirname(projectDir),
     draftPath: projectDir,
-    filePath: contentPath,
+    filePath: identityPath,
     draftId: content.id,
     name,
     nowMs: options.now ?? Date.now(),
@@ -480,8 +507,8 @@ export function planDraftRegistration(
         action: metaRaw === null ? "create" : "update",
         detail:
           metaRaw === null
-            ? "missing — the sidecar will be recreated from draft_content.json"
-            : "does not parse as JSON — the sidecar will be rewritten from draft_content.json (.bak keeps the old bytes)",
+            ? `missing — the sidecar will be recreated from ${identitySource}`
+            : `does not parse as JSON — the sidecar will be rewritten from ${identitySource} (.bak keeps the old bytes)`,
         stale_fields: [],
       });
       writes.push({
@@ -498,7 +525,7 @@ export function planDraftRegistration(
           path: metaPath,
           state: "ok",
           action: "none",
-          detail: "present and agrees with draft_content.json",
+          detail: `present and agrees with ${identitySource}`,
           stale_fields: [],
         });
       } else {
@@ -507,7 +534,7 @@ export function planDraftRegistration(
           path: metaPath,
           state: "stale",
           action: "update",
-          detail: `stale fields (${stale.join(", ")}) will be repaired from draft_content.json; other fields are preserved`,
+          detail: `stale fields (${stale.join(", ")}) will be repaired from ${identitySource}; other fields are preserved`,
           stale_fields: stale,
         });
         writes.push({
@@ -593,7 +620,7 @@ export function planDraftRegistration(
               path: indexPath,
               state: "ok",
               action: "none",
-              detail: `entry present in ${storeKey} and agrees with draft_content.json`,
+              detail: `entry present in ${storeKey} and agrees with ${identitySource}`,
               stale_fields: [],
             });
           } else {
@@ -605,7 +632,7 @@ export function planDraftRegistration(
               path: indexPath,
               state: "stale",
               action: "update",
-              detail: `entry has stale fields (${stale.join(", ")}) that will be repaired from draft_content.json; other fields and entries are preserved`,
+              detail: `entry has stale fields (${stale.join(", ")}) that will be repaired from ${identitySource}; other fields and entries are preserved`,
               stale_fields: stale,
             });
             writes.push({
@@ -625,7 +652,8 @@ export function planDraftRegistration(
   return {
     plan: {
       project_dir: projectDir,
-      content_path: contentPath,
+      content_path: identityPath,
+      identity_source: identitySource,
       draft_id: content.id,
       draft_name: name,
       duration_us: durationUs,

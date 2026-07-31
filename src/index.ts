@@ -2973,6 +2973,7 @@ function cmdDiagnose(projectPath: string | undefined, flags: Flags): void {
   }
   if (flags.human) {
     console.log(`Canonical: ${report.canonical}`);
+    console.log(`Layout:    ${report.layout}`);
     console.log(`Version:   ${report.version ?? "unknown"}`);
     console.log(`Diverged:  ${report.diverged ? "YES" : "no"}`);
     console.log(`Editor:    ${report.editor_running.join(", ") || "not detected"}`);
@@ -3014,7 +3015,7 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
       ? `Would write ${plan.repairs.join(", ")}. Re-run with --apply to write.`
       : plan.blocked.length > 0
         ? `Registration cannot be verified or repaired: ${plan.blocked.join(", ")} — see targets.`
-        : "Draft is registered: draft_meta_info.json and the store's root_meta_info.json entry agree with draft_content.json.";
+        : `Draft is registered: draft_meta_info.json and the store's root_meta_info.json entry agree with ${plan.identity_source}.`;
     out({ ok: plan.blocked.length === 0, applied: false, message, ...plan }, flags);
     if (!flags.quiet) {
       for (const target of plan.targets) {
@@ -3068,7 +3069,7 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
   }
   const ok = plan.blocked.length === 0;
   out({ ok, applied, backups, ...verify.plan }, flags);
-  if (!flags.quiet) process.stderr.write(`Registered from draft_content.json: wrote ${applied.join(", ")}\n`);
+  if (!flags.quiet) process.stderr.write(`Registered from ${plan.identity_source}: wrote ${applied.join(", ")}\n`);
   warnBlocked();
   return ok ? 0 : 2;
 }
@@ -3076,8 +3077,9 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
 // `sync-timelines` repairs a draft whose mirror files (template-2.tmp /
 // draft_info.json — including the pre-open mirror's stale GUID) drifted from
 // draft_content.json, the CapCut >= 8.7 "CLI edit silently ignored" failure
-// (issue #35 / #39). draft_content.json is canonical and treated as a
-// read-only source: --apply rewrites EXACTLY the drifted mirrors inside their
+// (issue #35 / #39). draft_content.json is canonical (draft_info.json on the
+// draft_info-primary Mac layout — the plan's canonical_note carries the
+// fixture CTA there) and treated as a read-only source: --apply rewrites EXACTLY the drifted mirrors inside their
 // own envelopes (atomic temp+rename, one .bak per file written) and never
 // touches draft_content.json or in-sync mirrors. Because CapCut >= 8.7 writes
 // the mirrors on save, a canonical file OLDER than a drifted mirror may mean
@@ -3101,9 +3103,12 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       .map((target) => `${target.file} (${target.mtime})`)
       .join(", ");
     return (
-      `draft_content.json (${canonicalTarget?.mtime}) is OLDER than the drifted mirror(s) ${newer}. ` +
+      `${plan.canonical} (${canonicalTarget?.mtime}) is OLDER than the drifted mirror(s) ${newer}. ` +
       "CapCut >= 8.7 writes these mirrors on save, so they may hold newer app edits that this repair would roll back."
     );
+  };
+  const noteCanonical = (): void => {
+    if (!flags.quiet && plan.canonical_note) process.stderr.write(`NOTE: ${plan.canonical_note}\n`);
   };
 
   if (plan.in_sync) {
@@ -3113,16 +3118,18 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       : `Readable timeline targets agree, but ${plan.unreconcilable.map((u) => u.file).join(", ")} cannot be reconciled by the CLI — see unreconcilable.`;
     out({ ok, applied: false, message, ...plan, in_sync: ok }, flags);
     if (!flags.quiet) process.stderr.write(`${message}\n`);
+    noteCanonical();
     warnUnreconcilable();
     return ok ? 0 : 2;
   }
 
   if (!flags.apply) {
-    const message = `Would rewrite ${plan.drifted.join(", ")} from draft_content.json. Re-run with --apply to write.`;
+    const message = `Would rewrite ${plan.drifted.join(", ")} from ${plan.canonical}. Re-run with --apply to write.`;
     out({ ok: true, applied: false, message, ...plan }, flags);
     if (!flags.quiet) {
       const canonicalTarget = plan.targets.find((target) => target.state === "canonical");
-      process.stderr.write(`plan: canonical draft_content.json (mtime ${canonicalTarget?.mtime})\n`);
+      process.stderr.write(`plan: canonical ${plan.canonical} (mtime ${canonicalTarget?.mtime})\n`);
+      noteCanonical();
       for (const target of plan.targets) {
         if (target.state !== "drifted") continue;
         const guidNote = target.guid_drifted ? ` [stale GUID ${target.guid} -> canonical]` : "";
@@ -3150,7 +3157,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     if (plan.canonical_stale) {
       die(
         `${staleCanonicalWarning()} Back up the project, review the plan (capcut sync-timelines ${projectPath}), ` +
-          "and pass --force-write only if draft_content.json is really the timeline you want to keep.",
+          `and pass --force-write only if ${plan.canonical} is really the timeline you want to keep.`,
       );
     }
   }
@@ -3164,7 +3171,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   const safety = assessWriteSafety(canonicalDraft, plan.version);
 
   if (isDryRun()) {
-    const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from draft_content.json; nothing was written.`;
+    const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from ${plan.canonical}; nothing was written.`;
     out(
       {
         ok: true,
@@ -3172,6 +3179,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
         message,
         project_dir: plan.project_dir,
         canonical: plan.canonical,
+        layout: plan.layout,
+        canonical_note: plan.canonical_note,
         would_reconcile: plan.drifted,
         reconciled: [],
         backups: [],
@@ -3210,6 +3219,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       applied: true,
       project_dir: plan.project_dir,
       canonical: plan.canonical,
+      layout: plan.layout,
+      canonical_note: plan.canonical_note,
       reconciled: plan.drifted,
       backups: plan.drifted.map((file) => `${file}.bak`),
       unreconcilable: plan.unreconcilable,
