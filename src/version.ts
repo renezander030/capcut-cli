@@ -11,7 +11,11 @@ export interface VersionInfo {
   app_version: string | null;
   os: string | null;
   schema: {
-    mask_field: "mask" | "common_masks" | "both" | "none";
+    /** Which mask material array variant(s) hold entries: `mask` = legacy
+     * `masks[]`, `common_mask` = the CapCut-verified array this CLI writes,
+     * `common_masks` = JianYing 9.6+; `both` = more than one variant is
+     * populated (the app reads only one — consolidate with `migrate`). */
+    mask_field: "mask" | "common_mask" | "common_masks" | "both" | "none";
     has_text_ranges: boolean;
     has_audio_fades: boolean;
     new_version_field: unknown;
@@ -240,7 +244,13 @@ export function detectVersion(draft: Draft): VersionInfo {
   const support = assessSupport(app_source, app_version);
   if (mask_field === "common_masks") {
     support.notes.push(
-      "Draft uses `common_masks` (JianYing 9.6+ / CapCut newer) — `mask` command writes legacy field; use `capcut migrate --to common_masks` once shipped",
+      "Draft uses `common_masks` (JianYing 9.6+ era) — `mask` follows the populated variant, so new masks land there too",
+    );
+  }
+  if (mask_field === "both") {
+    support.notes.push(
+      "Mask materials are split across variant arrays (`masks`/`common_mask`/`common_masks`) — the app reads only " +
+        "one; consolidate with `capcut migrate --from <ver> --to <ver>` (lint reports which arrays are populated)",
     );
   }
   if (app_source === "lv" && app_version && !app_version.startsWith("5.9")) {
@@ -272,12 +282,13 @@ export function detectVersion(draft: Draft): VersionInfo {
 
 function detectMaskField(draft: Draft): VersionInfo["schema"]["mask_field"] {
   const mats = draft.materials as Record<string, unknown>;
-  const hasMask = Array.isArray(mats.masks) && (mats.masks as unknown[]).length > 0;
-  const hasCommon = Array.isArray(mats.common_masks) && (mats.common_masks as unknown[]).length > 0;
-  if (hasMask && hasCommon) return "both";
-  if (hasCommon) return "common_masks";
-  if (hasMask) return "mask";
-  return "none";
+  const populated = (key: string) => Array.isArray(mats[key]) && (mats[key] as unknown[]).length > 0;
+  const present: Array<VersionInfo["schema"]["mask_field"]> = [];
+  if (populated("masks")) present.push("mask");
+  if (populated("common_mask")) present.push("common_mask");
+  if (populated("common_masks")) present.push("common_masks");
+  if (present.length > 1) return "both";
+  return present[0] ?? "none";
 }
 
 function detectTextRanges(draft: Draft): boolean {

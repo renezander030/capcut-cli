@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { userEntriesForCategory } from "./user-enums.js";
 
 // Reads enums.json next to this module. After `tsc && cp src/enums.json dist/enums.json`,
 // the compiled module in dist/ sees dist/enums.json; in dev (tsx src/...), src/enums.json.
@@ -56,7 +57,13 @@ function load(): EnumsFile {
 
 export function listEnum(category: Category, namespace: Namespace = "capcut"): EnumEntry[] {
   const ns = load()[namespace];
-  return ns[category] ?? [];
+  const bundled = ns[category] ?? [];
+  // Harvested user entries (harvest-enums) are appended AFTER the bundled
+  // table, so on a slug collision the bundled entry always wins in findEnum.
+  // User entries are namespace-agnostic: a draft does not say which app store
+  // an id came from, so they resolve under either namespace.
+  const user = userEntriesForCategory(category);
+  return user.length === 0 ? bundled : [...bundled, ...user];
 }
 
 /**

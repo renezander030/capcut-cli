@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Draft, MaterialText, Segment } from "./draft.js";
 import { findMaterial, findSegment } from "./draft.js";
 import { findEnum, type Namespace, slugsFor } from "./enums.js";
+import { atLeast } from "./version.js";
 
 const PROPERTY_MAP: Record<string, string> = {
   position_x: "KFTypePositionX",
@@ -359,6 +360,42 @@ export interface MaskOptions {
   invert?: boolean;
   rectWidth?: number; // rectangle only — fraction of canvas width
   roundCorner?: number; // rectangle only — 0 .. 100
+  field?: MaskFieldName; // explicit target array (--mask-field); default: auto
+}
+
+/** The three mask material array variants seen in the wild. */
+export type MaskFieldName = "masks" | "common_mask" | "common_masks";
+
+// Priority newest-first: when consistency-following has to pick between
+// multiple populated variants, prefer the newest-era array.
+export const MASK_FIELDS: readonly MaskFieldName[] = ["common_masks", "common_mask", "masks"];
+
+function maskEntries(draft: Draft, field: MaskFieldName): Array<Record<string, unknown>> {
+  const arr = (draft.materials as Record<string, unknown>)[field];
+  return Array.isArray(arr) ? (arr as Array<Record<string, unknown>>) : [];
+}
+
+/**
+ * Which materials array a new mask should be written into. Three variants
+ * exist: `masks` (legacy JianYing 5.9 era), `common_masks` (JianYing 9.6+ —
+ * masks left in the legacy array silently no-op there, pyJianYingDraft#160),
+ * and `common_mask` (the struct this CLI writes, verified against CapCut).
+ * Selection: an explicit override wins; a versioned JianYing draft follows
+ * its version evidence (a populated variant is NOT trusted there — it may be
+ * exactly the #160 failure: a legacy-array mask an ecosystem tool wrote that
+ * this app build does not read; lint flags that mismatch); otherwise an
+ * already-populated variant wins (stay consistent with what is there,
+ * newest-era array first), then the app-source default. Markerless
+ * CLI-created drafts keep writing `common_mask`, byte-identical to before.
+ */
+export function maskTargetField(draft: Draft, override?: MaskFieldName): MaskFieldName {
+  if (override) return override;
+  const source = draft.platform?.app_source;
+  const version = draft.platform?.app_version ?? null;
+  if (source === "lv" && version) return atLeast(version, "9.6") ? "common_masks" : "masks";
+  const populated = MASK_FIELDS.find((field) => maskEntries(draft, field).length > 0);
+  if (populated) return populated;
+  return source === "lv" ? "masks" : "common_mask";
 }
 
 export function addMask(
@@ -367,7 +404,7 @@ export function addMask(
   slug: string,
   opts: MaskOptions,
   namespace: Namespace = "capcut",
-): { segmentId: string; mask_id: string; name: string } {
+): { segmentId: string; mask_id: string; name: string; field: MaskFieldName } {
   const meta = findEnum("masks", slug, namespace, MASK_ALIASES);
   if (!meta?.name || !meta.effect_id || !meta.resource_id || !meta.resource_type) {
     const hint = namespace === "jianying" ? " --jianying" : "";
@@ -377,11 +414,16 @@ export function addMask(
   if (!found) throw new Error(`Segment not found: ${segmentId}`);
   const seg = found.segment;
 
-  draft.materials.common_mask ??= [] as Array<Record<string, unknown>>;
-  const masks = draft.materials.common_mask;
+  const field = maskTargetField(draft, opts.field);
+  draft.materials[field] ??= [] as Array<Record<string, unknown>>;
+  const masks = draft.materials[field];
 
-  // Refuse to stack masks on one segment.
-  const existing = (seg.extra_material_refs || []).find((r) => masks.some((m) => (m as { id?: string }).id === r));
+  // Refuse to stack masks on one segment — checked across every variant array,
+  // not only the write target.
+  const allMaskMaterials = MASK_FIELDS.flatMap((variant) => maskEntries(draft, variant));
+  const existing = (seg.extra_material_refs || []).find((r) =>
+    allMaskMaterials.some((m) => (m as { id?: string }).id === r),
+  );
   if (existing) throw new Error(`Segment already has a mask (material ${existing}). Remove it first.`);
 
   const resolvedSlug = (MASK_ALIASES[slug] ?? slug).toLowerCase();
@@ -423,7 +465,7 @@ export function addMask(
   });
   seg.extra_material_refs ||= [];
   seg.extra_material_refs.push(id);
-  return { segmentId: seg.id, mask_id: id, name: meta.name };
+  return { segmentId: seg.id, mask_id: id, name: meta.name, field };
 }
 
 // CapCut's four-step UI blur maps to these four values (upstream comment).

@@ -18,6 +18,7 @@
 | `trim` | `capcut trim <project> <id> <start> <duration>` | yes | Trim a segment to a start/duration window. |
 | `opacity` | `capcut opacity <project> <id> <alpha>` | yes | Set a segment's opacity (0.0-1.0). |
 | `export-srt` | `capcut export-srt <project> [options]` | no | Export subtitles to SRT or WebVTT on stdout, per line or per word. |
+| `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | no | Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively). |
 | `materials` | `capcut materials <project> [--type <type>]` | no | List material types and counts; filter with --type. |
 | `segment` | `capcut segment <project> <id>` | no | Full detail for one segment and its material. |
 | `material` | `capcut material <project> <id>` | no | Full detail for one material. |
@@ -67,6 +68,7 @@
 | `describe` | `capcut describe` | no | Emit the full command surface as JSON (agent tool spec). |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | no | Generate shell completions (bash|zsh|fish). |
 | `enums` | `capcut enums <category-flag> [--jianying]` | no | List enum slugs (transitions, masks, effects, ...) by category. |
+| `harvest-enums` | `capcut harvest-enums <project> [--apply] [--catalogue <path>]` | no | Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs). |
 | `doctor` | `capcut doctor` | no | Environment preflight (Node, whisper, API key, project dir). |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | no | Inspect canonical draft files, divergence, and editor-write safety. |
 | `fixture` | `capcut fixture <project> --out <dir>` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue. |

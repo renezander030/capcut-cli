@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -165,6 +165,33 @@
           "type": "boolean",
           "required": false,
           "description": "Skip local media path checks."
+        },
+        {
+          "name": "fix",
+          "flags": [
+            "--fix"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Mechanically repair fixable issues and write the draft."
+        },
+        {
+          "name": "no_probe",
+          "flags": [
+            "--no-probe"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Skip ffprobe media checks (VFR / unreadable media)."
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary."
         }
       ],
       "mutates": false,
@@ -550,6 +577,44 @@
             "vtt"
           ],
           "default": "srt"
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [],
+      "output": {
+        "type": "text",
+        "description": "Plain text on stdout."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "export-timeline",
+      "summary": "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
+      "usage": "capcut export-timeline <project> [--out <file.otio>]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "file.otio",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "out",
+          "flags": [
+            "--out"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Output path."
         }
       ],
       "mutates": false,
@@ -1384,6 +1449,20 @@
           "type": "number",
           "required": false,
           "description": "Rectangle corner radius."
+        },
+        {
+          "name": "mask_field",
+          "flags": [
+            "--mask-field"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "Materials array to write the mask into (default: auto — an already-populated variant, else version evidence).",
+          "values": [
+            "masks",
+            "common_mask",
+            "common_masks"
+          ]
         }
       ],
       "mutates": true,
@@ -4023,6 +4102,53 @@
       "prerequisites": [],
       "output": {
         "type": "array",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "harvest-enums",
+      "summary": "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
+      "usage": "capcut harvest-enums <project> [--apply] [--catalogue <path>]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "apply",
+          "flags": [
+            "--apply"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Write the new entries into the user catalogue (default: plan only)."
+        },
+        {
+          "name": "catalogue",
+          "flags": [
+            "--catalogue"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "User catalogue file (default: ~/.config/capcut-cli/user-enums.json, or $CAPCUT_CLI_USER_ENUMS)."
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [],
+      "output": {
+        "type": "object",
         "description": "JSON by default; use -H where supported for human output."
       },
       "exit_codes": {

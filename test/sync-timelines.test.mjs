@@ -330,27 +330,61 @@ describe("sync-timelines", () => {
     assert.throws(() => assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates]), /changed on disk/);
   });
 
-  it("errors when draft_content.json is missing (no canonical source)", () => {
+  it("errors when neither draft_content.json nor draft_info.json is readable (no canonical source)", () => {
     const dir = mkdtempSync(join(tmpdir(), "capcut-sync-"));
     after(() => rmSync(dir, { recursive: true, force: true }));
-    writeFileSync(join(dir, "draft_info.json"), JSON.stringify(staleDraft(), null, 2));
+    writeFileSync(
+      join(dir, "template-2.tmp"),
+      JSON.stringify({ draft_content: JSON.stringify(staleDraft()) }, null, 2),
+    );
 
     const r = spawnCli(["sync-timelines", dir]);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /draft_content\.json/);
+    assert.match(r.stderr, /draft_content\.json or draft_info\.json/);
   });
 
-  it("names the draft_info-primary layout (newer Mac builds) when only draft_info.json is readable", () => {
-    const dir = mkdtempSync(join(tmpdir(), "capcut-sync-"));
-    after(() => rmSync(dir, { recursive: true, force: true }));
-    writeFileSync(join(dir, "draft_info.json"), JSON.stringify(staleDraft(), null, 2));
+  describe("draft_info-primary layout (newer Mac builds)", () => {
+    it("promotes draft_info.json to canonical instead of refusing, with the fixture CTA", () => {
+      const dir = mkdtempSync(join(tmpdir(), "capcut-sync-"));
+      after(() => rmSync(dir, { recursive: true, force: true }));
+      writeFileSync(join(dir, "draft_info.json"), JSON.stringify(canonicalDraft(), null, 2));
 
-    const r = spawnCli(["sync-timelines", dir]);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /timeline lives in draft_info\.json/);
-    assert.match(r.stderr, /Mac/);
-    assert.match(r.stderr, /capcut diagnose/);
-    assert.match(r.stderr, /capcut fixture/, "the error must carry the fixture-collection CTA");
+      const r = spawnCli(["sync-timelines", dir]);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.equal(r.json.canonical, "draft_info.json");
+      assert.equal(r.json.layout, "info-primary");
+      assert.equal(r.json.in_sync, true);
+      assert.match(r.json.canonical_note, /Mac/);
+      assert.match(r.json.canonical_note, /capcut fixture/, "the note must carry the fixture-collection CTA");
+      assert.match(r.stderr, /NOTE:/, "the human plan must surface the promotion note");
+    });
+
+    it("--apply reconciles a drifted mirror from draft_info.json", () => {
+      const dir = mkdtempSync(join(tmpdir(), "capcut-sync-"));
+      after(() => rmSync(dir, { recursive: true, force: true }));
+      writeFileSync(join(dir, "draft_info.json"), JSON.stringify(canonicalDraft(), null, 2));
+      writeFileSync(
+        join(dir, "template-2.tmp"),
+        JSON.stringify({ draft_content: JSON.stringify(staleDraft()) }, null, 2),
+      );
+      const past = new Date(Date.now() - 3_600_000);
+      utimesSync(join(dir, "template-2.tmp"), past, past);
+
+      const plan = spawnCli(["sync-timelines", dir]);
+      assert.equal(plan.status, 0, `stderr: ${plan.stderr}`);
+      assert.equal(plan.json.canonical, "draft_info.json");
+      assert.deepEqual(plan.json.drifted, ["template-2.tmp"]);
+
+      const r = spawnCli(["sync-timelines", dir, "--apply"]);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.deepEqual(r.json.reconciled, ["template-2.tmp"]);
+      assert.equal(r.json.layout, "info-primary");
+      const tmp = JSON.parse(readFileSync(join(dir, "template-2.tmp"), "utf-8"));
+      const embedded = JSON.parse(tmp.draft_content);
+      assert.equal(embedded.id, "guid-canonical", "the envelope must now hold the draft_info timeline");
+      assert.equal(embedded.name, "edited-by-cli");
+      assert.ok(existsSync(join(dir, "template-2.tmp.bak")));
+    });
   });
 
   it("--apply refuses a beyond-range project without --force-write (version write guard)", () => {

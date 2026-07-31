@@ -32,11 +32,45 @@ export interface MediaProbe {
   durationUs: number | null; // container duration (the LONGEST stream)
   videoDurationUs: number | null; // the video stream's own duration, when the container reports it
   fps: number | null;
+  /** avg_frame_rate: frames / duration — the real average. */
+  avgFps: number | null;
+  /** r_frame_rate: the container's base/tick rate. Diverges from avgFps on
+   * variable-frame-rate media. */
+  baseFps: number | null;
   hasVideo: boolean;
   hasAudio: boolean;
   audioChannels: number | null;
   videoCodec: string | null;
   audioCodec: string | null;
+}
+
+/**
+ * Variable-frame-rate heuristic: the average frame rate diverges from the
+ * container's base rate by more than 1%. VFR media (screen recordings, phone
+ * captures) is the classic silent breaker of frame-based pipelines — preview
+ * and render timing drift, and strict renderers fail with missing-frame
+ * errors (0xsline/OpenChatCut#1's failure class); the standard fix is to
+ * normalize to constant frame rate before editing.
+ */
+export function isVfr(probe: MediaProbe): boolean {
+  if (probe.avgFps === null || probe.baseFps === null || probe.baseFps <= 0) return false;
+  return Math.abs(probe.avgFps - probe.baseFps) / probe.baseFps > 0.01;
+}
+
+const ffprobeAvailableCache = new Map<string, boolean>();
+
+/** True when the ffprobe binary runs. Cached per command string. */
+export function ffprobeAvailable(ffprobeCmd = "ffprobe"): boolean {
+  const cached = ffprobeAvailableCache.get(ffprobeCmd);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    ok = spawnSync(ffprobeCmd, ["-version"], { encoding: "utf-8", timeout: 10_000 }).status === 0;
+  } catch {
+    ok = false;
+  }
+  ffprobeAvailableCache.set(ffprobeCmd, ok);
+  return ok;
 }
 
 const probeCache = new Map<string, MediaProbe | null>();
@@ -85,6 +119,8 @@ export function parseMediaProbe(json: string): MediaProbe | null {
     durationUs: durationSeconds === null ? null : Math.round(durationSeconds * 1_000_000),
     videoDurationUs: videoDurationSeconds === null ? null : Math.round(videoDurationSeconds * 1_000_000),
     fps: fraction(video?.avg_frame_rate) ?? fraction(video?.r_frame_rate),
+    avgFps: fraction(video?.avg_frame_rate),
+    baseFps: fraction(video?.r_frame_rate),
     hasVideo: Boolean(video),
     hasAudio: Boolean(audio),
     audioChannels: audio && Number(audio.channels) > 0 ? Number(audio.channels) : null,

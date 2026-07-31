@@ -15,7 +15,10 @@ export interface MigrationResult {
  * Migrate a draft's schema across known version jumps.
  *
  * Currently implements:
- *   - mask -> common_masks (JianYing 5.9 -> 9.6+, CapCut older -> newer)
+ *   - mask -> common_masks (JianYing 5.9 -> 9.6+, CapCut older -> newer),
+ *     also consolidating the CapCut-variant `common_mask[]` into the target —
+ *     the destination app reads exactly one mask array, so entries left in a
+ *     sibling variant would silently not appear (pyJianYingDraft#160).
  *
  * Migrations are best-effort: if a field doesn't apply (e.g. no masks present),
  * we record it as skipped rather than failing. The draft is mutated in place.
@@ -25,15 +28,18 @@ export function migrateDraft(draft: Draft, from: string, to: string): MigrationR
   const skipped: string[] = [];
   const warnings: string[] = [];
 
+  const record = (label: string, sourceKey: string, moved: number): void => {
+    if (moved > 0) applied.push(`${label} (${moved} entries)`);
+    else skipped.push(`${label} (no \`${sourceKey}[]\` entries to migrate)`);
+  };
+
   const knownJump = isJumpAcrossMaskRename(from, to);
   if (knownJump.direction === "legacy-to-new") {
-    const moved = migrateMaskToCommonMasks(draft);
-    if (moved > 0) applied.push(`mask->common_masks (${moved} entries)`);
-    else skipped.push("mask->common_masks (no `masks[]` entries to migrate)");
+    record("mask->common_masks", "masks", moveMaskEntries(draft, "masks", "common_masks"));
+    record("common_mask->common_masks", "common_mask", moveMaskEntries(draft, "common_mask", "common_masks"));
   } else if (knownJump.direction === "new-to-legacy") {
-    const moved = migrateCommonMasksToMask(draft);
-    if (moved > 0) applied.push(`common_masks->mask (${moved} entries)`);
-    else skipped.push("common_masks->mask (no `common_masks[]` entries to migrate)");
+    record("common_masks->mask", "common_masks", moveMaskEntries(draft, "common_masks", "masks"));
+    record("common_mask->mask", "common_mask", moveMaskEntries(draft, "common_mask", "masks"));
   } else if (knownJump.direction === "none") {
     warnings.push(
       `No registered migration for ${from} -> ${to}. Only known migration so far: mask <-> common_masks across JianYing 5.9 / CapCut 9.6 boundary.`,
@@ -58,34 +64,22 @@ function parseVer(s: string): number | null {
   return m ? parseFloat(m[1]) : null;
 }
 
-function migrateMaskToCommonMasks(draft: Draft): number {
-  const masks = (draft.materials.masks as Array<Record<string, unknown>> | undefined) ?? [];
-  if (masks.length === 0) return 0;
-  if (!Array.isArray(draft.materials.common_masks)) draft.materials.common_masks = [];
-  const target = draft.materials.common_masks as Array<Record<string, unknown>>;
+function moveMaskEntries(
+  draft: Draft,
+  fromKey: "masks" | "common_mask" | "common_masks",
+  toKey: "masks" | "common_masks",
+): number {
+  const source = (draft.materials[fromKey] as Array<Record<string, unknown>> | undefined) ?? [];
+  if (source.length === 0) return 0;
+  if (!Array.isArray(draft.materials[toKey])) draft.materials[toKey] = [];
+  const target = draft.materials[toKey] as Array<Record<string, unknown>>;
   const targetIds = new Set(target.map((m) => m.id as string));
   let moved = 0;
-  for (const mat of masks) {
+  for (const mat of source) {
     if (typeof mat.id === "string" && targetIds.has(mat.id)) continue;
     target.push(mat);
     moved++;
   }
-  draft.materials.masks = [];
-  return moved;
-}
-
-function migrateCommonMasksToMask(draft: Draft): number {
-  const cm = (draft.materials.common_masks as Array<Record<string, unknown>> | undefined) ?? [];
-  if (cm.length === 0) return 0;
-  if (!Array.isArray(draft.materials.masks)) draft.materials.masks = [];
-  const target = draft.materials.masks as Array<Record<string, unknown>>;
-  const targetIds = new Set(target.map((m) => m.id as string));
-  let moved = 0;
-  for (const mat of cm) {
-    if (typeof mat.id === "string" && targetIds.has(mat.id)) continue;
-    target.push(mat);
-    moved++;
-  }
-  draft.materials.common_masks = [];
+  draft.materials[fromKey] = [];
   return moved;
 }

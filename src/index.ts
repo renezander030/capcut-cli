@@ -38,6 +38,7 @@ import {
   imageAnimSlugs,
   KARAOKE_HIGHLIGHT_COLOR,
   keyframeProperties,
+  MASK_FIELDS,
   maskSlugs,
   parseKeyframeValue,
   setBgBlur,
@@ -103,7 +104,16 @@ import {
   uuid,
 } from "./factory.js";
 import { sanitizeDraftBundle } from "./fixture.js";
-import { DEFAULT_LINT_OPTIONS, fixDraft, type LintOptions, lintDraft, lintExitCode, summarize } from "./lint.js";
+import { draftToOtio } from "./interchange.js";
+import {
+  DEFAULT_LINT_OPTIONS,
+  fixDraft,
+  knownEffectIds,
+  type LintOptions,
+  lintDraft,
+  lintExitCode,
+  summarize,
+} from "./lint.js";
 import { migrateDraft } from "./migrate.js";
 import { applyTextPreset, extractTextPreset, loadPresetFile, type TextStylePreset } from "./preset.js";
 import { probeMedia } from "./probe.js";
@@ -117,6 +127,7 @@ import { collapseKaraokeRuns, cueWords, parseSrt, renderSrt, renderVtt, type Seg
 import { diagnoseDraftStore, discoverDraftStore, editorProcesses, planTimelineSync } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import { translateDraft } from "./translate.js";
+import { harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } from "./user-enums.js";
 import { assessWriteSafety, detectVersion } from "./version.js";
 
 export const COMMANDS = [
@@ -134,6 +145,7 @@ export const COMMANDS = [
   "trim",
   "opacity",
   "export-srt",
+  "export-timeline",
   "materials",
   "segment",
   "material",
@@ -183,6 +195,7 @@ export const COMMANDS = [
   "describe",
   "completions",
   "enums",
+  "harvest-enums",
   "doctor",
   "diagnose",
   "fixture",
@@ -369,10 +382,17 @@ Edit:
              skips the sweep). Recomputes the project duration to the max
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
+  export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
 
 Maintenance & inspection:
+  harvest-enums <project> [--apply] [--catalogue <path>]
+             Learn store resource ids from an app-authored draft into the
+             per-user catalogue (~/.config/capcut-cli/user-enums.json):
+             harvested ids stop lint-flagging as unknown, and named effects/
+             filters/transitions/masks/sfx become writable slugs. Plan by
+             default; --apply writes the catalogue (never the draft).
   prune      <project>                          Remove materials no segment references
   register   <project-dir> [--apply] [--drafts <dir>]  Repair an EXISTING draft's
              registration metadata so the CapCut app lists it again (init only
@@ -612,7 +632,8 @@ Translate (v0.4 — multi-language draft clone):
 Migrate (v0.4 — survive JianYing/CapCut version jumps):
   migrate    <project> --from <ver> --to <ver>
              Apply known schema migrations. Implemented: mask <-> common_masks
-             across the JianYing 5.9 / CapCut 9.6 boundary.
+             across the JianYing 5.9 / CapCut 9.6 boundary, consolidating the
+             CapCut-variant common_mask[] into the target array too.
 
 Sound effects + chroma (v0.5):
   add-sfx    <project> <slug> <start> <duration> [options]
@@ -685,6 +706,12 @@ Subtitles (Phase 3):
              Word timings are real where the draft stores them (caption
              --karaoke word segments); elsewhere they are interpolated within
              each cue, weighted by word character length.
+  export-timeline <project> [--out <file.otio>]
+             Export video/audio tracks as OpenTimelineIO JSON (stdout, or
+             --out): clip order, trims, gaps, and speed (LinearTimeWarp) —
+             the exit ramp when an app build rejects the draft. DaVinci
+             Resolve imports .otio natively. Text tracks are skipped with a
+             pointer to export-srt.
 
 Navigation: info → tracks/materials → segments → segment <id>
             info → materials --type X → material <id>
@@ -729,6 +756,8 @@ interface Flags {
   invert?: boolean;
   rectWidth?: number;
   roundCorner?: number;
+  maskField?: "masks" | "common_mask" | "common_masks";
+  catalogue?: string;
   // text-style
   alpha?: number;
   vertical?: boolean;
@@ -1002,6 +1031,14 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.rectWidth = parseFloat(args[++i]);
     } else if (a === "--round-corner" && i + 1 < args.length) {
       flags.roundCorner = parseFloat(args[++i]);
+    } else if (a === "--mask-field" && i + 1 < args.length) {
+      const field = args[++i];
+      if (!["masks", "common_mask", "common_masks"].includes(field)) {
+        throw new Error("--mask-field must be masks|common_mask|common_masks");
+      }
+      flags.maskField = field as Flags["maskField"];
+    } else if (a === "--catalogue" && i + 1 < args.length) {
+      flags.catalogue = args[++i];
     } else if (a === "--alpha" && i + 1 < args.length) {
       flags.alpha = parseFloat(args[++i]);
     } else if (a === "--vertical") {
@@ -1565,6 +1602,77 @@ function cmdOpacity(draft: Draft, filePath: string, segId: string, alphaStr: str
   out({ ok: true, id: result.segment.id, old_opacity: old, new_opacity: alpha }, flags);
 }
 
+// `harvest-enums` reads effect/filter/transition/mask/sfx/font resource ids
+// out of a draft (typically app-authored, using store resources the bundled
+// table cannot know) into the per-user catalogue: every harvested id joins
+// lint's known-id set, and named entries from cleanly-mapped kinds become
+// writable slugs (GuanYixuan/pyCapCut#12). Plan by default; --apply writes
+// the catalogue file — the draft itself is never written.
+function cmdHarvestEnums(draft: Draft, flags: Flags): void {
+  const cataloguePath = userEnumsPath(flags.catalogue);
+  const { error } = loadUserEnums(cataloguePath);
+  const { found, known, candidates } = harvestDraft(draft, knownEffectIds());
+  const writable = candidates.filter((candidate) => candidate.slug !== "").length;
+  const base = {
+    catalogue: cataloguePath,
+    catalogue_error: error,
+    found,
+    known,
+    new: candidates,
+    writable_slugs: writable,
+    id_only: candidates.length - writable,
+  };
+  if (!flags.apply) {
+    out({ ok: error === null, applied: false, ...base }, flags);
+    if (!flags.quiet) {
+      process.stderr.write(
+        candidates.length === 0
+          ? "No new resource ids — every id in this draft is already known.\n"
+          : `Would add ${candidates.length} entries (${writable} writable slugs). Re-run with --apply to write.\n`,
+      );
+      if (error) process.stderr.write(`WARNING: ${error}\n`);
+    }
+    return;
+  }
+  if (error) {
+    die(
+      `Refusing to rewrite a catalogue that did not parse (${error}). ` +
+        `Fix or remove ${cataloguePath}, then re-run.`,
+    );
+  }
+  if (isDryRun()) {
+    out({ ok: true, applied: false, would_add: candidates.length, ...base }, flags);
+    if (!flags.quiet) process.stderr.write("Dry run — nothing was written.\n");
+    return;
+  }
+  const { added, duplicates, total } = mergeUserEnums(cataloguePath, candidates);
+  out({ ok: true, applied: true, added, duplicates, total, ...base }, flags);
+  if (!flags.quiet) process.stderr.write(`Catalogue updated: ${cataloguePath} (+${added}, ${total} total)\n`);
+}
+
+// Read-only NLE handoff: the draft's video/audio cut as OpenTimelineIO JSON.
+// Raw document on stdout (pipe-able, like export-srt); --out writes the file
+// and prints a JSON summary instead. Skips are reported on stderr, never
+// silent (text tracks point at export-srt).
+function cmdExportTimeline(draft: Draft, flags: Flags): void {
+  const { doc, stats } = draftToOtio(draft);
+  const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+  if (flags.out) {
+    writeFileSync(flags.out, serialized, "utf-8");
+    out(
+      { ok: true, out: flags.out, tracks: stats.tracks, clips: stats.clips, gaps: stats.gaps, skipped: stats.skipped },
+      flags,
+    );
+  } else {
+    process.stdout.write(serialized);
+  }
+  if (!flags.quiet) {
+    for (const skip of stats.skipped) {
+      process.stderr.write(`skipped track "${skip.track}" (${skip.type}): ${skip.reason}\n`);
+    }
+  }
+}
+
 function cmdExportSrt(draft: Draft, flags: Flags): void {
   const granularity = flags.granularity ?? "line";
   const format = flags.format ?? "srt";
@@ -1951,7 +2059,9 @@ function cmdMask(draft: Draft, filePath: string, positional: string[], flags: Fl
     const found = findSegment(draft, segId);
     if (!found) die(`Segment not found: ${segId}`);
     const seg = found.segment;
-    const masksArr = (draft.materials.common_mask || []) as Array<Record<string, unknown>>;
+    // Strip refs across every mask array variant, not only the CLI's write
+    // target — the mask may have been written by the app or an older CLI.
+    const masksArr = MASK_FIELDS.flatMap((field) => (draft.materials[field] || []) as Array<Record<string, unknown>>);
     const before = (seg.extra_material_refs || []).length;
     seg.extra_material_refs = (seg.extra_material_refs || []).filter(
       (r) => !masksArr.some((m) => (m as { id?: string }).id === r),
@@ -1970,6 +2080,7 @@ function cmdMask(draft: Draft, filePath: string, positional: string[], flags: Fl
     invert: flags.invert,
     rectWidth: flags.rectWidth,
     roundCorner: flags.roundCorner,
+    field: flags.maskField,
   };
   const result = addMask(draft, segId, slug, opts, ns);
   saveDraft(filePath, draft);
@@ -2657,6 +2768,8 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
     minGapBetweenCaptionsUs:
       flags.minGapMs !== undefined ? flags.minGapMs * 1000 : DEFAULT_LINT_OPTIONS.minGapBetweenCaptionsUs,
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
+    probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
+    ffprobeCmd: flags.ffprobeCmd,
   };
 
   if (flags.fix) {
@@ -2677,6 +2790,7 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
         for (const i of remaining) {
           const loc = i.location?.segment_id ? ` [${i.location.segment_id.slice(0, 8)}]` : "";
           console.log(`${i.severity.toUpperCase().padEnd(7)} ${i.code.padEnd(22)}${loc}  ${i.message}`);
+          if (i.suggested_command) console.log(`        try: ${i.suggested_command}`);
         }
         console.log("");
         console.log(
@@ -2699,6 +2813,7 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
       for (const i of issues) {
         const loc = i.location?.segment_id ? ` [${i.location.segment_id.slice(0, 8)}]` : "";
         console.log(`${i.severity.toUpperCase().padEnd(7)} ${i.code.padEnd(22)}${loc}  ${i.message}`);
+        if (i.suggested_command) console.log(`        try: ${i.suggested_command}`);
       }
       console.log("");
       console.log(`${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`);
@@ -2973,6 +3088,7 @@ function cmdDiagnose(projectPath: string | undefined, flags: Flags): void {
   }
   if (flags.human) {
     console.log(`Canonical: ${report.canonical}`);
+    console.log(`Layout:    ${report.layout}`);
     console.log(`Version:   ${report.version ?? "unknown"}`);
     console.log(`Diverged:  ${report.diverged ? "YES" : "no"}`);
     console.log(`Editor:    ${report.editor_running.join(", ") || "not detected"}`);
@@ -3014,7 +3130,7 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
       ? `Would write ${plan.repairs.join(", ")}. Re-run with --apply to write.`
       : plan.blocked.length > 0
         ? `Registration cannot be verified or repaired: ${plan.blocked.join(", ")} — see targets.`
-        : "Draft is registered: draft_meta_info.json and the store's root_meta_info.json entry agree with draft_content.json.";
+        : `Draft is registered: draft_meta_info.json and the store's root_meta_info.json entry agree with ${plan.identity_source}.`;
     out({ ok: plan.blocked.length === 0, applied: false, message, ...plan }, flags);
     if (!flags.quiet) {
       for (const target of plan.targets) {
@@ -3068,7 +3184,7 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
   }
   const ok = plan.blocked.length === 0;
   out({ ok, applied, backups, ...verify.plan }, flags);
-  if (!flags.quiet) process.stderr.write(`Registered from draft_content.json: wrote ${applied.join(", ")}\n`);
+  if (!flags.quiet) process.stderr.write(`Registered from ${plan.identity_source}: wrote ${applied.join(", ")}\n`);
   warnBlocked();
   return ok ? 0 : 2;
 }
@@ -3076,8 +3192,9 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
 // `sync-timelines` repairs a draft whose mirror files (template-2.tmp /
 // draft_info.json — including the pre-open mirror's stale GUID) drifted from
 // draft_content.json, the CapCut >= 8.7 "CLI edit silently ignored" failure
-// (issue #35 / #39). draft_content.json is canonical and treated as a
-// read-only source: --apply rewrites EXACTLY the drifted mirrors inside their
+// (issue #35 / #39). draft_content.json is canonical (draft_info.json on the
+// draft_info-primary Mac layout — the plan's canonical_note carries the
+// fixture CTA there) and treated as a read-only source: --apply rewrites EXACTLY the drifted mirrors inside their
 // own envelopes (atomic temp+rename, one .bak per file written) and never
 // touches draft_content.json or in-sync mirrors. Because CapCut >= 8.7 writes
 // the mirrors on save, a canonical file OLDER than a drifted mirror may mean
@@ -3101,9 +3218,12 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       .map((target) => `${target.file} (${target.mtime})`)
       .join(", ");
     return (
-      `draft_content.json (${canonicalTarget?.mtime}) is OLDER than the drifted mirror(s) ${newer}. ` +
+      `${plan.canonical} (${canonicalTarget?.mtime}) is OLDER than the drifted mirror(s) ${newer}. ` +
       "CapCut >= 8.7 writes these mirrors on save, so they may hold newer app edits that this repair would roll back."
     );
+  };
+  const noteCanonical = (): void => {
+    if (!flags.quiet && plan.canonical_note) process.stderr.write(`NOTE: ${plan.canonical_note}\n`);
   };
 
   if (plan.in_sync) {
@@ -3113,16 +3233,18 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       : `Readable timeline targets agree, but ${plan.unreconcilable.map((u) => u.file).join(", ")} cannot be reconciled by the CLI — see unreconcilable.`;
     out({ ok, applied: false, message, ...plan, in_sync: ok }, flags);
     if (!flags.quiet) process.stderr.write(`${message}\n`);
+    noteCanonical();
     warnUnreconcilable();
     return ok ? 0 : 2;
   }
 
   if (!flags.apply) {
-    const message = `Would rewrite ${plan.drifted.join(", ")} from draft_content.json. Re-run with --apply to write.`;
+    const message = `Would rewrite ${plan.drifted.join(", ")} from ${plan.canonical}. Re-run with --apply to write.`;
     out({ ok: true, applied: false, message, ...plan }, flags);
     if (!flags.quiet) {
       const canonicalTarget = plan.targets.find((target) => target.state === "canonical");
-      process.stderr.write(`plan: canonical draft_content.json (mtime ${canonicalTarget?.mtime})\n`);
+      process.stderr.write(`plan: canonical ${plan.canonical} (mtime ${canonicalTarget?.mtime})\n`);
+      noteCanonical();
       for (const target of plan.targets) {
         if (target.state !== "drifted") continue;
         const guidNote = target.guid_drifted ? ` [stale GUID ${target.guid} -> canonical]` : "";
@@ -3150,7 +3272,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     if (plan.canonical_stale) {
       die(
         `${staleCanonicalWarning()} Back up the project, review the plan (capcut sync-timelines ${projectPath}), ` +
-          "and pass --force-write only if draft_content.json is really the timeline you want to keep.",
+          `and pass --force-write only if ${plan.canonical} is really the timeline you want to keep.`,
       );
     }
   }
@@ -3164,7 +3286,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   const safety = assessWriteSafety(canonicalDraft, plan.version);
 
   if (isDryRun()) {
-    const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from draft_content.json; nothing was written.`;
+    const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from ${plan.canonical}; nothing was written.`;
     out(
       {
         ok: true,
@@ -3172,6 +3294,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
         message,
         project_dir: plan.project_dir,
         canonical: plan.canonical,
+        layout: plan.layout,
+        canonical_note: plan.canonical_note,
         would_reconcile: plan.drifted,
         reconciled: [],
         backups: [],
@@ -3210,6 +3334,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       applied: true,
       project_dir: plan.project_dir,
       canonical: plan.canonical,
+      layout: plan.layout,
+      canonical_note: plan.canonical_note,
       reconciled: plan.drifted,
       backups: plan.drifted.map((file) => `${file}.bak`),
       unreconcilable: plan.unreconcilable,
@@ -3507,6 +3633,10 @@ const SUMMARIES: Record<string, string> = {
   trim: "Trim a segment to a start/duration window.",
   opacity: "Set a segment's opacity (0.0-1.0).",
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
+  "export-timeline":
+    "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
+  "harvest-enums":
+    "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
   materials: "List material types and counts; filter with --type.",
   segment: "Full detail for one segment and its material.",
   material: "Full detail for one material.",
@@ -4203,6 +4333,12 @@ async function main(): Promise<void> {
       break;
     case "export-srt":
       cmdExportSrt(draft, flags);
+      break;
+    case "export-timeline":
+      cmdExportTimeline(draft, flags);
+      break;
+    case "harvest-enums":
+      cmdHarvestEnums(draft, flags);
       break;
     case "materials":
       cmdMaterials(draft, flags);

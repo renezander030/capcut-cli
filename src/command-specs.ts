@@ -164,6 +164,7 @@ const usages = {
   trim: "capcut trim <project> <id> <start> <duration>",
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
+  "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
   materials: "capcut materials <project> [--type <type>]",
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
@@ -211,6 +212,7 @@ const usages = {
   describe: "capcut describe",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
+  "harvest-enums": "capcut harvest-enums <project> [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
   fixture: "capcut fixture <project> --out <dir>",
@@ -239,6 +241,9 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("max_cue_secs", ["--max-cue-secs"], "number", "Maximum caption duration in seconds.", { default: 7 }),
     option("min_gap_ms", ["--min-gap-ms"], "number", "Minimum caption gap in milliseconds.", { default: 0 }),
     option("no_check_paths", ["--no-check-paths"], "boolean", "Skip local media path checks."),
+    option("fix", ["--fix"], "boolean", "Mechanically repair fixable issues and write the draft."),
+    option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
+    FFPROBE,
   ],
   segments: [TRACK],
   "shift-all": [TRACK],
@@ -313,6 +318,13 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("invert", ["--invert"], "boolean", "Invert mask."),
     option("rect_width", ["--rect-width"], "number", "Rectangle width."),
     option("round_corner", ["--round-corner"], "number", "Rectangle corner radius."),
+    option(
+      "mask_field",
+      ["--mask-field"],
+      "enum",
+      "Materials array to write the mask into (default: auto — an already-populated variant, else version evidence).",
+      { values: ["masks", "common_mask", "common_masks"] },
+    ),
   ],
   "bg-blur": [option("off", ["--off"], "boolean", "Remove background blur.")],
   "text-style": [...TEXT_STYLE, PRESET],
@@ -388,6 +400,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     }),
     option("format", ["--format"], "enum", "Subtitle output format.", { values: ["srt", "vtt"], default: "srt" }),
   ],
+  "export-timeline": [OUT],
   "import-srt": [
     TRACK_NAME,
     STYLE_REF,
@@ -444,6 +457,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Write the repaired draft_meta_info.json / root_meta_info.json entry (default: print the plan only).",
     ),
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
+  ],
+  "harvest-enums": [
+    option("apply", ["--apply"], "boolean", "Write the new entries into the user catalogue (default: plan only)."),
+    option(
+      "catalogue",
+      ["--catalogue"],
+      "path",
+      "User catalogue file (default: ~/.config/capcut-cli/user-enums.json, or $CAPCUT_CLI_USER_ENUMS).",
+    ),
   ],
   relink: [
     option("dir", ["--dir"], "path", "Directory containing replacement files."),
@@ -548,11 +570,14 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --keep-track, --keep-materials -> remove
 //   --full               -> add-filter, add-effect (v0.15 whole-timeline range)
 //   --bind               -> add-effect (v0.15 per-segment attachment)
+//   --mask-field         -> mask (v0.16 explicit mask array variant)
+//   --catalogue          -> harvest-enums (v0.16 user catalogue path)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--apply",
   "--bind",
+  "--catalogue",
   "--color-cycle",
   "--easing",
   "--format",
@@ -565,6 +590,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keyword-color",
   "--keyword-size",
   "--limit",
+  "--mask-field",
   "--min-gap",
   "--new-track",
   "--preset",
@@ -634,7 +660,7 @@ const mutating = new Set([
 ]);
 
 const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
-const textOutputs = new Set(["export-srt", "completions"]);
+const textOutputs = new Set(["export-srt", "export-timeline", "completions"]);
 const fileOutputs = new Set(["render", "translate", "compile", "cut", "save-template", "make-preset"]);
 
 function inferType(name: string): ArgumentType {
