@@ -3,7 +3,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { knownEffectIds } from "../dist/lint.js";
 import {
   allUserEnumIds,
   clearUserEnumsCache,
