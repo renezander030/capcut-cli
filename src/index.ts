@@ -424,17 +424,18 @@ Maintenance & inspection:
   fixture    <project> --out <dir>              Build a shareable, redacted compatibility bundle
              (timeline JSON only, no media; home paths + emails redacted) to
              attach to a version-support issue like #35.
-  sync-timelines <project-dir> [--apply]        Reconcile timeline mirrors (template-2.tmp,
-             draft_info.json) that drifted from draft_content.json, so a CLI
-             edit is honored by CapCut >= 8.7 (issue #35). Prints the plan
-             (with each file's mtime) by default; --apply rewrites ONLY the
-             drifted mirrors — draft_content.json and in-sync mirrors are
-             never touched — with a .bak per file written. Refuses to write
-             while the editor is running, or when draft_content.json is older
-             than a drifted mirror (the app may have saved newer edits there),
-             unless --force-write. Accepts the project directory or its
-             draft_content.json path. Exits 2 when a mirror exists that the
-             CLI cannot reconcile (binary/encrypted template-2.tmp).
+  sync-timelines <project-dir> [--apply]        Reconcile timeline mirrors from the
+             layout-selected canonical source. CapCut 7.x follows the active
+             Timelines/project.json pointer; newer layouts retain their root
+             draft_content/template selection. Prints the plan (with each
+             file's mtime) by default; --apply rewrites ONLY drifted mirrors —
+             the canonical and in-sync mirrors are never touched — with a .bak
+             per file written. Refuses to write while the editor is running,
+             or when an unpointed canonical is older than a drifted mirror (the
+             app may have saved newer edits there), unless --force-write. Pass
+             the project directory; root draft_content.json and the active 7.x
+             nested draft path are also accepted. Exits 2 when a mirror exists
+             that the CLI cannot reconcile (binary/encrypted template-2.tmp).
 
 Animate:
   keyframe   <project> <id> <property> <time> <value> [--easing <name>]
@@ -3192,11 +3193,12 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
 // `sync-timelines` repairs a draft whose mirror files (template-2.tmp /
 // draft_info.json — including the pre-open mirror's stale GUID) drifted from
 // draft_content.json, the CapCut >= 8.7 "CLI edit silently ignored" failure
-// (issue #35 / #39). draft_content.json is canonical (draft_info.json on the
-// draft_info-primary Mac layout — the plan's canonical_note carries the
-// fixture CTA there) and treated as a read-only source: --apply rewrites EXACTLY the drifted mirrors inside their
-// own envelopes (atomic temp+rename, one .bak per file written) and never
-// touches draft_content.json or in-sync mirrors. Because CapCut >= 8.7 writes
+// (issue #35 / #39), and CapCut 7.x's project-root mirror drift. The storage
+// layout selects a canonical source (including Timelines/<active-id> or the
+// draft_info-primary Mac layout), which remains read-only: --apply rewrites
+// EXACTLY the drifted mirrors inside their own envelopes (atomic temp+rename,
+// one .bak per file written) and never touches the canonical or in-sync mirrors.
+// Because CapCut >= 8.7 writes
 // the mirrors on save, a canonical file OLDER than a drifted mirror may mean
 // the mirror holds newer app edits — --apply refuses that direction unless
 // --force-write. Plan-only by default; --apply writes. Returns the exit code:
@@ -3343,7 +3345,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     },
     flags,
   );
-  if (!flags.quiet) process.stderr.write(`Reconciled from draft_content.json: ${plan.drifted.join(", ")}\n`);
+  if (!flags.quiet) process.stderr.write(`Reconciled from ${plan.canonical}: ${plan.drifted.join(", ")}\n`);
   warnUnreconcilable();
   return ok ? 0 : 2;
 }
@@ -3678,7 +3680,7 @@ const SUMMARIES: Record<string, string> = {
   doctor: "Environment preflight (Node, whisper, API key, project dir).",
   diagnose: "Inspect canonical draft files, divergence, and editor-write safety.",
   "sync-timelines":
-    "Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors).",
+    "Reconcile drifted mirrors from the layout-selected read-only canonical, including CapCut 7.x's active Timelines draft (plan with mtimes by default; --apply rewrites only drifted mirrors).",
   prune: "Remove materials no segment references.",
   register:
     "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak).",

@@ -485,7 +485,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "apply",
       ["--apply"],
       "boolean",
-      "Rewrite only the drifted mirror files from draft_content.json (default: print the plan only).",
+      "Rewrite only drifted mirrors from the layout-selected canonical timeline (default: print the plan only).",
     ),
   ],
   "replace-media": [

@@ -16,7 +16,7 @@ English | [中文](./README.zh-CN.md)
 
 **An independent CLI for CapCut / JianYing that any LLM agent can drive — zero dependencies, no server, both namespaces in one binary.**
 
-JSON in, JSON out: every command reads and writes the local draft store directly, with no MCP server or HTTP daemon. On newer CapCut versions it detects and synchronizes every readable timeline target instead of assuming `draft_content.json` is the only source of truth. That gives any model (Claude, DeepSeek, GLM, Kimi) a deterministic boundary for inspection, building, subtitles, captions, translation, and long-form cuts.
+JSON in, JSON out: every command reads and writes the local draft store directly, with no MCP server or HTTP daemon. For CapCut 7.x projects it follows `Timelines/project.json` to the active nested timeline; on newer versions it detects and synchronizes every readable timeline target instead of assuming `draft_content.json` is the only source of truth. That gives any model (Claude, DeepSeek, GLM, Kimi) a deterministic boundary for inspection, building, subtitles, captions, translation, and long-form cuts.
 
 **Use it three ways:**
 

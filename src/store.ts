@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { platform } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
 import { assessWriteSafety, atLeast } from "./version.js";
 
 const STANDARD_FILES = ["draft_content.json", "draft_info.json", "draft_meta_info.json", "template-2.tmp"] as const;
+const ACTIVE_TIMELINE_FILES = ["draft_info.json", "draft_content.json"] as const;
 
 export type DraftCandidateName = (typeof STANDARD_FILES)[number] | string;
 
@@ -26,16 +27,17 @@ export interface DraftCandidate {
   error?: string;
 }
 
-/** Which primary project file drives this store: draft_content.json (the
- * layout every pre-Mac-10.x build uses), draft_info.json with no
- * draft_content.json beside it (reported as the primary project file on newer
- * Mac builds — jianying-mcp#5, pyJianYingDraft#177/#194), or neither
- * (timeline readable only from a mirror such as template-2.tmp). */
-export type DraftStoreLayout = "content-primary" | "info-primary" | "unknown";
+/** Which primary project file drives this store: an active draft beneath
+ * Timelines/<main_timeline_id> (CapCut 7.x), root draft_content.json, root
+ * draft_info.json with no draft_content.json beside it (reported on newer Mac
+ * builds — jianying-mcp#5, pyJianYingDraft#177/#194), or neither (timeline
+ * readable only from a mirror such as template-2.tmp). */
+export type DraftStoreLayout = "timelines-primary" | "content-primary" | "info-primary" | "unknown";
 
 export interface DraftStore {
   projectDir: string;
   canonical: DraftCandidate;
+  activeTimeline: DraftCandidate | null;
   targets: DraftCandidate[];
   candidates: DraftCandidate[];
   version: string | null;
@@ -111,8 +113,8 @@ function findTimeline(value: unknown, path: string[] = [], depth = 0): { draft: 
 // Exported for factory.ts (register): read one file into a DraftCandidate —
 // BOM-stripped, envelope-aware — without the sibling discovery a full
 // discoverDraftStore would do.
-export function parseCandidate(path: string): DraftCandidate {
-  const name = path.split(/[\\/]/).pop() ?? path;
+export function parseCandidate(path: string, displayName?: string): DraftCandidate {
+  const name = displayName ?? path.split(/[\\/]/).pop() ?? path;
   if (!existsSync(path)) {
     return {
       name,
@@ -174,22 +176,121 @@ export function parseCandidate(path: string): DraftCandidate {
   }
 }
 
-function candidatePaths(input: string): { projectDir: string; requested: string | null; paths: string[] } {
+interface CandidatePath {
+  path: string;
+  name?: string;
+}
+
+interface CandidatePaths {
+  projectDir: string;
+  requested: string | null;
+  candidates: CandidatePath[];
+  activeTimelinePaths: string[];
+}
+
+function nestedTimelineProjectDir(path: string): string | null {
+  const timelineDir = dirname(path);
+  const timelinesDir = dirname(timelineDir);
+  return basename(timelinesDir).toLowerCase() === "timelines" ? dirname(timelinesDir) : null;
+}
+
+function displayPath(projectDir: string, path: string): string {
+  return relative(projectDir, path).split(sep).join("/");
+}
+
+function isContainedPath(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return path.length > 0 && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
+function activeTimelineCandidates(projectDir: string): CandidatePath[] {
+  const timelinesDir = resolve(projectDir, "Timelines");
+  const projectJson = join(timelinesDir, "project.json");
+  if (!existsSync(projectJson)) return [];
+
+  let timelineId: unknown;
+  try {
+    const project = JSON.parse(stripBom(readFileSync(projectJson, "utf-8"))) as Record<string, unknown>;
+    timelineId = project.main_timeline_id ?? project.id;
+  } catch {
+    return [];
+  }
+  if (typeof timelineId !== "string" || timelineId.length === 0) return [];
+
+  // project.json is app-authored but still untrusted input. Keep a malformed id
+  // from escaping the project's Timelines directory through `..` or an absolute
+  // path before probing candidate files.
+  const activeDir = resolve(timelinesDir, timelineId);
+  if (!isContainedPath(timelinesDir, activeDir) || !existsSync(activeDir) || !statSync(activeDir).isDirectory()) {
+    return [];
+  }
+
+  let realTimelinesDir: string;
+  try {
+    realTimelinesDir = realpathSync(timelinesDir);
+    if (!isContainedPath(realTimelinesDir, realpathSync(activeDir))) return [];
+  } catch {
+    return [];
+  }
+
+  return ACTIVE_TIMELINE_FILES.flatMap((name) => {
+    const path = join(activeDir, name);
+    if (existsSync(path)) {
+      try {
+        if (!isContainedPath(realTimelinesDir, realpathSync(path))) return [];
+      } catch {
+        return [];
+      }
+    }
+    return [{ path, name: displayPath(projectDir, path) }];
+  });
+}
+
+function candidatePaths(input: string): CandidatePaths {
   const resolved = resolve(input);
   const isFile = existsSync(resolved) && statSync(resolved).isFile();
-  const projectDir = isFile ? dirname(resolved) : resolved;
+  let projectDir = isFile ? dirname(resolved) : resolved;
+  let activeCandidates: CandidatePath[] = [];
+  if (isFile) {
+    const nestedProjectDir = nestedTimelineProjectDir(resolved);
+    if (nestedProjectDir) {
+      const nestedProjectCandidates = activeTimelineCandidates(nestedProjectDir);
+      if (nestedProjectCandidates.some((candidate) => candidate.path === resolved)) {
+        projectDir = nestedProjectDir;
+        activeCandidates = nestedProjectCandidates;
+      }
+    }
+  }
   const requested = isFile ? resolved : null;
-  const paths = requested ? [requested] : [];
+  const candidates: CandidatePath[] = [];
+  const add = (candidate: CandidatePath): void => {
+    const existing = candidates.find((item) => item.path === candidate.path);
+    if (existing) {
+      // Prefer the project-relative label for an active nested timeline over
+      // its otherwise ambiguous basename when the same path was requested.
+      if (candidate.name?.includes("/")) existing.name = candidate.name;
+      return;
+    }
+    candidates.push(candidate);
+  };
+  if (requested) add({ path: requested });
   for (const name of STANDARD_FILES) {
     const path = join(projectDir, name);
-    if (!paths.includes(path)) paths.push(path);
+    add({ path });
   }
-  return { projectDir, requested, paths };
+  if (activeCandidates.length === 0) activeCandidates = activeTimelineCandidates(projectDir);
+  for (const candidate of activeCandidates) add(candidate);
+  return {
+    projectDir,
+    requested,
+    candidates,
+    activeTimelinePaths: activeCandidates.map((candidate) => candidate.path),
+  };
 }
 
 export function discoverDraftStore(input: string): DraftStore {
-  const { projectDir, requested, paths } = candidatePaths(input);
-  const candidates = paths.map(parseCandidate);
+  const { projectDir, requested, candidates: candidateSpecs, activeTimelinePaths } = candidatePaths(input);
+  const candidates = candidateSpecs.map((candidate) => parseCandidate(candidate.path, candidate.name));
   const parseable = candidates.filter((candidate) => candidate.parseable && candidate.draft);
   if (parseable.length === 0) {
     const found = candidates.filter((candidate) => candidate.exists).map((candidate) => candidate.name);
@@ -204,9 +305,28 @@ export function discoverDraftStore(input: string): DraftStore {
     .filter((value): value is string => typeof value === "string" && value.length > 0);
   const version = versions.sort((a, b) => (atLeast(a, b) ? -1 : 1))[0] ?? null;
   const modernStorage = atLeast(version, "8.7");
+  const discoveredActiveTimeline = activeTimelinePaths
+    .map((path) => parseable.find((candidate) => candidate.path === path))
+    .find((candidate): candidate is DraftCandidate => Boolean(candidate));
+  // Preserve the established >=8.7 storage rule: those projects can carry
+  // readable legacy/nested mirrors while template-2.tmp remains app-canonical.
+  // The nested source-of-truth behavior is verified for pre-8.7 CapCut only.
+  const activeTimeline = modernStorage ? undefined : discoveredActiveTimeline;
+  const activeTimelinePathSet = new Set(activeTimelinePaths);
+  const requestedCandidate = requested ? parseable.find((candidate) => candidate.path === requested) : undefined;
+  const explicitlyRequestedActiveTimeline = Boolean(
+    requestedCandidate && activeTimelinePathSet.has(requestedCandidate.path),
+  );
+  const targets = modernStorage
+    ? explicitlyRequestedActiveTimeline
+      ? parseable.filter((candidate) => candidate.path === requested)
+      : parseable.filter((candidate) => !activeTimelinePathSet.has(candidate.path))
+    : requestedCandidate && activeTimelinePathSet.size > 0 && !explicitlyRequestedActiveTimeline
+      ? parseable.filter((candidate) => !activeTimelinePathSet.has(candidate.path))
+      : parseable;
 
-  let canonical: DraftCandidate | undefined;
-  if (requested) canonical = parseable.find((candidate) => candidate.path === requested);
+  let canonical = requestedCandidate;
+  canonical ??= activeTimeline;
   const preference = modernStorage
     ? ["template-2.tmp", "draft_meta_info.json", "draft_content.json", "draft_info.json"]
     : ["draft_content.json", "draft_info.json", "template-2.tmp", "draft_meta_info.json"];
@@ -215,18 +335,25 @@ export function discoverDraftStore(input: string): DraftStore {
     .find((candidate): candidate is DraftCandidate => Boolean(candidate));
   canonical ??= parseable[0];
 
-  const timelineHashes = new Set(parseable.map((candidate) => candidate.timelineHash).filter(Boolean));
+  const timelineHashes = new Set(targets.map((candidate) => candidate.timelineHash).filter(Boolean));
   const contentReadable = parseable.some((candidate) => candidate.name === "draft_content.json");
   const infoReadable = parseable.some((candidate) => candidate.name === "draft_info.json");
   return {
     projectDir,
     canonical,
-    targets: parseable,
+    activeTimeline: activeTimeline ?? null,
+    targets,
     candidates,
     version,
     modernStorage,
     diverged: timelineHashes.size > 1,
-    layout: contentReadable ? "content-primary" : infoReadable ? "info-primary" : "unknown",
+    layout: activeTimeline
+      ? "timelines-primary"
+      : contentReadable
+        ? "content-primary"
+        : infoReadable
+          ? "info-primary"
+          : "unknown",
   };
 }
 
@@ -290,6 +417,14 @@ export function isManagedDraftPath(path: string): boolean {
 // registration metadata, not a mirror, so it is never flagged unreconcilable.
 const MIRROR_FILES = new Set<string>(["draft_info.json", "template-2.tmp"]);
 
+function candidateFileName(candidate: DraftCandidate): string {
+  return basename(candidate.path);
+}
+
+function isNestedTimelineCandidate(candidate: DraftCandidate): boolean {
+  return candidate.name.startsWith("Timelines/");
+}
+
 export interface TimelineSyncTarget {
   file: string;
   state: "canonical" | "in_sync" | "drifted";
@@ -315,8 +450,8 @@ export interface TimelineSyncPlan {
   version: string | null;
   modern_storage: boolean;
   layout: DraftStoreLayout;
-  /** Set when the canonical is not draft_content.json (draft_info-primary
-   * layout): names the promotion and carries the fixture CTA. */
+  /** Set when the canonical is not root draft_content.json: explains which
+   * storage layout selected the canonical source. */
   canonical_note: string | null;
   in_sync: boolean;
   /** Drifted mirrors whose mtime is newer than draft_content.json's. CapCut
@@ -351,53 +486,59 @@ function syncTarget(candidate: DraftCandidate, state: TimelineSyncTarget["state"
 }
 
 /**
- * Plan for `sync-timelines` (issue #39, symptom #35): draft_content.json is
- * canonical (draft_info.json on the draft_info-primary Mac layout — see
- * DraftStoreLayout); every other readable timeline target is compared against
- * it by timeline hash. Direction is always draft_content.json -> mirror, but each
- * target's mtime is surfaced: CapCut >= 8.7 writes the mirrors on save, so a
- * drifted mirror NEWER than draft_content.json may hold app edits that the
+ * Plan for `sync-timelines` (issue #39, symptom #35): the storage layout picks
+ * the authoritative timeline, then every other readable target is compared
+ * against it by timeline hash. CapCut 7.x's Timelines/project.json pointer wins
+ * over project-root mirrors; otherwise root draft_content.json is canonical,
+ * with root draft_info.json promoted for the draft_info-primary Mac layout.
+ * Target mtimes are surfaced because a newer mirror may hold app edits that a
  * repair would roll back (canonical_stale / newer_mirrors flag this; --apply
- * refuses without --force-write). A mirror file that exists but holds no
- * readable timeline (binary/encrypted template-2.tmp) cannot be reconciled
- * and is reported as such instead of being silently skipped. Accepts a
- * project directory or its draft_content.json path; any other explicitly
- * named file is rejected so the plan and the write always cover the same
- * target set.
+ * refuses without --force-write). Timelines/project.json is an explicit source
+ * of authority, so a newer derived root mirror does not reverse that direction.
+ * A mirror file that exists but holds no readable timeline cannot be reconciled
+ * and is reported instead of being silently skipped.
  */
 export function planTimelineSync(input: string): TimelineSyncResult {
   const resolved = resolve(input);
-  if (existsSync(resolved) && statSync(resolved).isFile() && basename(resolved) !== "draft_content.json") {
+  const inputIsFile = existsSync(resolved) && statSync(resolved).isFile();
+  const store = discoverDraftStore(input);
+  const acceptedPrimaryFile =
+    !inputIsFile ||
+    (store.layout === "timelines-primary"
+      ? store.activeTimeline?.path === resolved
+      : basename(resolved) === "draft_content.json");
+  if (!acceptedPrimaryFile) {
     throw new Error(
-      `sync-timelines reconciles a project's mirror files from draft_content.json and cannot target ${basename(resolved)} directly. ` +
+      `sync-timelines reconciles a project's mirror files from its primary timeline and cannot target ${basename(resolved)} directly. ` +
         `Pass the project directory instead: capcut sync-timelines ${dirname(resolved)}`,
     );
   }
-  const store = discoverDraftStore(input);
-  // draft_content.json is the sync canonical. On the draft_info-primary layout
-  // (no draft_content.json; newer Mac builds drive the project from
-  // draft_info.json — jianying-mcp#5, pyJianYingDraft#177/#194) draft_info.json
-  // is promoted to canonical so the repair works there too instead of refusing
-  // (pre-v0.16 behaviour). Round-trip evidence for that layout is
-  // synthetic-only, so the plan carries a canonical_note with the fixture CTA.
+
+  // The active Timelines/<id> draft is authoritative when project.json names
+  // it. Otherwise retain the existing root-primary selection rules.
   const canonical =
+    store.activeTimeline ??
     store.targets.find((candidate) => candidate.name === "draft_content.json") ??
     (store.layout === "info-primary"
       ? store.targets.find((candidate) => candidate.name === "draft_info.json")
       : undefined);
   if (!canonical?.draft) {
     throw new Error(
-      "sync-timelines needs a readable draft_content.json or draft_info.json (the canonical timeline source). " +
+      "sync-timelines needs a readable draft_content.json or draft_info.json, or an active Timelines draft " +
+        "(the canonical timeline source). " +
         "Run `capcut diagnose <project>` to inspect what is on disk.",
     );
   }
   const canonicalNote =
-    canonical.name === "draft_info.json"
-      ? "draft_info.json is the canonical source: this project has no draft_content.json (draft_info-primary " +
-        "layout, reported as the primary project file on newer Mac builds). Round-trip evidence for this layout " +
-        "is synthetic-only — if this project opens fine in your app, contribute a bundle: " +
-        "`capcut fixture <project> --out <dir>`."
-      : null;
+    store.layout === "timelines-primary"
+      ? `${canonical.name} is the canonical source: Timelines/project.json identifies it as the active ` +
+        "CapCut 7.x timeline; project-root timeline files are derived mirrors."
+      : canonical.name === "draft_info.json"
+        ? "draft_info.json is the canonical source: this project has no draft_content.json (draft_info-primary " +
+          "layout, reported as the primary project file on newer Mac builds). Round-trip evidence for this layout " +
+          "is synthetic-only — if this project opens fine in your app, contribute a bundle: " +
+          "`capcut fixture <project> --out <dir>`."
+        : null;
   const canonicalDraft = canonical.draft;
   const canonicalMtime = canonical.mtime ? Date.parse(canonical.mtime) : Number.NaN;
 
@@ -408,8 +549,9 @@ export function planTimelineSync(input: string): TimelineSyncResult {
   const unreconcilable: TimelineSyncUnreconcilable[] = [];
   for (const candidate of store.candidates) {
     if (!candidate.exists || candidate.path === canonical.path) continue;
+    if (store.modernStorage && isNestedTimelineCandidate(candidate)) continue;
     if (!candidate.parseable || !candidate.draft) {
-      if (MIRROR_FILES.has(candidate.name)) {
+      if (MIRROR_FILES.has(candidateFileName(candidate))) {
         unreconcilable.push({
           file: candidate.name,
           reason: candidate.error ?? "no readable timeline",
@@ -426,7 +568,12 @@ export function planTimelineSync(input: string): TimelineSyncResult {
       drifted.push(candidate.name);
       driftedCandidates.push(candidate);
       const mirrorMtime = candidate.mtime ? Date.parse(candidate.mtime) : Number.NaN;
-      if (Number.isFinite(canonicalMtime) && Number.isFinite(mirrorMtime) && mirrorMtime > canonicalMtime) {
+      if (
+        store.layout !== "timelines-primary" &&
+        Number.isFinite(canonicalMtime) &&
+        Number.isFinite(mirrorMtime) &&
+        mirrorMtime > canonicalMtime
+      ) {
         newerMirrors.push(candidate.name);
       }
     }
@@ -484,6 +631,12 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
         "primary project file on newer Mac builds). Edit commands, register, and sync-timelines treat it as " +
         "canonical, but round-trip evidence for this layout is synthetic-only — if this project opens fine in " +
         "your app, contribute a bundle: `capcut fixture <project> --out <dir>`.",
+    );
+  }
+  if (store.layout === "timelines-primary") {
+    actions.push(
+      `${store.activeTimeline?.name ?? "The active Timelines draft"} is authoritative because ` +
+        "Timelines/project.json selects it. Edit commands synchronize its readable project-root mirrors.",
     );
   }
   if (running.length > 0) actions.push(`Close ${running.join(" / ")} before editing this managed draft.`);

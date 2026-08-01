@@ -4246,7 +4246,7 @@
     },
     {
       "name": "sync-timelines",
-      "summary": "Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors).",
+      "summary": "Reconcile drifted mirrors from the layout-selected read-only canonical, including CapCut 7.x's active Timelines draft (plan with mtimes by default; --apply rewrites only drifted mirrors).",
       "usage": "capcut sync-timelines <project-dir> [--apply]",
       "positionals": [
         {
@@ -4263,7 +4263,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Rewrite only the drifted mirror files from draft_content.json (default: print the plan only)."
+          "description": "Rewrite only drifted mirrors from the layout-selected canonical timeline (default: print the plan only)."
         }
       ],
       "mutates": true,

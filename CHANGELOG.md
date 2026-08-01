@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **CapCut 7.x active Timelines layout** — projects whose `Timelines/project.json` points at `Timelines/<main_timeline_id>/draft_info.json` now read and write that active timeline instead of treating the project-root `draft_info.json` mirror as canonical. Normal edits synchronize every readable mirror through the existing transactional write path, while `sync-timelines` always repairs in the safe active-timeline → root-mirror direction even when the derived mirror has a newer mtime. Legacy root-only projects and explicit file paths retain their existing behavior.
+
 ## [0.16.0] — 2026-07-31
 
 Six features in one release — the next slice of the opportunity backlog, bundled. The headline is version-compat: the draft_info-primary Mac layout becomes first-class instead of edit-only, and masks land in the array variant the installed app build actually reads. Behaviour changes are called out inline; the ones to know: `sync-timelines`/`register` now *work* on Mac-layout projects where they previously refused, `mask` on a version-marked JianYing draft targets the correct variant array (that is the fix), `migrate` also consolidates `common_mask[]`, `lint` probes existing local media by default (`--no-probe` opts out) and gains a warning-severity dangling-ref check — a draft carrying those now exits 1 (run `lint --fix`). Markerless and CapCut drafts write byte-identically to v0.15.0 with no new flags in play.
