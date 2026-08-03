@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { platform } from "node:os";
+import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
@@ -282,6 +282,43 @@ export function editorProcesses(): string[] {
 
 export function isManagedDraftPath(path: string): boolean {
   return path.replace(/\\/g, "/").toLowerCase().includes("/com.lveditor.draft/");
+}
+
+/**
+ * Per-OS CapCut/JianYing draft stores, in preference order. Empty on platforms
+ * with no desktop editor (Linux), where the caller must be told to pass a path.
+ */
+export function draftDirCandidates(): { label: string; path: string }[] {
+  const home = homedir();
+  if (platform() === "darwin") {
+    return [
+      { label: "CapCut (macOS)", path: join(home, "Movies/CapCut/User Data/Projects/com.lveditor.draft") },
+      { label: "JianYing (macOS)", path: join(home, "Movies/JianyingPro/User Data/Projects/com.lveditor.draft") },
+    ];
+  }
+  if (platform() === "win32") {
+    // HOME is usually unset on Windows, so never derive the store from it.
+    const local = process.env.LOCALAPPDATA ?? join(process.env.USERPROFILE ?? home, "AppData/Local");
+    return [
+      { label: "CapCut (Windows)", path: join(local, "CapCut/User Data/Projects/com.lveditor.draft") },
+      { label: "JianYing (Windows)", path: join(local, "JianyingPro/User Data/Projects/com.lveditor.draft") },
+    ];
+  }
+  return [];
+}
+
+/**
+ * Where a draft-creating command writes when the caller passed no --drafts.
+ * CAPCUT_DRAFT_DIR wins, then the first store that exists, then the first
+ * candidate. Null means this platform has no known store: callers must fail
+ * loudly rather than guess, because a draft outside the app's store opens as
+ * "this draft comes from an unconventional path" (issue #52).
+ */
+export function defaultDraftsDir(): string | null {
+  const override = process.env.CAPCUT_DRAFT_DIR?.trim();
+  if (override) return resolve(override);
+  const candidates = draftDirCandidates();
+  return candidates.find((c) => existsSync(c.path))?.path ?? candidates[0]?.path ?? null;
 }
 
 // Files CapCut may read as its timeline source instead of draft_content.json:

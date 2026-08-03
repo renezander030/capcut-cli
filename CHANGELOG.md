@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] — 2026-08-03
+
+### Fixed
+
+- `init`, `quickstart`, and `compile` (without `--out`) resolved their default draft store from a hardcoded macOS path built on `$HOME`, on every platform. `doctor` already knew the per-OS stores, but nothing else used them, so on Windows — where `HOME` is normally unset — the default collapsed to a literal `~/Movies/CapCut/User Data/Projects/com.lveditor.draft` folder created next to the working directory. CapCut refuses a draft there with "this draft comes from an unconventional path and is temporarily unsupported" (#52), on any app version. The per-OS candidate list now lives in `store.ts` as `draftDirCandidates()` (`doctor` delegates to it) and draft-creating commands resolve through `defaultDraftsDir()`: `CAPCUT_DRAFT_DIR` wins, then the first store that exists on disk, then the first candidate for the platform. Windows derives the store from `LOCALAPPDATA` (falling back to `USERPROFILE`), never from `HOME`. On a platform with no known store (Linux) the commands now exit 1 naming `--drafts` and `CAPCUT_DRAFT_DIR` instead of silently writing a draft the editor will not open. `compile --out` never touches the store. Existing drafts already stranded in a wrong location are repaired with `register --apply`.
+
 ## [0.16.0] — 2026-07-31
 
 Six features in one release — the next slice of the opportunity backlog, bundled. The headline is version-compat: the draft_info-primary Mac layout becomes first-class instead of edit-only, and masks land in the array variant the installed app build actually reads. Behaviour changes are called out inline; the ones to know: `sync-timelines`/`register` now *work* on Mac-layout projects where they previously refused, `mask` on a version-marked JianYing draft targets the correct variant array (that is the fix), `migrate` also consolidates `common_mask[]`, `lint` probes existing local media by default (`--no-probe` opts out) and gains a warning-severity dangling-ref check — a draft carrying those now exits 1 (run `lint --fix`). Markerless and CapCut drafts write byte-identically to v0.15.0 with no new flags in play.
