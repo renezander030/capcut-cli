@@ -9,11 +9,19 @@ import { defaultDraftsDir, draftDirCandidates } from "../dist/store.js";
 // so on Windows (HOME normally unset) a draft landed in a literal `~/Movies/...`
 // folder next to the cwd, and CapCut refused it as an "unconventional path".
 
-const saved = { ...process.env };
+const savedDraftDir = process.env.CAPCUT_DRAFT_DIR;
+const savedHome = process.env.HOME;
 const tmp = mkdtempSync(join(tmpdir(), "capcut-drafts-"));
 
+function restoreEnv() {
+  if (savedDraftDir === undefined) delete process.env.CAPCUT_DRAFT_DIR;
+  else process.env.CAPCUT_DRAFT_DIR = savedDraftDir;
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
+}
+
 after(() => {
-  process.env = saved;
+  restoreEnv();
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -21,6 +29,7 @@ describe("defaultDraftsDir", () => {
   it("honors CAPCUT_DRAFT_DIR over the per-OS default", () => {
     process.env.CAPCUT_DRAFT_DIR = tmp;
     assert.equal(defaultDraftsDir(), tmp);
+    restoreEnv();
   });
 
   it("trims a padded CAPCUT_DRAFT_DIR and ignores an empty one", () => {
@@ -28,14 +37,25 @@ describe("defaultDraftsDir", () => {
     assert.equal(defaultDraftsDir(), tmp);
     process.env.CAPCUT_DRAFT_DIR = "   ";
     assert.equal(defaultDraftsDir(), draftDirCandidates()[0]?.path ?? null);
+    restoreEnv();
   });
 
-  it("never derives the store from HOME on any platform", () => {
-    process.env.CAPCUT_DRAFT_DIR = "";
+  it("resolves this platform's own store, and never HOME on Windows", () => {
     delete process.env.CAPCUT_DRAFT_DIR;
     process.env.HOME = "/nonexistent-home-for-test";
     const dir = defaultDraftsDir();
-    assert.ok(dir === null || !dir.startsWith("/nonexistent-home-for-test"));
+    if (process.platform === "win32") {
+      // The regression: LOCALAPPDATA (or USERPROFILE) drives the Windows store.
+      assert.ok(dir, "Windows must resolve a store");
+      assert.ok(!dir.replace(/\\/g, "/").startsWith("/nonexistent-home-for-test"), dir);
+    } else if (process.platform === "darwin") {
+      // macOS keeps its store under the user's home, which is correct there.
+      assert.match(dir?.replace(/\\/g, "/") ?? "", /com\.lveditor\.draft$/);
+    } else {
+      // No desktop editor: callers must be told to pass a path, not guess one.
+      assert.equal(dir, null);
+    }
+    restoreEnv();
   });
 
   it("returns absolute candidate paths under com.lveditor.draft, or none", () => {
