@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseAss } from "./ass.js";
@@ -124,7 +124,13 @@ import { detectScenes, timecode } from "./scenes.js";
 import { serveQueue } from "./serve.js";
 import { addSfx } from "./sfx.js";
 import { collapseKaraokeRuns, cueWords, parseSrt, renderSrt, renderVtt, type SegmentCue } from "./srt.js";
-import { diagnoseDraftStore, discoverDraftStore, editorProcesses, planTimelineSync } from "./store.js";
+import {
+  defaultDraftsDir,
+  diagnoseDraftStore,
+  discoverDraftStore,
+  editorProcesses,
+  planTimelineSync,
+} from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import { translateDraft } from "./translate.js";
 import { harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } from "./user-enums.js";
@@ -263,7 +269,8 @@ Create:
   init       <name> [--template <dir>] [--drafts <dir>]
              Create a new empty draft from template. Defaults:
                --template   bundled minimal template (no external repo needed)
-               --drafts     ~/Movies/CapCut/User Data/Projects/com.lveditor.draft
+               --drafts     this OS's CapCut draft store (CAPCUT_DRAFT_DIR overrides;
+                            run capcut doctor to see the detected paths)
   quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]
              One-command first draft: create + add one input + lint + print the
              exact "open in CapCut" step. The fastest path from a file to an
@@ -1303,6 +1310,20 @@ class CliError extends Error {
 
 function die(msg: string): never {
   throw new CliError(msg);
+}
+
+/**
+ * Draft store for the commands that create a draft. Exits with guidance rather
+ * than guessing a path, since a draft outside the editor's store opens as
+ * "this draft comes from an unconventional path" (issue #52).
+ */
+function requireDraftsDir(): string {
+  return (
+    defaultDraftsDir() ??
+    die(
+      `No default CapCut draft directory on ${platform()}. Pass --drafts <dir>, or set CAPCUT_DRAFT_DIR to the folder that contains com.lveditor.draft.`,
+    )
+  );
 }
 
 function requireArgs(args: string[], min: number, usage: string): void {
@@ -3952,8 +3973,8 @@ function cmdCompile(positional: string[], flags: Flags): void {
 
   // Target draft directory: --out wins; else <drafts>/<spec.name>; else cwd/<spec.name>.
   const name = spec.name ?? "compiled-draft";
-  const draftsDir = flags.drafts ?? `${process.env.HOME || "~"}/Movies/CapCut/User Data/Projects/com.lveditor.draft`;
-  const outDir = flags.out ? path.resolve(flags.out) : path.resolve(draftsDir, name);
+  // --out wins, so only demand a draft store when the draft has nowhere else to go.
+  const outDir = flags.out ? path.resolve(flags.out) : path.resolve(flags.drafts ?? requireDraftsDir(), name);
 
   const result = compileDraft(spec, {
     templateDir,
@@ -4199,7 +4220,7 @@ async function main(): Promise<void> {
     if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
       templateDir = bundledTemplate;
     }
-    const draftsDir = flags.drafts ?? `${process.env.HOME || "~"}/Movies/CapCut/User Data/Projects/com.lveditor.draft`;
+    const draftsDir = flags.drafts ?? requireDraftsDir();
     const result = initDraft({ name, templateDir, draftsDir });
     out(
       { ok: true, name, draft_path: result.draftPath, file_path: result.filePath, registered: result.registered },
@@ -4229,7 +4250,7 @@ async function main(): Promise<void> {
     if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
       templateDir = bundledTemplate;
     }
-    const draftsDir = flags.drafts ?? `${process.env.HOME || "~"}/Movies/CapCut/User Data/Projects/com.lveditor.draft`;
+    const draftsDir = flags.drafts ?? requireDraftsDir();
     const result = runQuickstart({
       name,
       templateDir,

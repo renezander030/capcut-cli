@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [

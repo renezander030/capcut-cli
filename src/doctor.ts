@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { homedir, platform, release } from "node:os";
+import { platform, release } from "node:os";
 import { delimiter, join } from "node:path";
 import { probeFfmpegCapabilities } from "./render.js";
+import { draftDirCandidates } from "./store.js";
 
 export type CheckStatus = "ok" | "warn" | "missing";
 
@@ -41,21 +42,7 @@ function nodeMajor(): number {
 
 /** Default per-OS CapCut/JianYing project directories. */
 export function draftDirs(): { label: string; path: string }[] {
-  const home = homedir();
-  if (platform() === "darwin") {
-    return [
-      { label: "CapCut (macOS)", path: join(home, "Movies/CapCut/User Data/Projects/com.lveditor.draft") },
-      { label: "JianYing (macOS)", path: join(home, "Movies/JianyingPro/User Data/Projects/com.lveditor.draft") },
-    ];
-  }
-  if (platform() === "win32") {
-    const local = process.env.LOCALAPPDATA ?? join(home, "AppData/Local");
-    return [
-      { label: "CapCut (Windows)", path: join(local, "CapCut/User Data/Projects/com.lveditor.draft") },
-      { label: "JianYing (Windows)", path: join(local, "JianyingPro/User Data/Projects/com.lveditor.draft") },
-    ];
-  }
-  return [];
+  return draftDirCandidates();
 }
 
 export function runDoctor(): DoctorReport {
