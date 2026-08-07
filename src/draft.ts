@@ -3,6 +3,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -213,14 +214,34 @@ function snapshotFiles(filePath: string): string[] {
     .sort(); // zero-padded indices => lexicographic === numeric order, oldest first
 }
 
-function writeHistorySnapshot(filePath: string, content: string): void {
+// `source`, when given, is a file already holding exactly `content` — the
+// `.bak` written moments earlier from the same pre-write bytes. The snapshot
+// is then published as a second name for it instead of serializing the whole
+// draft to disk a second time, which on a large project is another
+// multi-megabyte write per target for bytes already on disk. The two names
+// never diverge afterwards: every writer here replaces a name by rename or
+// unlink, never edits a file in place, so the next write gives `.bak` a fresh
+// file and leaves this snapshot holding what it always held.
+function writeHistorySnapshot(filePath: string, content: string, source?: string): void {
   const dir = historyDir(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const existing = snapshotFiles(filePath);
   const last = existing[existing.length - 1];
   const lastIndex = last ? Number.parseInt(last.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10) : 0;
   const name = `${basename(filePath)}.${String(lastIndex + 1).padStart(6, "0")}.snap`;
-  writeFileSync(join(dir, name), content, "utf-8");
+  const snapshot = join(dir, name);
+  let linked = false;
+  if (source !== undefined) {
+    try {
+      linkSync(source, snapshot);
+      linked = true;
+    } catch {
+      // Hard links are not universal — FAT/exFAT sticks and some network
+      // shares refuse them. Fall back to the full write so the snapshot is
+      // always there, whatever the draft folder is sitting on.
+    }
+  }
+  if (!linked) writeFileSync(snapshot, content, "utf-8");
   // Trim oldest beyond the cap.
   const all = snapshotFiles(filePath);
   while (all.length > HISTORY_MAX) {
@@ -279,8 +300,12 @@ export function commitDraftTargets(
   try {
     for (const item of prepared) {
       if (options.backup !== false && item.target.raw !== null) {
-        writeAtomic(`${item.target.path}.bak`, item.target.raw);
-        writeHistorySnapshot(item.target.path, item.target.raw);
+        // One write of the pre-write content, published under both recovery
+        // names: `.bak` (what `restore` reads) and the newest history snapshot
+        // (what `restore --step 1` reads).
+        const bak = `${item.target.path}.bak`;
+        writeAtomic(bak, item.target.raw);
+        writeHistorySnapshot(item.target.path, item.target.raw, bak);
       }
     }
     for (const item of prepared) {
