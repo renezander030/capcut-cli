@@ -73,7 +73,7 @@
 | `harvest-enums` | `capcut harvest-enums <project> [--apply] [--catalogue <path>]` | no | Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs). |
 | `doctor` | `capcut doctor` | no | Environment preflight (Node, whisper, API key, project dir). |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | no | Inspect canonical draft files, divergence, and editor-write safety. |
-| `fixture` | `capcut fixture <project> --out <dir>` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue. |
+| `fixture` | `capcut fixture <project> --out <dir>` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44). |
 | `sync-timelines` | `capcut sync-timelines <project-dir> [--apply]` | yes | Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors). |
 | `restore` | `capcut restore <project> [--step <number> \| --list]` | yes | Undo writes from .bak / snapshot history (--step N, --list). |
 | `serve` | `capcut serve [--queue <path>] [options]` | no | Run a stateless JSONL job queue from stdin/--queue. |

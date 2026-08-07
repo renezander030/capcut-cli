@@ -3949,7 +3949,8 @@ function cmdProjects(positional: string[], flags: Flags): void {
 // COMMANDS name has an entry here, so a new command can't ship undescribed.
 const SUMMARIES: Record<string, string> = {
   quickstart: "One-command first draft: create + add one input + lint + print the open-in-CapCut step.",
-  fixture: "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue.",
+  fixture:
+    "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
   "replace-media": "Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes.",
   info: "Project overview + material summary.",
   version: "Detect CapCut/JianYing version, schema flags, and support status.",

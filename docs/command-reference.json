@@ -4312,7 +4312,7 @@
     },
     {
       "name": "fixture",
-      "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue.",
+      "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
       "usage": "capcut fixture <project> --out <dir>",
       "positionals": [
         {

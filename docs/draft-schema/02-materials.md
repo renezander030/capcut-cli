@@ -225,6 +225,8 @@ A transition material is referenced by the *first* of the two segments it joins 
 
 A segment can have at most one mask. `capcut-cli mask <id> --off` removes any existing mask refs.
 
+Mask geometry here is **static**. The desktop app can keyframe it, but the on-disk encoding has never been captured publicly — see [03 — keyframes](./03-keyframes-and-animations.md#mask-geometry-keyframes--encoding-unknown-44) for the two candidate shapes and the `capcut fixture` harvest path (#44).
+
 ## `materials.canvases[…]` — background fill
 
 ```jsonc

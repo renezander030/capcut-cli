@@ -152,3 +152,16 @@ Run `capcut enums --image-intros -H` (or `--text-outros`, etc.) for the full liv
 ## Programmatic combo: keyframe + animation on the same segment
 
 Both systems coexist. A video segment can have `common_keyframes` driving a Ken Burns motion AND a `sticker_animation` driving a fade-in intro. CapCut composites both at render time.
+
+## Mask geometry keyframes — encoding unknown (#44)
+
+Masks (see [02 — materials](./02-materials.md)) are static on disk as far as any public evidence goes: the mask material's `config` object holds one set of geometry values (`centerX`, `centerY`, `width`, `height`, `rotation`, `feather`, ...), and none of the `property_type` identifiers above target mask geometry.
+
+The desktop app CAN keyframe mask position/size/rotation/feather in the UI, so an on-disk encoding exists — but no app-authored draft using it has ever been captured in this repo or in the neighbouring ecosystem tools. Two candidate shapes, **both unverified**:
+
+- **segment-level**: additional `property_type` identifiers (a `KFTypeMask*` family?) in `segment.common_keyframes`
+- **material-level**: a keyframe container inside the mask material entry itself (in `masks` / `common_mask` / `common_masks`)
+
+`capcut-cli` deliberately does not write mask keyframes: an invented encoding would save without error and silently no-op in the app — the pyJianYingDraft#160 failure class, where structures the app ignores produce no diagnostic at all.
+
+**How to supply the ground truth:** animate a mask in the desktop app (two position keyframes are enough), save the draft, and run `capcut fixture <project> --out <dir>`. The bundle's `mask-keyframe-report.json` maps every mask material and keyframe structure it finds — unknown `property_type` values, keys on mask entries beyond what the CLI writes, and keyframe-shaped nodes inside mask materials. Attach the bundle to [issue #44](https://github.com/renezander030/capcut-cli/issues/44); it is blocked on exactly this artifact.
