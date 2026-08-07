@@ -3,6 +3,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -24,6 +25,7 @@ import {
   isManagedDraftPath,
   NESTED_TIMELINES_WRITE_WARNING,
   serializeDraftCandidate,
+  storeAfterWrite,
 } from "./store.js";
 import { assessWriteSafety } from "./version.js";
 
@@ -145,9 +147,18 @@ const loadContexts = new Map<string, LoadContext>();
 export function loadDraft(path: string): { draft: Draft; filePath: string } {
   const store = discoverDraftStore(path);
   const filePath = store.canonical.path;
-  const draft = structuredClone(store.canonical.draft) as Draft;
+  // The caller gets the parsed timeline itself, not a copy of it. The store
+  // kept here never escapes this module — `loadContexts` is private and
+  // `saveDraft` is its only reader — and everything saveDraft takes from it is
+  // either fixed at discovery (`version`, `layout`, `projectDir`) or a string
+  // snapshot of the file on disk (`raw`, `path`, `envelopePath`), never
+  // anything re-derived from `canonical.draft`. So nothing observes the
+  // caller's edits through the store, and cloning the whole draft on every
+  // load — tens of milliseconds on a large project, on read commands too —
+  // bought nothing. Anything added to saveDraft that wants the draft as it was
+  // on disk must re-read it rather than reach for `store.canonical.draft`.
   loadContexts.set(resolve(filePath), { store });
-  return { draft, filePath };
+  return { draft: store.canonical.draft as Draft, filePath };
 }
 
 // Canonical bottom->top layer order CapCut expects in the tracks array.
@@ -212,14 +223,34 @@ function snapshotFiles(filePath: string): string[] {
     .sort(); // zero-padded indices => lexicographic === numeric order, oldest first
 }
 
-function writeHistorySnapshot(filePath: string, content: string): void {
+// `source`, when given, is a file already holding exactly `content` — the
+// `.bak` written moments earlier from the same pre-write bytes. The snapshot
+// is then published as a second name for it instead of serializing the whole
+// draft to disk a second time, which on a large project is another
+// multi-megabyte write per target for bytes already on disk. The two names
+// never diverge afterwards: every writer here replaces a name by rename or
+// unlink, never edits a file in place, so the next write gives `.bak` a fresh
+// file and leaves this snapshot holding what it always held.
+function writeHistorySnapshot(filePath: string, content: string, source?: string): void {
   const dir = historyDir(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const existing = snapshotFiles(filePath);
   const last = existing[existing.length - 1];
   const lastIndex = last ? Number.parseInt(last.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10) : 0;
   const name = `${basename(filePath)}.${String(lastIndex + 1).padStart(6, "0")}.snap`;
-  writeFileSync(join(dir, name), content, "utf-8");
+  const snapshot = join(dir, name);
+  let linked = false;
+  if (source !== undefined) {
+    try {
+      linkSync(source, snapshot);
+      linked = true;
+    } catch {
+      // Hard links are not universal — FAT/exFAT sticks and some network
+      // shares refuse them. Fall back to the full write so the snapshot is
+      // always there, whatever the draft folder is sitting on.
+    }
+  }
+  if (!linked) writeFileSync(snapshot, content, "utf-8");
   // Trim oldest beyond the cap.
   const all = snapshotFiles(filePath);
   while (all.length > HISTORY_MAX) {
@@ -259,8 +290,13 @@ export function assertTargetsUnchangedOnDisk(targets: DraftCandidate[]): void {
 // file actually written, rolling back on a partial commit. Writes EXACTLY the
 // given targets — callers decide the write set (saveDraft: every readable
 // sibling; sync-timelines: only the drifted mirrors). No-ops under --dry-run.
-export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, options: { backup?: boolean } = {}): void {
-  if (dryRun) return;
+export function commitDraftTargets(
+  targets: DraftCandidate[],
+  draft: Draft,
+  options: { backup?: boolean } = {},
+): Map<string, string> {
+  const written = new Map<string, string>();
+  if (dryRun) return written;
 
   // Prepare every replacement before renaming any target. This keeps the
   // multi-file write as close to a transaction as the filesystem allows.
@@ -273,13 +309,18 @@ export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, opti
   try {
     for (const item of prepared) {
       if (options.backup !== false && item.target.raw !== null) {
-        writeAtomic(`${item.target.path}.bak`, item.target.raw);
-        writeHistorySnapshot(item.target.path, item.target.raw);
+        // One write of the pre-write content, published under both recovery
+        // names: `.bak` (what `restore` reads) and the newest history snapshot
+        // (what `restore --step 1` reads).
+        const bak = `${item.target.path}.bak`;
+        writeAtomic(bak, item.target.raw);
+        writeHistorySnapshot(item.target.path, item.target.raw, bak);
       }
     }
     for (const item of prepared) {
       renameSync(item.temp, item.target.path);
       committed.push(item);
+      written.set(item.target.path, item.content);
     }
   } catch (error) {
     // Roll back targets already renamed during a partial commit.
@@ -291,6 +332,9 @@ export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, opti
     }
     throw error;
   }
+  // Target path -> the content committed there, so a caller holding a store
+  // for these targets can roll it forward without re-reading the project.
+  return written;
 }
 
 export function saveDraft(
@@ -359,7 +403,7 @@ export function saveDraft(
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);
 
   sortTracks(draft);
-  commitDraftTargets(store.targets, draft, options);
+  const written = commitDraftTargets(store.targets, draft, options);
 
   // App auto-upgrade tripwire (pyJianYingDraft#115, #178): warn-only. Compares
   // this store's version evidence against the CLI's last-seen record in
@@ -375,10 +419,12 @@ export function saveDraft(
   }
 
   // Refresh hashes/raw snapshots so a library caller can save the same loaded
-  // draft more than once without tripping its own conflict guard.
-  // Rediscover from the canonical file, not only the parent directory. The
-  // latter would lose explicitly addressed custom filenames such as A.json.
-  loadContexts.set(resolved, { store: discoverDraftStore(store.canonical.path) });
+  // draft more than once without tripping its own conflict guard. Rolled
+  // forward from the bytes the commit just wrote rather than by discovering
+  // the project again: a re-discovery re-read, re-parsed and re-hashed every
+  // sibling — the single most expensive step of a write on a large draft — to
+  // establish what the write already knew.
+  loadContexts.set(resolved, { store: storeAfterWrite(store, draft, written) });
 }
 
 function writeAndSync(path: string, content: string): void {
@@ -489,8 +535,30 @@ export function findSegment(draft: Draft, id: string): { track: Track; segment: 
   return null;
 }
 
+// id -> material index, one per materials array, so a caller that resolves a
+// material per segment does not rescan the whole array each time (lint walks
+// materials.texts once per caption).
+//
+// Keyed on the array itself and validated by its length, which is exactly what
+// changes when membership does: every command that adds a material pushes onto
+// the array, every command that drops one replaces the array with a filtered
+// copy (a brand-new key, so a fresh index), and `migrate` moves entries between
+// arrays — all of which the length check or the key change catches. Mutating a
+// material in place stays visible without any invalidation, because the index
+// holds the same objects the array does; that is the case lint's fixDraft
+// relies on when it rewrites a text material's `content`.
+const materialIndex = new WeakMap<object, { length: number; index: Map<string, unknown> }>();
+
 export function findMaterial<T extends { id: string }>(arr: T[], id: string): T | undefined {
-  return arr.find((m) => m.id === id);
+  const cached = materialIndex.get(arr);
+  if (cached !== undefined && cached.length === arr.length) return cached.index.get(id) as T | undefined;
+  // Miss: answer from the scan this function has always done, so a malformed
+  // draft still fails with the identical TypeError, then index for next time.
+  const found = arr.find((m) => m.id === id);
+  const index = new Map<string, T>();
+  for (const m of arr) if (!index.has(m.id)) index.set(m.id, m); // first id wins, as find() did
+  materialIndex.set(arr, { length: arr.length, index });
+  return found;
 }
 
 export function getTracksByType(draft: Draft, type: string): Track[] {
