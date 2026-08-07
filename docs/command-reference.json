@@ -4662,7 +4662,7 @@
     {
       "name": "compile",
       "summary": "Build a draft from a declarative JSON spec (the inverse of describe).",
-      "usage": "capcut compile <spec.json> [--out <draftdir>] [--check | --plan]",
+      "usage": "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
       "positionals": [
         {
           "name": "spec.json",
@@ -4720,6 +4720,24 @@
           "type": "boolean",
           "required": false,
           "description": "Print the normalized build plan without writing."
+        },
+        {
+          "name": "data",
+          "flags": [
+            "--data"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "JSONL rows file ('-' for stdin): build one draft per row, substituting {{key}} placeholders from the row into the spec's string values (and so the draft name). Same per-line error contract as batch: the first bad row aborts with its row number before any draft is written."
+        },
+        {
+          "name": "continue_on_error",
+          "flags": [
+            "--continue-on-error"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "With --data: build only the rows that validate and exit 1 if any fail (batch's contract)."
         }
       ],
       "mutates": true,

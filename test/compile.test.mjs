@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -228,5 +228,152 @@ describe("compile: keyframe easing pre-flight", () => {
     const r = spawnCli(["compile", spec, "--out", out]);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.json.ok, true);
+  });
+});
+
+// v0.17: `compile --data` — one spec + N JSONL rows = N drafts, {{key}}
+// placeholders substituted into the spec's string values per row. Row errors
+// mirror `batch`'s per-line contract: fail fast with the row number (nothing
+// written), or --continue-on-error to build the rows that validate + exit 1.
+describe("compile --data (one spec + N JSONL rows = N drafts)", () => {
+  const TEMPLATED = {
+    name: "{{name}}",
+    width: 720,
+    height: 1280,
+    fps: 30,
+    ratio: "9:16",
+    tracks: [
+      { type: "video", items: [{ path: "{{clip}}", start: 0, duration: 2 }] },
+      { type: "text", items: [{ text: "{{title}} for {{price}}", start: 0, duration: 2 }] },
+    ],
+  };
+
+  function setupStore() {
+    const s = setup();
+    const store = join(s.dir, "store");
+    mkdirSync(store);
+    return { ...s, store };
+  }
+
+  function writeRows(dir, rows) {
+    const p = join(dir, "rows.jsonl");
+    writeFileSync(p, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
+    return p;
+  }
+
+  const ROWS = [
+    { name: "Prod A", clip: "clip1.mp4", title: "Alpha", price: 9 },
+    { name: "Prod B", clip: "clip2.mp4", title: "Beta", price: 19 },
+    { name: "Prod C", clip: "clip1.mp4", title: "Gamma", price: 29 },
+  ];
+
+  it("builds one draft per row: 3-row happy path with a summary array", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, TEMPLATED);
+    const rowsPath = writeRows(s.dir, ROWS);
+    const r = spawnCli(["compile", spec, "--data", rowsPath, "--drafts", s.store]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(Array.isArray(r.json), `expected summary array, got: ${r.stdout}`);
+    assert.equal(r.json.length, 3);
+    for (const [i, rowResult] of r.json.entries()) {
+      assert.equal(rowResult.row, i + 1);
+      assert.equal(rowResult.ok, true);
+      assert.equal(rowResult.name, ROWS[i].name);
+      assert.equal(rowResult.draft_path, join(s.store, ROWS[i].name));
+      assert.ok(existsSync(join(s.store, ROWS[i].name, "draft_content.json")), `draft missing for ${ROWS[i].name}`);
+    }
+  });
+
+  it("substitutes {{key}} into string values and the draft name (rows on stdin)", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, TEMPLATED);
+    const r = spawnCli(["compile", spec, "--data", "-", "--drafts", s.store], {
+      input: `${JSON.stringify({ name: "Priced", clip: "clip1.mp4", title: "Hook", price: 42 })}\n`,
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json[0].ok, true);
+    const raw = readFileSync(join(s.store, "Priced", "draft_content.json"), "utf-8");
+    const content = JSON.parse(raw);
+    // The draft's display name comes from the templated spec.name.
+    assert.equal(content.name, "Priced");
+    // String substitution covers nested items; the number 42 arrives as text.
+    assert.match(raw, /Hook for 42/);
+    assert.doesNotMatch(raw, /\{\{/);
+  });
+
+  it("mirrors batch: the first bad row aborts with its row number, nothing written", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, TEMPLATED);
+    const bad = [ROWS[0], { ...ROWS[1], clip: "does-not-exist.mp4" }, ROWS[2]];
+    const r = spawnCli(["compile", spec, "--data", writeRows(s.dir, bad), "--drafts", s.store]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /aborted at row 2/);
+    assert.match(r.stderr, /no drafts written/);
+    assert.match(r.stderr, /media file not found/);
+    // Every row is validated before anything is built: row 1 must NOT exist.
+    assert.equal(existsSync(join(s.store, "Prod A")), false, "row 1 was built despite the abort");
+  });
+
+  it("--continue-on-error builds the rows that validate and exits 1 (batch's contract)", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, TEMPLATED);
+    const bad = [ROWS[0], { ...ROWS[1], clip: "does-not-exist.mp4" }, ROWS[2]];
+    const r = spawnCli(["compile", spec, "--data", writeRows(s.dir, bad), "--drafts", s.store, "--continue-on-error"]);
+    assert.equal(r.status, 1);
+    assert.equal(r.json.length, 3);
+    assert.equal(r.json[0].ok, true);
+    assert.equal(r.json[1].ok, false);
+    assert.match(r.json[1].error, /media file not found/);
+    assert.equal(r.json[2].ok, true);
+    assert.ok(existsSync(join(s.store, "Prod A", "draft_content.json")));
+    assert.equal(existsSync(join(s.store, "Prod B")), false);
+    assert.ok(existsSync(join(s.store, "Prod C", "draft_content.json")));
+  });
+
+  it("a placeholder with no matching row key is a row error, never kept silently", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, TEMPLATED);
+    const r = spawnCli([
+      "compile",
+      spec,
+      "--data",
+      writeRows(s.dir, [{ name: "X", clip: "clip1.mp4", title: "T" }]),
+      "--drafts",
+      s.store,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /aborted at row 1/);
+    assert.match(r.stderr, /no value for placeholder \{\{price\}\}/);
+  });
+
+  it("rejects --out with --data — each row names its own draft", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, TEMPLATED);
+    const r = spawnCli(["compile", spec, "--data", writeRows(s.dir, ROWS), "--out", join(s.dir, "One")]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /use --drafts/);
+  });
+
+  it("without --data, compile is unchanged: {{placeholder}}-looking text is kept verbatim", () => {
+    const s = setup();
+    after(s.cleanup);
+    const literal = structuredClone(VALID);
+    literal.name = "{{title}}";
+    literal.tracks[2].items[0].text = "{{title}} stays literal";
+    const spec = writeSpec(s.dir, literal);
+    const out = join(s.dir, "Literal");
+    const r = spawnCli(["compile", spec, "--out", out]);
+    assert.equal(r.status, 0, r.stderr);
+    const raw = readFileSync(join(out, "draft_content.json"), "utf-8");
+    const content = JSON.parse(raw);
+    // No templating on the single-draft path: braces survive byte-for-byte.
+    assert.equal(content.name, "{{title}}");
+    assert.match(raw, /\{\{title\}\} stays literal/);
   });
 });

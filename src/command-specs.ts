@@ -225,7 +225,7 @@ const usages = {
   "replace-media": "capcut replace-media <project> <segment-id> <new-file> [--retime]",
   init: "capcut init <name> [--template <dir>] [--drafts <dir>]",
   quickstart: "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]",
-  compile: "capcut compile <spec.json> [--out <draftdir>] [--check | --plan]",
+  compile: "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
 } as const satisfies Record<string, string>;
@@ -529,6 +529,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("template", ["--template"], "path", "Template directory."),
     option("check", ["--check"], "boolean", "Validate without writing."),
     option("plan", ["--plan"], "boolean", "Print the normalized build plan without writing."),
+    option(
+      "data",
+      ["--data"],
+      "path",
+      "JSONL rows file ('-' for stdin): build one draft per row, substituting {{key}} placeholders from the row into the spec's string values (and so the draft name). Same per-line error contract as batch: the first bad row aborts with its row number before any draft is written.",
+    ),
+    option(
+      "continue_on_error",
+      ["--continue-on-error"],
+      "boolean",
+      "With --data: build only the rows that validate and exit 1 if any fail (batch's contract).",
+    ),
   ],
   render: [
     OUT,
@@ -574,6 +586,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --bind               -> add-effect (v0.15 per-segment attachment)
 //   --mask-field         -> mask (v0.16 explicit mask array variant)
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
+//   --data               -> compile (v0.17 one-draft-per-JSONL-row)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -581,6 +594,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--bind",
   "--catalogue",
   "--color-cycle",
+  "--data",
   "--easing",
   "--format",
   "--full",

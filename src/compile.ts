@@ -165,7 +165,7 @@ export function parseSpec(raw: string): CompileSpec {
   return parsed as CompileSpec;
 }
 
-function validateSpec(spec: unknown): asserts spec is CompileSpec {
+export function validateSpec(spec: unknown): asserts spec is CompileSpec {
   if (!spec || typeof spec !== "object") throw new Error("compile: spec must be a JSON object");
   const s = spec as Record<string, unknown>;
   if (!Array.isArray(s.tracks) || s.tracks.length === 0) {
@@ -272,6 +272,47 @@ function validateSpec(spec: unknown): asserts spec is CompileSpec {
 
 function resolvePath(p: string, specDir: string): string {
   return isAbsolute(p) ? p : resolve(specDir, p);
+}
+
+// `compile --data` templating. The rule is deliberately minimal: a {{key}}
+// placeholder inside a STRING value (nested objects and arrays included, so
+// the draft `name` too) is replaced with the row's value for that key —
+// nothing cleverer. No expressions, no defaults, no nested lookups: the key
+// text between the braces (surrounding whitespace trimmed) is looked up as a
+// literal row property. Non-string spec values are never templated, so a
+// placeholder cannot turn into a number — keep numeric fields numeric in the
+// spec and template only text-shaped values (paths, texts, names, slugs).
+const PLACEHOLDER = /\{\{\s*([^{}]+?)\s*\}\}/g;
+
+/**
+ * Substitute {{key}} placeholders from a JSONL row into every string value of
+ * a parsed spec (or any JSON-shaped value). Returns a new tree; the input is
+ * never mutated. Row values must be strings, numbers, or booleans; a
+ * placeholder with no matching row key is an error, because silently building
+ * a draft whose title reads "{{title}}" is the mass-production failure mode.
+ */
+export function substitutePlaceholders<T>(value: T, row: Record<string, unknown>): T {
+  if (typeof value === "string") {
+    return value.replace(PLACEHOLDER, (_match, key: string) => {
+      if (!Object.hasOwn(row, key)) {
+        throw new Error(`compile: no value for placeholder {{${key}}} in row`);
+      }
+      const v = row[key];
+      if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
+        throw new Error(`compile: row value for {{${key}}} must be a string, number, or boolean`);
+      }
+      return String(v);
+    }) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => substitutePlaceholders(item, row)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) result[k] = substitutePlaceholders(v, row);
+    return result as T;
+  }
+  return value;
 }
 
 export function planCompile(spec: CompileSpec, specDir: string): CompilePlan {

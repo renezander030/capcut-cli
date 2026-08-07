@@ -23,7 +23,14 @@ import {
   RELEASE_SCOPED_FLAGS,
   renderCommandIndex,
 } from "./command-specs.js";
-import { type CompileSpec, compileDraft, parseSpec, planCompile } from "./compile.js";
+import {
+  type CompileSpec,
+  compileDraft,
+  parseSpec,
+  planCompile,
+  substitutePlaceholders,
+  validateSpec,
+} from "./compile.js";
 import type {
   ImageAnimOptions,
   KeyframeInput,
@@ -294,10 +301,18 @@ Create:
              editable project. Pass at least one of --video / --audio / --srt.
              Durations come from ffprobe when available (5s placeholder if not).
              Exit codes: 0 created & lint-clean · 2 created but lint errors
-  compile    <spec.json> [--out <draftdir>] [--drafts <dir>]
+  compile    <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]
              Build a whole draft from a declarative JSON spec (the inverse of
              describe). Times are in seconds. Media paths resolve relative to
              the spec file. Validates the full spec before writing anything.
+             --data <rows.jsonl|->  Build ONE DRAFT PER JSONL ROW: {{key}}
+             placeholders in the spec's string values (and so the draft name)
+             are substituted from each row. Mirrors batch's per-line error
+             contract: the first bad row aborts with its row number before
+             any draft is written; --continue-on-error builds the rows that
+             validate and exits 1 if any failed. Prints a summary JSON array
+             (row, ok, name, draft_path | error). Each row names its own
+             draft, so use --drafts (not --out) with --data.
 
 Preview:
   render     <project> [--out <file.mp4>] [options]
@@ -924,6 +939,8 @@ interface Flags {
   check?: boolean;
   plan?: boolean;
   apply?: boolean;
+  // compile --data
+  data?: string;
   // detect-scenes
   threshold?: number;
   minGap?: number;
@@ -1283,6 +1300,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.bundle = args[++i];
     } else if (a === "--continue-on-error") {
       flags.continueOnError = true;
+    } else if (a === "--data" && i + 1 < args.length) {
+      flags.data = args[++i];
     } else if (a === "--check") {
       flags.check = true;
     } else if (a === "--plan") {
@@ -4067,8 +4086,15 @@ function cmdConcat(positional: string[], flags: Flags): void {
 // _init template the same way `init` does.
 function cmdCompile(positional: string[], flags: Flags): void {
   const specPath = positional[1];
-  if (!specPath) die("Usage: capcut compile <spec.json> [--out <draftdir>] [--drafts <dir>]");
+  if (!specPath) die("Usage: capcut compile <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]");
   if (!existsSync(specPath)) die(`Spec file not found: ${specPath}`);
+
+  // --data: mass production. One spec + N JSONL rows = N drafts. Branches
+  // before anything else so the single-draft path below stays untouched.
+  if (flags.data !== undefined) {
+    cmdCompileData(specPath, flags);
+    return;
+  }
 
   let spec: CompileSpec;
   try {
@@ -4103,6 +4129,117 @@ function cmdCompile(positional: string[], flags: Flags): void {
   });
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Compiled: ${result.draft_path}\n`);
+}
+
+// `compile --data`: one spec + N JSONL rows = N built-and-registered drafts,
+// each through the exact single-draft compile path (same validation, same
+// factory functions, same store registration). Row errors mirror `batch`'s
+// per-line contract: by default the first bad row aborts with its row number
+// — every row is validated up front (JSON shape, spec validation, media
+// pre-flight, name/directory collisions), so nothing is written on abort,
+// matching batch's "no changes written" promise as far as filesystem writes
+// allow. With --continue-on-error the rows that validate are built, failures
+// are reported per row, and the exit code is 1 when any row failed.
+function cmdCompileData(specPath: string, flags: Flags): void {
+  if (flags.check || flags.plan) die("--data cannot be combined with --check/--plan; validate the spec alone first");
+  if (flags.out) {
+    die("--out names a single draft directory; with --data each row names its own draft — use --drafts <dir>");
+  }
+
+  let template: unknown;
+  try {
+    template = JSON.parse(stripBom(readFileSync(specPath, "utf-8")));
+  } catch (e) {
+    die(`compile: spec is not valid JSON: ${(e as Error).message}`);
+  }
+
+  if (flags.data !== "-" && !existsSync(flags.data as string)) die(`Rows file not found: ${flags.data}`);
+  const input = stripBom(readFileSync(flags.data === "-" ? 0 : (flags.data as string), "utf-8")).trim();
+  if (!input) die(flags.data === "-" ? "No input on stdin for --data" : `No rows in ${flags.data}`);
+
+  const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
+  const bundledTemplate = path.join(cliDir, "templates", "_init");
+  let templateDir = flags.template ?? externalTemplate;
+  if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
+    templateDir = bundledTemplate;
+  }
+  const draftsRoot = path.resolve(flags.drafts ?? requireDraftsDir());
+  const specDir = path.dirname(path.resolve(specPath));
+
+  // Validation phase — nothing is written here. Row numbers are 1-based file
+  // line numbers (blank lines skipped but counted), matching batch's `line`.
+  interface RowPlan {
+    row: number;
+    spec?: CompileSpec;
+    outDir?: string;
+    error?: string;
+  }
+  const lines = input.split("\n");
+  const plans: RowPlan[] = [];
+  const claimedNames = new Set<string>();
+  for (let index = 0; index < lines.length; index++) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) continue;
+    const row = index + 1;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("row must be a JSON object");
+      }
+      const spec = substitutePlaceholders(template, parsed as Record<string, unknown>);
+      validateSpec(spec);
+      planCompile(spec, specDir);
+      const name = spec.name ?? "compiled-draft";
+      const outDir = path.resolve(draftsRoot, name);
+      if (claimedNames.has(name)) {
+        throw new Error(`duplicate draft name '${name}' — template the spec's "name" so every row is unique`);
+      }
+      if (existsSync(outDir)) throw new Error(`draft directory already exists: ${outDir}`);
+      claimedNames.add(name);
+      plans.push({ row, spec, outDir });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!flags.continueOnError) {
+        die(
+          `compile --data aborted at row ${row}; no drafts written: ${msg}. ` +
+            "Pass --continue-on-error to build only the rows that validate.",
+        );
+      }
+      plans.push({ row, error: msg });
+    }
+  }
+  if (plans.length === 0) die("compile --data: no rows to build");
+
+  // Build phase — each valid row runs the same compileDraft the single path uses.
+  const results: Array<Record<string, unknown>> = [];
+  let failed = 0;
+  for (const plan of plans) {
+    if (plan.error !== undefined) {
+      failed++;
+      results.push({ row: plan.row, ok: false, error: plan.error });
+      continue;
+    }
+    try {
+      const result = compileDraft(plan.spec as CompileSpec, { templateDir, outDir: plan.outDir as string, specDir });
+      results.push({ row: plan.row, ok: true, name: result.name, draft_path: result.draft_path });
+      if (!flags.quiet) process.stderr.write(`Compiled: ${result.draft_path}\n`);
+    } catch (e) {
+      // Post-pre-flight build failures are the race class (media vanished
+      // mid-run). Earlier rows are already on disk — a filesystem build has
+      // no in-memory clone to roll back — so report what was built, honestly.
+      const msg = e instanceof Error ? e.message : String(e);
+      failed++;
+      results.push({ row: plan.row, ok: false, error: msg });
+      if (!flags.continueOnError) {
+        out(results, flags);
+        die(`compile --data aborted at row ${plan.row}: ${msg}. Rows before it are already built (see summary).`);
+      }
+    }
+  }
+
+  out(results, flags);
+  if (failed > 0) process.exit(1);
 }
 
 // `render` produces a low-res ffmpeg proxy preview of the timeline. Read-only:

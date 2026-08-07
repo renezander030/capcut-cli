@@ -80,6 +80,6 @@
 | `export` | `capcut export <drafts-dir> --batch [options]` | yes | EXPERIMENTAL UI-automated render queue (macOS). |
 | `init` | `capcut init <name> [--template <dir>] [--drafts <dir>]` | yes | Create a new empty draft from a template. |
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
-| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
+| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |
