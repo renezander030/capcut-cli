@@ -10,6 +10,12 @@ import { diagnoseDraftStore, discoverDraftStore } from "../dist/store.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WINDOWS_87 = join(__dirname, "fixtures", "capcut-8.7-windows");
 
+// saveDraft runs the app-upgrade tripwire in-process here (no spawn-cli
+// isolation), so point its state file at a throwaway dir.
+const stateDir = mkdtempSync(join(tmpdir(), "capcut-store-state-"));
+process.env.CAPCUT_CLI_APP_VERSIONS = join(stateDir, "app-versions.json");
+after(() => rmSync(stateDir, { recursive: true, force: true }));
+
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "capcut-store-"));
   const draft = {

@@ -13,6 +13,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { appVersionEvidence, formatAppVersionDriftWarning, trackAppVersion } from "./app-versions.js";
 import { stripBom } from "./bom.js";
 import {
   type DraftCandidate,
@@ -333,6 +334,19 @@ export function saveDraft(
 
   sortTracks(draft);
   commitDraftTargets(store.targets, draft, options);
+
+  // App auto-upgrade tripwire (pyJianYingDraft#115, #178): warn-only. Compares
+  // this store's version evidence against the CLI's last-seen record in
+  // ~/.config/capcut-cli/app-versions.json and names old -> new on stderr when
+  // the app moved underneath the pipeline; the guard above stays the only
+  // refusal. The drift is also remembered for the command's JSON result (see
+  // out() / takeAppVersionDrift). Shares skipVersionGuard with the guard:
+  // restore's mirror re-sync is the escape hatch, not a sighting.
+  if (options.skipVersionGuard !== true) {
+    const { drift, error } = trackAppVersion(store.projectDir, appVersionEvidence(draft, store.version));
+    if (error) process.stderr.write(`WARNING: ${error}\n`);
+    if (drift) process.stderr.write(`WARNING: ${formatAppVersionDriftWarning(drift)}\n`);
+  }
 
   // Refresh hashes/raw snapshots so a library caller can save the same loaded
   // draft more than once without tripping its own conflict guard.

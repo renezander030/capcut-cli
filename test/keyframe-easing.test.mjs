@@ -305,6 +305,10 @@ describe("ken-burns.sh easing default", () => {
   function runKenBurns(fix, extra = []) {
     return spawnSync("bash", [KEN_BURNS, fix.path, SEG, "1.0", "1.2", "0", "-0.1", "0", "-0.05", "3s", ...extra], {
       encoding: "utf-8",
+      // The recipe invokes the CLI itself, bypassing spawn-cli: isolate the
+      // app-version tripwire state the same way so the fixture's version
+      // marker never lands in the developer's real config.
+      env: { ...process.env, CAPCUT_CLI_APP_VERSIONS: join(fix.dir, "app-versions.json") },
     });
   }
 

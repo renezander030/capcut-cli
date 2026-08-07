@@ -4,6 +4,13 @@ import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFil
 import { homedir, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  appVersionEvidence,
+  assessAppVersionDrift,
+  formatAppVersionDriftWarning,
+  takeAppVersionDrift,
+  trackAppVersion,
+} from "./app-versions.js";
 import { parseAss } from "./ass.js";
 import { stripBom } from "./bom.js";
 import { captionDraft } from "./caption.js";
@@ -1316,8 +1323,14 @@ function out(data: unknown, flags: Flags): void {
   // In --dry-run, stamp an object result with dryRun:true so callers can tell a
   // preview from a committed write. Arrays (read commands) are left untouched.
   let payload = data;
-  if (isDryRun() && data !== null && typeof data === "object" && !Array.isArray(data)) {
-    payload = { ...(data as Record<string, unknown>), dryRun: true };
+  if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+    // App auto-upgrade tripwire: a mutating write that found this store's app
+    // version drifted from the last-seen record stamps the drift into the
+    // JSON result (warn only — the write already happened or was refused by
+    // the version guard on its own terms).
+    const drift = takeAppVersionDrift();
+    if (drift) payload = { ...(payload as Record<string, unknown>), app_version_drift: drift };
+    if (isDryRun()) payload = { ...(payload as Record<string, unknown>), dryRun: true };
   }
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
@@ -2780,8 +2793,14 @@ function cmdImportAss(draft: Draft, filePath: string, positional: string[], flag
 
 // --- Version & lint ---
 
-function cmdVersion(draft: Draft, flags: Flags): void {
+function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   const v = detectVersion(draft);
+  // App auto-upgrade tripwire, read-only: compare this store's evidence
+  // against the last-seen record without updating it — only mutating writes
+  // record a sighting, so the drift stays visible here until the next write.
+  const store = discoverDraftStore(filePath);
+  const { drift, error } = assessAppVersionDrift(store.projectDir, appVersionEvidence(draft, store.version));
+  if (error && !flags.quiet) process.stderr.write(`WARNING: ${error}\n`);
   if (flags.human) {
     console.log(`App:          ${v.app}${v.app_source !== "unknown" ? ` (${v.app_source})` : ""}`);
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
@@ -2793,12 +2812,16 @@ function cmdVersion(draft: Draft, flags: Flags): void {
     console.log(`Text-ranges:  ${v.schema.has_text_ranges ? "yes" : "no"}`);
     console.log(`Audio fades:  ${v.schema.has_audio_fades ? "yes" : "no"}`);
     console.log(`Schema int:   ${v.schema.schema_int ?? "(absent)"}`);
-    if (v.support.notes.length > 0) {
+    if (drift) {
+      console.log(`App drift:    ${drift.changes.join(", ")} (recorded ${drift.from.seen_at})`);
+    }
+    const notes = drift ? [...v.support.notes, formatAppVersionDriftWarning(drift)] : v.support.notes;
+    if (notes.length > 0) {
       console.log("");
-      for (const n of v.support.notes) console.log(`  - ${n}`);
+      for (const n of notes) console.log(`  - ${n}`);
     }
   } else {
-    out(v, flags);
+    out({ ...v, app_version_drift: drift }, flags);
   }
 }
 
@@ -3421,6 +3444,15 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   // about to rewrite may have changed on disk between the plan read and now.
   if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates]);
   commitDraftTargets(driftedCandidates, canonicalDraft);
+
+  // App auto-upgrade tripwire: --apply writes outside saveDraft, so it runs
+  // the same warn-only last-seen comparison (the JSON result below picks the
+  // drift up through out()).
+  {
+    const track = trackAppVersion(plan.project_dir, appVersionEvidence(canonicalDraft, plan.version));
+    if (track.error) process.stderr.write(`WARNING: ${track.error}\n`);
+    if (track.drift) process.stderr.write(`WARNING: ${formatAppVersionDriftWarning(track.drift)}\n`);
+  }
 
   const verify = planTimelineSync(projectPath);
   if (!verify.plan.in_sync) {
@@ -4397,7 +4429,7 @@ async function main(): Promise<void> {
       cmdRender(draft, filePath, flags);
       break;
     case "version":
-      cmdVersion(draft, flags);
+      cmdVersion(draft, filePath, flags);
       break;
     case "lint": {
       const { exitCode } = cmdLint(draft, filePath, flags);

@@ -61,6 +61,38 @@ The schema-integer boundary (360000) is the constant observed across all known r
 
 `--force-write` overrides a refusal, but the WARNING still lands on stderr so a forced write is never silent. `--dry-run` never blocks (it writes nothing) and still prints the WARNING. Refusal messages end with a fixture-collection call to action: if the project opens fine in your app, `capcut fixture <project> --out <dir>` builds a redacted bundle that can move the version to fixture-tested. `restore` and read-only commands are never gated — restoring a backup is the escape hatch, not the hazard. The guard invents no version markers: `capcut create` output stays markerless and is never stamped with a `platform` or `version` field.
 
+## App auto-upgrade tripwire
+
+The guard above answers "is this version beyond the evidence?". A different failure precedes it: the app updates itself, rewrites the drafts it opens, and nothing in a pipeline says so until writes start behaving differently (GuanYixuan/pyJianYingDraft#115, #178). For that, the CLI remembers the last version evidence it saw per draft store — the same effective tuple the guard detects (effective app version, app source, top-level schema integer) — and compares on every mutating write:
+
+- The state lives in the CLI's own config area: `~/.config/capcut-cli/app-versions.json` (`XDG_CONFIG_HOME` respected, `CAPCUT_CLI_APP_VERSIONS` overrides the path). Nothing is ever written into a draft; written drafts stay byte-identical.
+- First sighting of a store records silently. When the evidence later differs, the mutating command prints a stderr `WARNING` naming old -> new (e.g. `app version 8.7.0 -> 10.5.0`) and its JSON result gains an `app_version_drift` field (`store_dir`, `from` with its `seen_at`, `to`, `changes`), then updates the record.
+- **Warn only — the tripwire never refuses.** Refusals stay with the write-time version guard; a drift within the supported range (say 6.2.8 -> 8.7.0) warns and writes, a drift beyond it warns *and* the guard refuses as before.
+- `capcut version <project>` reports `app_version_drift` read-only (it never updates the record, so the drift stays visible until the next mutating write acknowledges it). `capcut doctor` re-inspects every tracked store and reports drift as a warn-level `app-upgrade` check.
+- A corrupt state file reads as empty with a `WARNING` and the next mutating write rebuilds it — the same robustness rule as the `user-enums.json` catalogue. Markerless CLI-created drafts carry no evidence and are never tracked.
+
+## Pinning app updates
+
+The tripwire tells you an upgrade happened; it cannot prevent one. Neither CapCut nor JianYing documents a supported, permanent way to opt out of application updates, so this section deliberately sticks to conservative measures that hold regardless of app build. The registry note for JianYing ("auto-update destroys pinning") is exactly this problem: a pinned 5.9.x install that updates itself enters the encrypted-draft era and plaintext tooling stops round-tripping.
+
+What holds on both OSes:
+
+- **Keep the installer of the version you validated.** Once the vendor moves on, old installers are hard to obtain from official channels; archiving the exact build you tested is the only pin that survives everything.
+- **Back up the draft store before the first launch after any update.** An updated app can migrate a draft in place when it opens it; once migrated, older tooling may no longer round-trip the file. Copy the whole `com.lveditor.draft` folder while the app is closed — the same folders `doctor` checks.
+- **Let the tripwire and guard see writes early.** Run `capcut version <project>` / `capcut doctor` after any suspected update, and treat a drift WARNING on a pipeline write as the signal to stop and validate before bulk operations.
+- **Run bulk pipelines against a copy of the store** rather than the live one, so an app that upgraded mid-run has nothing to migrate underneath you.
+
+Windows:
+
+- The draft store is `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft` (JianYing: `%LOCALAPPDATA%\JianyingPro\...`); that folder — not the app installation — is what your pipelines depend on, and what to snapshot before letting an update touch it.
+- The app manages its own updates; we know of no documented setting that permanently disables them. Community threads suggest firewall rules against the updater — that approach is unsupported, build-specific, and can break sign-in or effect downloads, so this document does not recommend a specific rule.
+
+macOS:
+
+- The draft store is `~/Movies/CapCut/User Data/Projects/com.lveditor.draft` (JianYing: `~/Movies/JianyingPro/...`).
+- If the app came from the **Mac App Store**, updates follow the App Store's own automatic-update setting (App Store → Settings → Automatic Updates). Disabling that prevents unattended upgrades — updates then only apply when you choose to install them. This is standard App Store behaviour, not a CapCut feature.
+- If the app was downloaded directly from the vendor, it manages its own updates like the Windows build, and the same conservative advice applies: archive the installer, back up the store, verify with `capcut version` before writing.
+
 ## Schema feature detection
 
 `capcut version` reports:
