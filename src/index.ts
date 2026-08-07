@@ -243,7 +243,8 @@ Overview (start here):
   materials  <project>                          List all material types + counts
   materials  <project> --type <type>            List items of one material type
   version    <project>                          Detect CapCut/JianYing version + schema flags + support status
-  lint       <project>                          Schema-aware checks (overlaps, line length, missing files)
+  lint       <project>                          Schema-aware checks (overlaps, line length, missing
+             files, main-track gaps)
              Options:
                --max-chars <n>     Caption line cap (default 42)
                --max-cue-secs <n>  Caption duration cap (default 7)
@@ -251,10 +252,13 @@ Overview (start here):
                --no-check-paths    Skip local-file existence checks
                --fix               Auto-repair issues stamped fixable:true
                                    (cue-too-long, caption-overlap,
-                                   caption-gap-too-small, line-too-long).
-                                   Never shrinks a caption below 100ms and
-                                   never splits words; instances it cannot
-                                   repair are reported with fixable:false.
+                                   caption-gap-too-small, line-too-long,
+                                   main-track-gap). Never shrinks a caption
+                                   below 100ms, never splits words, and only
+                                   closes a main-track gap when no other
+                                   track has content at or after it;
+                                   instances it cannot repair are reported
+                                   with fixable:false.
                                    Combine with --dry-run to preview.
              Exit codes: 0 clean · 1 warnings · 2 errors. Info-level issues
              (e.g. unknown-effect-slug, which store-downloaded effects from
@@ -3719,7 +3723,7 @@ const SUMMARIES: Record<string, string> = {
   "replace-media": "Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes.",
   info: "Project overview + material summary.",
   version: "Detect CapCut/JianYing version, schema flags, and support status.",
-  lint: "Schema-aware checks (overlaps, line length, missing files); exit 0/1/2 for CI.",
+  lint: "Schema-aware checks (overlaps, line length, missing files, main-track gaps); exit 0/1/2 for CI.",
   tracks: "List all tracks.",
   segments: "List segments with timing; filter by --track <type>.",
   texts: "List all text/subtitle content.",

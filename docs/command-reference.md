@@ -6,7 +6,7 @@
 |---|---|:---:|---|
 | `info` | `capcut info <project>` | no | Project overview + material summary. |
 | `version` | `capcut version <project>` | no | Detect CapCut/JianYing version, schema flags, and support status. |
-| `lint` | `capcut lint <project> [options]` | no | Schema-aware checks (overlaps, line length, missing files); exit 0/1/2 for CI. |
+| `lint` | `capcut lint <project> [options]` | no | Schema-aware checks (overlaps, line length, missing files, main-track gaps); exit 0/1/2 for CI. |
 | `tracks` | `capcut tracks <project>` | no | List all tracks. |
 | `segments` | `capcut segments <project> [--track <type>]` | no | List segments with timing; filter by --track <type>. |
 | `texts` | `capcut texts <project>` | no | List all text/subtitle content. |

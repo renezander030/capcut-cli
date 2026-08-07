@@ -1112,4 +1112,247 @@ describe("capcut lint", () => {
       assert.equal(readFileSync(fix.path, "utf-8"), before, "--fix must not rewrite a draft it didn't change");
     });
   });
+
+  describe("main-track-gap detection", () => {
+    // The main track = the FIRST video track (bottom layer). CapCut's magnetic
+    // main track closes gaps between its segments on open, silently shifting
+    // every later segment left — sun-guannan/VectCutAPI#54. The fixture's main
+    // track is 0-5s | 5-10s with an audio bed ending at 10s and subtitles
+    // ending at 9.7s; moving the second video segment right opens a gap at 5s.
+
+    describe("contiguous main track and gappy overlays stay silent", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("flags nothing on back-to-back main segments, even with a gap on an overlay video track", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const main = draft.tracks.find((t) => t.type === "video");
+        const overlaySeg = (id, startUs) => ({
+          ...structuredClone(main.segments[0]),
+          id,
+          target_timerange: { start: startUs, duration: 1_000_000 },
+          source_timerange: { start: 0, duration: 1_000_000 },
+        });
+        // Overlay (PiP) tracks are not magnetic — a gap here is normal layout,
+        // so only the first video track may ever produce this code.
+        draft.tracks.push({
+          id: "overlay-video-track",
+          type: "video",
+          name: "overlay",
+          attribute: 0,
+          segments: [
+            overlaySeg("overlay-1-aaaa-bbbb-cccc-dddddddddddd", 1_000_000),
+            overlaySeg("overlay-2-aaaa-bbbb-cccc-dddddddddddd", 8_000_000),
+          ],
+        });
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.ok(
+          !r.json.issues.some((i) => i.code === "main-track-gap"),
+          `contiguous main track must not flag; got: ${JSON.stringify(r.json.issues)}`,
+        );
+        assert.equal(r.status, 0);
+      });
+    });
+
+    describe("report-only when other tracks are aligned past the gap", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("warns with fixable:false + suggested_command, and --fix leaves the file byte-identical", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const main = draft.tracks.find((t) => t.type === "video");
+        const earlierId = main.segments[0].id;
+        // 0-5s | 600ms gap | 5.6-10.6s. Audio bed and subtitles reach past the
+        // gap's start, so the close-up would desync them: report-only.
+        main.segments[1].target_timerange.start = 5_600_000;
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const r = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        const gaps = r.json.issues.filter((i) => i.code === "main-track-gap");
+        assert.equal(gaps.length, 1, `expected one main-track-gap; got: ${JSON.stringify(r.json.issues)}`);
+        assert.equal(gaps[0].severity, "warning");
+        assert.equal(gaps[0].fixable, false, "a close-up that would desync other tracks must not be stamped fixable");
+        assert.ok(gaps[0].suggested_command, "report-only instance must carry a suggested_command");
+        assert.equal(gaps[0].location.track, "Track 1");
+        assert.equal(gaps[0].location.segment_id, earlierId, "the issue anchors on the segment before the gap");
+        // The warning flips the exit code 0 -> 1 — the changelog calls this
+        // out: such a draft was always going to re-time itself on open.
+        assert.equal(r.json.summary.warnings, 1);
+        assert.equal(r.status, 1);
+
+        const before = readFileSync(fix.path, "utf-8");
+        const fixRun = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
+        assert.ok(
+          !fixRun.json.fixed.some((i) => i.code === "main-track-gap"),
+          `must not claim FIXED; got: ${JSON.stringify(fixRun.json.fixed)}`,
+        );
+        assert.ok(fixRun.json.issues.some((i) => i.code === "main-track-gap" && i.fixable === false));
+        assert.equal(fixRun.status, 1);
+        assert.equal(readFileSync(fix.path, "utf-8"), before, "--fix must not rewrite a draft it didn't repair");
+        assert.ok(!existsSync(`${fix.path}.bak`), "no repair, no write, no .bak");
+      });
+    });
+
+    describe("--fix closes up when no other track reaches past the gap", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("shifts later main-track segments left cumulatively across gaps and re-lints clean", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const main = draft.tracks.find((t) => t.type === "video");
+        // 0-5s | 600ms gap at 5s | 5.6-10.6s | 400ms gap at 10.6s | 11-12s.
+        // The audio bed is trimmed to end EXACTLY at the first gap's start —
+        // touching content never moves, pinning the strict-inequality
+        // boundary — and the subtitle track is dropped: both gaps are safe.
+        main.segments[1].target_timerange.start = 5_600_000;
+        main.segments.push({
+          ...structuredClone(main.segments[1]),
+          id: "maingap-3-aaaa-bbbb-cccc-dddddddddddd",
+          target_timerange: { start: 11_000_000, duration: 1_000_000 },
+          source_timerange: { start: 0, duration: 1_000_000 },
+        });
+        const audio = draft.tracks.find((t) => t.type === "audio");
+        audio.segments[0].target_timerange.duration = 5_000_000;
+        audio.segments[0].source_timerange.duration = 5_000_000;
+        draft.tracks = draft.tracks.filter((t) => t.type !== "text");
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const detect = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        const found = detect.json.issues.filter((i) => i.code === "main-track-gap");
+        assert.equal(
+          found.length,
+          2,
+          `expected two main-track-gap warnings; got: ${JSON.stringify(detect.json.issues)}`,
+        );
+        for (const g of found) {
+          assert.equal(g.fixable, true, `safe close-up must be stamped fixable; got: ${JSON.stringify(g)}`);
+          assert.equal(g.suggested_command, undefined, "fixable instances carry no suggested_command");
+        }
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
+        assert.equal(
+          r.json.fixed.filter((i) => i.code === "main-track-gap").length,
+          2,
+          `expected both gaps in fixed[]; got: ${JSON.stringify(r.json.fixed)}`,
+        );
+        assert.equal(r.status, 0);
+        assert.ok(existsSync(`${fix.path}.bak`), "the repair writes atomically with a .bak");
+
+        const repaired = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const rMain = repaired.tracks.find((t) => t.type === "video");
+        const starts = rMain.segments.map((s) => s.target_timerange.start).sort((a, b) => a - b);
+        assert.deepEqual(starts, [0, 5_000_000, 10_000_000], "later segments close up left, shifts accumulating");
+        for (const s of rMain.segments) {
+          // The close-up moves starts only — durations and source trims are content.
+          assert.ok(
+            s.target_timerange.duration === 5_000_000 || s.target_timerange.duration === 1_000_000,
+            `duration must be untouched: ${JSON.stringify(s.target_timerange)}`,
+          );
+        }
+
+        const relint = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        assert.ok(
+          !relint.json.issues.some((i) => i.code === "main-track-gap"),
+          `re-lint should be clean; got: ${JSON.stringify(relint.json.issues)}`,
+        );
+        assert.equal(relint.status, 0);
+      });
+    });
+
+    describe("per-instance stamping when only the later gap is safe", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("closes only the safe suffix and never moves segments other tracks are aligned to", () => {
+        const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const main = draft.tracks.find((t) => t.type === "video");
+        const earlierId = main.segments[0].id;
+        // 0-5s | 600ms gap at 5s | 5.6-10.6s | 400ms gap at 10.6s | 11-12s,
+        // with the fixture's audio (ends 10s) and subtitles (end 9.7s) kept:
+        // both reach past gap 1's start but not past gap 2's, so gap 1 is
+        // report-only and gap 2 closes up.
+        main.segments[1].target_timerange.start = 5_600_000;
+        const secondId = main.segments[1].id;
+        main.segments.push({
+          ...structuredClone(main.segments[1]),
+          id: "mixedgap-3-aaaa-bbbb-cccc-dddddddddddd",
+          target_timerange: { start: 11_000_000, duration: 1_000_000 },
+          source_timerange: { start: 0, duration: 1_000_000 },
+        });
+        writeFileSync(fix.path, JSON.stringify(draft));
+
+        const detect = spawnCli(["lint", fix.path, "--no-check-paths"]);
+        const found = detect.json.issues.filter((i) => i.code === "main-track-gap");
+        assert.equal(
+          found.length,
+          2,
+          `expected two main-track-gap warnings; got: ${JSON.stringify(detect.json.issues)}`,
+        );
+        const gap1 = found.find((i) => i.location.segment_id === earlierId);
+        const gap2 = found.find((i) => i.location.segment_id === secondId);
+        assert.equal(gap1.fixable, false, "other tracks reach past gap 1 — report-only");
+        assert.ok(gap1.suggested_command);
+        assert.equal(gap2.fixable, true, "nothing reaches past gap 2 — mechanically safe");
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
+        assert.ok(
+          r.json.fixed.some((i) => i.code === "main-track-gap" && i.location.segment_id === secondId),
+          `gap 2 must be fixed; got: ${JSON.stringify(r.json.fixed)}`,
+        );
+        assert.ok(
+          r.json.issues.some(
+            (i) => i.code === "main-track-gap" && i.location.segment_id === earlierId && i.fixable === false,
+          ),
+          "gap 1 must stay reported",
+        );
+        assert.equal(r.status, 1, "the surviving unsafe gap keeps exit code 1");
+
+        const repaired = JSON.parse(readFileSync(fix.path, "utf-8"));
+        const rMain = repaired.tracks.find((t) => t.type === "video");
+        assert.equal(
+          rMain.segments.find((s) => s.id === secondId).target_timerange.start,
+          5_600_000,
+          "a segment other tracks are aligned to must never move, even when the write happens for gap 2",
+        );
+        assert.equal(
+          rMain.segments.find((s) => s.id.startsWith("mixedgap-3")).target_timerange.start,
+          10_600_000,
+          "the safe later gap closes by exactly its own width",
+        );
+      });
+    });
+
+    describe("untouched path: no gap means no mutation riding along on other writes", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("a caption-only --fix write leaves every non-text track deep-equal to the input", () => {
+        // The only fixable issue lives on a text track; the written draft's
+        // video and audio tracks must be exactly the input's — the new pass
+        // contributes zero mutation when the rule is not in play, so drafts
+        // on this path serialize byte-identically to v0.16.1's output.
+        seedTextTrack(
+          fix.path,
+          "invariant-track",
+          [textMat("invariant-mat", "Hi")],
+          [
+            textSeg("invar-1-aaaa-bbbb-cccc-dddddddddddd", "invariant-mat", 900_000_000, 2_000_000),
+            textSeg("invar-2-aaaa-bbbb-cccc-dddddddddddd", "invariant-mat", 901_000_000, 2_000_000),
+          ],
+        );
+        const beforeTracks = JSON.parse(readFileSync(fix.path, "utf-8")).tracks.filter((t) => t.type !== "text");
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
+        assert.ok(
+          r.json.fixed.some((i) => i.code === "caption-overlap"),
+          `the caption repair must actually write; got: ${JSON.stringify(r.json.fixed)}`,
+        );
+
+        const afterTracks = JSON.parse(readFileSync(fix.path, "utf-8")).tracks.filter((t) => t.type !== "text");
+        assert.deepEqual(afterTracks, beforeTracks, "non-text tracks must be untouched by a caption-only --fix");
+      });
+    });
+  });
 });

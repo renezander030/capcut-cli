@@ -117,7 +117,7 @@
     },
     {
       "name": "lint",
-      "summary": "Schema-aware checks (overlaps, line length, missing files); exit 0/1/2 for CI.",
+      "summary": "Schema-aware checks (overlaps, line length, missing files, main-track gaps); exit 0/1/2 for CI.",
       "usage": "capcut lint <project> [options]",
       "positionals": [
         {
