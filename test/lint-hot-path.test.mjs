@@ -90,7 +90,14 @@ describe("lint material-id resolution", () => {
 
 // ffprobeAvailable() shells out. A draft with nothing probe-able must never
 // pay for that spawn, and a draft with reachable media must still probe.
-describe("lint probes lazily", () => {
+// Observing the spawn needs an executable shim, and there is none on Windows:
+// a shebang script is not executable there, and `ffprobeAvailable` spawns
+// without a shell, which rules out .cmd/.bat. Skipped rather than left to pass
+// vacuously — the two no-spawn assertions below hold for free on a platform
+// that cannot spawn the shim at all, which would report coverage we do not
+// have. The laziness itself is platform-independent, and ubuntu + macOS cover
+// it in CI.
+describe("lint probes lazily", { skip: process.platform === "win32" && "no executable probe shim on Windows" }, () => {
   function probeShim(dir) {
     const log = join(dir, "probe-calls.log");
     const shim = join(dir, "fake-ffprobe.sh");
