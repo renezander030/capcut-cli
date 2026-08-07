@@ -1539,9 +1539,11 @@ describe("capcut lint", () => {
         const [insideVideo] = seedInsideMedia(fix.dir);
         // The shape rename's tail-preserving prefix rewrite produces for a
         // Windows-authored draft moved here: native folder + backslash tail.
-        // existsSync cannot see it on this OS, so missing-file still fires
-        // (unchanged behaviour) — but the tolerant prefix compare must keep
-        // media-outside-draft silent: the media IS inside the draft folder.
+        // The containment verdict is what this test guards, and it must hold on
+        // every OS: the media IS inside the draft folder, whatever the
+        // separators. Readability is not — a backslash is a real separator on
+        // Windows (the path resolves to the seeded file) and one odd filename
+        // on POSIX (nothing there), so missing-file is platform-dependent.
         const mixed = `${fix.dir}\\inside-bed.mp3`;
         setMediaPaths(fix.path, [insideVideo, insideVideo, mixed]);
 
@@ -1550,11 +1552,13 @@ describe("capcut lint", () => {
           !r.json.issues.some((i) => i.code === "media-outside-draft"),
           `inside media must not flag, whatever the separators; got: ${JSON.stringify(r.json.issues)}`,
         );
-        assert.ok(
-          r.json.issues.some((i) => i.code === "missing-file" && i.location?.path === mixed),
-          "the unreadable mixed-separator path stays a missing-file error",
-        );
-        assert.equal(r.status, 2);
+        const missing = r.json.issues.some((i) => i.code === "missing-file" && i.location?.path === mixed);
+        if (process.platform === "win32") {
+          assert.ok(!missing, "a mixed-separator path resolves on Windows, so no missing-file");
+        } else {
+          assert.ok(missing, "the unreadable mixed-separator path stays a missing-file error");
+          assert.equal(r.status, 2);
+        }
       });
     });
 
