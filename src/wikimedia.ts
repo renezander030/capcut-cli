@@ -18,7 +18,7 @@
 // so ops teams can correlate if traffic spikes.
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
 const UA = "capcut-cli/0.3 (+https://github.com/renezander030/capcut-cli/issues)";
@@ -263,12 +263,28 @@ export async function fetchWikimediaAsset(inputUrl: string, opts: FetchOptions):
         : undefined;
 
   // Derive filename from File:Foo.jpg if not overridden. Preserve extension.
-  const filenameFromTitle = asset.fileTitle.replace(/^File:/i, "").replace(/\s+/g, "_");
+  // The title comes from the remote URL and percent-encoded separators survive
+  // decodeURIComponent ("File:..%2F..%2Fx.jpg" decodes to "../../x.jpg"), so
+  // take the last component only: a File: title can name a file, never a path.
+  const filenameFromTitle = basename(asset.fileTitle.replace(/^File:/i, "").replace(/\s+/g, "_"));
   const filename = opts.destFilename ?? filenameFromTitle;
   const ext = extname(filename) || extname(new URL(asset.directUrl).pathname) || "";
   const finalName = filename.endsWith(ext) ? filename : filename + ext;
   const localPath = join(opts.destDir, finalName);
+  assertInsideDestDir(localPath, opts.destDir);
 
   await downloadAsset(asset, localPath);
   return { localPath, asset, warning };
+}
+
+// Containment, defence in depth: the derived name is already a basename, but
+// `basename("..")` is still ".." and destFilename is caller-supplied, so assert
+// the write lands inside destDir instead of trusting either. Prefix compare
+// tolerant of wrong-OS separators — the same both-styles compare store.ts
+// (managed-path detection) and factory.ts (renameEntryFields) use.
+function assertInsideDestDir(localPath: string, destDir: string): void {
+  const norm = (s: string) => resolve(s).replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!norm(localPath).startsWith(`${norm(destDir)}/`)) {
+    throw new Error(`Refusing to write outside ${destDir}: ${localPath}`);
+  }
 }

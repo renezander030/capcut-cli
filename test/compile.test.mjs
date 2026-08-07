@@ -231,6 +231,83 @@ describe("compile: keyframe easing pre-flight", () => {
   });
 });
 
+// The spec's `name` becomes a directory under the draft store, so an untrusted
+// spec (or, with --data, an untrusted row) could name `../../elsewhere` and
+// build the draft outside the store. validateSpec refuses a name shaped like a
+// path, on both the single-draft and the per-row derived path.
+describe("compile: draft name stays inside the draft store", () => {
+  function setupStore() {
+    const s = setup();
+    const store = join(s.dir, "store");
+    mkdirSync(store);
+    return { ...s, store };
+  }
+
+  const named = (name) => ({ ...VALID, name });
+
+  it("refuses a traversing spec.name instead of building outside the store", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, named("../escaped"));
+    const r = spawnCli(["compile", spec, "--drafts", s.store]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /spec\.name takes a plain folder name, not a path/);
+    assert.equal(existsSync(join(s.dir, "escaped")), false, "draft was built outside the store");
+  });
+
+  it("refuses an absolute and a drive-prefixed spec.name", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    for (const name of ["/tmp/escaped", "sub/nested", "..\\escaped", "C:escaped"]) {
+      const r = spawnCli(["compile", writeSpec(s.dir, named(name)), "--drafts", s.store]);
+      assert.equal(r.status, 1, `accepted "${name}"`);
+      assert.match(r.stderr, /spec\.name takes a plain folder name, not a path/);
+    }
+  });
+
+  it("refuses an empty spec.name, which would resolve to the store root itself", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const r = spawnCli(["compile", writeSpec(s.dir, named("")), "--drafts", s.store]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /spec\.name must be a non-empty folder name/);
+  });
+
+  it("--check catches it too, before any draft directory is seeded", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const r = spawnCli(["compile", writeSpec(s.dir, named("../escaped")), "--check"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /spec\.name takes a plain folder name, not a path/);
+  });
+
+  it("--data: a row whose derived name traverses aborts, nothing written", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const spec = writeSpec(s.dir, {
+      name: "{{name}}",
+      tracks: [{ type: "video", items: [{ path: "clip1.mp4", start: 0, duration: 2 }] }],
+    });
+    const rows = join(s.dir, "rows.jsonl");
+    writeFileSync(rows, `${JSON.stringify({ name: "Fine" })}\n${JSON.stringify({ name: "../escaped" })}\n`);
+    const r = spawnCli(["compile", spec, "--data", rows, "--drafts", s.store]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /aborted at row 2/);
+    assert.match(r.stderr, /spec\.name takes a plain folder name, not a path/);
+    assert.equal(existsSync(join(s.dir, "escaped")), false, "row 2 built outside the store");
+    assert.equal(existsSync(join(s.store, "Fine")), false, "row 1 was built despite the abort");
+  });
+
+  it("a plain name still builds where it always did", () => {
+    const s = setupStore();
+    after(s.cleanup);
+    const r = spawnCli(["compile", writeSpec(s.dir, named("Kept Name")), "--drafts", s.store]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.draft_path, join(s.store, "Kept Name"));
+    assert.ok(existsSync(join(s.store, "Kept Name", "draft_content.json")));
+  });
+});
+
 // v0.17: `compile --data` — one spec + N JSONL rows = N drafts, {{key}}
 // placeholders substituted into the spec's string values per row. Row errors
 // mirror `batch`'s per-line contract: fail fast with the row number (nothing

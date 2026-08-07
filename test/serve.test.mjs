@@ -70,4 +70,31 @@ describe("capcut serve", () => {
     assert.equal(result.ok, false);
     assert.equal(result.attempts, 2);
   });
+
+  // Every result line goes to stdout, which for serve's callers is an
+  // automation log. The echoed args used to carry a job's --api-key verbatim.
+  it("redacts credential values from the echoed args, keeping the rest verbatim", () => {
+    const secret = "sk-ant-do-not-log-this";
+    const job = `${JSON.stringify({
+      cmd: "translate",
+      project: "/nonexistent/draft",
+      args: ["--to", "es", "--api-key", secret],
+    })}\n`;
+    const r = spawnCli(["serve"], { input: job });
+    const line = r.stdout.split("\n").find((l) => l.trim().length > 0);
+    assert.doesNotMatch(line, new RegExp(secret), "the API key was written to the result line");
+    const result = JSON.parse(line);
+    assert.deepEqual(result.args, ["translate", "/nonexistent/draft", "--to", "es", "--api-key", "***"]);
+  });
+
+  // The CLI parses `--api-key VALUE`, not `--api-key=VALUE`, but a caller who
+  // typed the `=` form still put a key on the wire — so the echo masks it too.
+  // (The child's own stderr may still quote the unparsed token; only the args
+  // echo is this function's to redact.)
+  it("redacts the --api-key=VALUE form too", () => {
+    const job = `${JSON.stringify({ cmd: "translate", args: ["--api-key=sk-ant-inline-form"] })}\n`;
+    const r = spawnCli(["serve"], { input: job });
+    const line = r.stdout.split("\n").find((l) => l.trim().length > 0);
+    assert.deepEqual(JSON.parse(line).args, ["translate", "--api-key=***"]);
+  });
 });

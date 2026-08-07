@@ -105,6 +105,27 @@ describe("render — plan (buildRenderPlan, pure)", () => {
     assert.match(on.filterComplex, /drawtext=text='Hook line'/);
   });
 
+  // Regression: `text_color` went into `fontcolor=` raw, so a draft could close
+  // the option with a `:` and append drawtext options of its own — `textfile=`
+  // reads a local file straight into the burned-in captions.
+  it("keeps a draft's caption colour inside the fontcolor option", () => {
+    const s = setup();
+    after(s.cleanup);
+    const plan = (color) => {
+      const draft = buildDraft(s.dir);
+      draft.materials.texts[0].text_color = color;
+      return buildRenderPlan(draft, { out: join(s.dir, "p.mp4"), burnCaptions: true });
+    };
+
+    assert.match(plan("#FF3300").filterComplex, /fontcolor=0xFF3300:/, "hex colours still render");
+    assert.match(plan("yellow").filterComplex, /fontcolor=yellow:/, "named colours still render");
+
+    const injected = plan("white:textfile=/etc/passwd:x=0");
+    assert.ok(!injected.filterComplex.includes("textfile"), "draft colour cannot append drawtext options");
+    assert.match(injected.filterComplex, /fontcolor=white:fontsize=/, "falls back to the default colour");
+    assert.equal(injected.textOverlays, 1, "the caption still burns in");
+  });
+
   it("records skipped segments when material files are missing", () => {
     const s = setup();
     after(s.cleanup);

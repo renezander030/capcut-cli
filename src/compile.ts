@@ -154,6 +154,37 @@ export interface CompilePlan {
 
 const VALID_TRACK_TYPES = new Set(["video", "audio", "text"]);
 
+/**
+ * A spec's `name` is not just a label: it becomes a DIRECTORY inside the draft
+ * store (`resolve(draftsDir, name)`), and with `--data` every row derives its
+ * own from row data. The spec and the rows are untrusted input, so a name
+ * shaped like a path — `../../elsewhere`, `/etc/x`, `C:\Windows` — would build
+ * the draft outside the store. Refuse the same shapes `rename` refuses for a
+ * folder name (factory.ts): a plain, non-empty component and nothing else.
+ *
+ * Containment follows from the shape, tolerant of either OS's separator the
+ * way store.ts/factory.ts compare paths: with no `/` or `\` in it, and no
+ * drive prefix, `resolve(dir, name)` can only ever be `dir`'s own child. The
+ * drive test refuses the whole `X:` prefix, not just `X:\` — `C:name` carries
+ * no separator yet resolve() still sends it to that drive's cwd on Windows.
+ */
+function validateDraftName(name: unknown): void {
+  // Absent (or JSON null) means "use the caller's default name" — nothing to check.
+  if (name === undefined || name === null) return;
+  if (typeof name !== "string") {
+    throw new Error(`compile: spec.name must be a string (got ${typeof name})`);
+  }
+  if (name.trim() === "" || name === "." || name === "..") {
+    throw new Error(`compile: spec.name must be a non-empty folder name (got "${name}")`);
+  }
+  if (/[/\\]/.test(name) || /^[A-Za-z]:/.test(name)) {
+    throw new Error(
+      `compile: spec.name takes a plain folder name, not a path (got "${name}"). ` +
+        "The draft is built inside the draft store, or wherever --out names.",
+    );
+  }
+}
+
 export function parseSpec(raw: string): CompileSpec {
   let parsed: unknown;
   try {
@@ -168,6 +199,7 @@ export function parseSpec(raw: string): CompileSpec {
 export function validateSpec(spec: unknown): asserts spec is CompileSpec {
   if (!spec || typeof spec !== "object") throw new Error("compile: spec must be a JSON object");
   const s = spec as Record<string, unknown>;
+  validateDraftName(s.name);
   if (!Array.isArray(s.tracks) || s.tracks.length === 0) {
     throw new Error("compile: spec.tracks must be a non-empty array");
   }
