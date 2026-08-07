@@ -66,7 +66,7 @@ JSON by default (pipe to `jq`); add `-H` for a human-readable table. Pass `--jia
 | **Long-form → short** | `cut` · `detect-scenes` (ffmpeg scene-cut detection) |
 | **Automation** | `serve` (stateless JSONL runner) · `migrate` · `doctor` · `sync-timelines` (8.7 mirror repair) |
 
-**Full reference** for every command, option, and exit code: **[docs/command-reference.md](./docs/command-reference.md)**.
+**Full reference** for every command, option, and exit code: **[docs/command-reference.md](./docs/command-reference.md)** (简体中文: [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)).
 
 ## Sponsor
 
@@ -86,7 +86,8 @@ CapCut/JianYing store each project as local JSON. capcut-cli loads that store, v
 
 ## Docs & examples
 
-- [docs/command-reference.md](./docs/command-reference.md) — every command and flag
+- [docs/command-reference.md](./docs/command-reference.md) — every command and flag ([简体中文](./docs/command-reference.zh-CN.md))
+- [docs/quickstart.zh-CN.md](./docs/quickstart.zh-CN.md) — 剪映快速上手 (JianYing-first quickstart, Simplified Chinese)
 - [examples/](./examples/) — end-to-end recipes (VO alignment, serve automation, batch subtitle correction)
 - [docs/version-support.md](./docs/version-support.md) · [docs/jianying-encryption.md](./docs/jianying-encryption.md)
 - [CHANGELOG.md](./CHANGELOG.md) · [Releases](https://github.com/renezander030/capcut-cli/releases) — what's new

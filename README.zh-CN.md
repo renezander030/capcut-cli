@@ -48,6 +48,8 @@ capcut info ./my-first/                         # 查看草稿（加 -H 显示�
 
 然后在 CapCut 中打开项目审阅并渲染。所有短视频平台都禁止自动上传，所以最后的发布按钮由你来点。
 
+**剪映（国内版）用户：** 版本须知（6.0+ 加密）、草稿目录位置与 `--jianying` 命名空间，见 **[剪映快速上手](./docs/quickstart.zh-CN.md)**。
+
 ## 常用命令
 
 默认输出 JSON（可管道给 `jq`）；加 `-H` 显示人类可读表格。加 `--jianying` 使用剪映枚举命名空间。运行 `capcut <command> --help` 查看完整参数。
@@ -66,7 +68,7 @@ capcut info ./my-first/                         # 查看草稿（加 -H 显示�
 | **长视频切短** | `cut` · `detect-scenes`（ffmpeg 场景切点检测）|
 | **自动化** | `serve`（无状态 JSONL 执行器）· `migrate` · `doctor` · `sync-timelines`（8.7 时间线镜像修复）|
 
-**完整命令参考**（每个命令、参数与退出码）：**[docs/command-reference.md](./docs/command-reference.md)**。
+**完整命令参考**（每个命令、参数与退出码）：**[docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)**（[英文原版](./docs/command-reference.md)）。
 
 ## 赞助
 
@@ -86,7 +88,8 @@ CapCut / 剪映把每个项目存为本地 JSON。capcut-cli 加载这个存储�
 
 ## 文档与示例
 
-- [docs/command-reference.md](./docs/command-reference.md) —— 每个命令与参数
+- [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md) —— 每个命令与参数（[英文原版](./docs/command-reference.md)）
+- [docs/quickstart.zh-CN.md](./docs/quickstart.zh-CN.md) —— 剪映快速上手：版本须知、草稿目录、`--jianying` 命名空间
 - [examples/](./examples/) —— 端到端示例（配音对齐、serve 自动化、批量字幕修正）
 - [docs/version-support.md](./docs/version-support.md) · [docs/jianying-encryption.md](./docs/jianying-encryption.md)
 - [CHANGELOG.md](./CHANGELOG.md) · [Releases](https://github.com/renezander030/capcut-cli/releases) —— 更新内容
