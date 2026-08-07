@@ -2,6 +2,22 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Nine features in one release — the next slice of the opportunity backlog, bundled. Scope staged for review; each entry lands in full with its feature commit.
+
+Planned scope, in rank order:
+
+1. CapCut 7.x nested `Timelines/` layout: detection + write guard (no canonical flip without a #50 repro artifact)
+2. `import-timeline` — OpenTimelineIO in, the inverse of `export-timeline`
+3. `lint`: `media-outside-draft` + `--fix` stage-in (portability repair)
+4. `compile --data` — one spec + N JSONL rows = N registered drafts
+5. App auto-upgrade tripwire in `version`/`doctor` + update-pinning docs
+6. zh-CN command reference + JianYing-first quickstart
+7. Keyframeable mask geometry (#44; contingent on harvested ground truth)
+8. `lint`: `main-track-gap` + `--fix`
+9. `rename` — draft folder + `draft_meta_info.json` + store entry, transactionally
+
 ## [0.16.1] — 2026-08-03
 
 ### Fixed
