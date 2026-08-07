@@ -174,6 +174,31 @@ async function runWithRetries(opts: ServeOptions, job: JobInput): Promise<JobRes
   return result;
 }
 
+// Flags whose VALUE is a credential. Every result line is written to stdout,
+// which for serve's callers (n8n/Make/Coze/cron) is an automation log, so the
+// echoed args must not carry the secret the job passed. `--api-key`
+// (translate's Anthropic key) is the CLI's only credential flag today.
+const SECRET_FLAGS = new Set(["--api-key"]);
+const REDACTED = "***";
+
+/**
+ * The result line's `args` echo with credential VALUES masked. The spawned
+ * child still receives the real argv — only what is reported is redacted.
+ * Covers `--api-key VALUE` (the form the CLI parses) and `--api-key=VALUE`
+ * (which the CLI ignores, but a caller who typed it still leaked a key).
+ */
+function redactArgs(args: string[]): string[] {
+  const echoed = [...args];
+  for (let i = 0; i < echoed.length; i++) {
+    const eq = echoed[i].indexOf("=");
+    const flag = eq === -1 ? echoed[i] : echoed[i].slice(0, eq);
+    if (!SECRET_FLAGS.has(flag)) continue;
+    if (eq !== -1) echoed[i] = `${flag}=${REDACTED}`;
+    else if (i + 1 < echoed.length) echoed[++i] = REDACTED;
+  }
+  return echoed;
+}
+
 function runJob(
   cliPath: string,
   job: JobInput,
@@ -182,6 +207,7 @@ function runJob(
   const args: string[] = [job.cmd];
   if (job.project) args.push(job.project);
   if (Array.isArray(job.args)) args.push(...job.args.map(String));
+  const echoedArgs = redactArgs(args);
   return new Promise((resolve) => {
     const captureDir = mkdtempSync(join(tmpdir(), "capcut-serve-"));
     const stdoutPath = join(captureDir, "stdout");
@@ -221,7 +247,7 @@ function runJob(
       }
     }, 25);
     child.on("error", (error) =>
-      finish({ id: job.id, ok: false, cmd: job.cmd, args, status: null, stderr: error.message }),
+      finish({ id: job.id, ok: false, cmd: job.cmd, args: echoedArgs, status: null, stderr: error.message }),
     );
     child.on("close", (status) => {
       if (settled) return;
@@ -237,7 +263,7 @@ function runJob(
         id: job.id,
         ok: status === 0 && !timedOut && !overflow,
         cmd: job.cmd,
-        args,
+        args: echoedArgs,
         status,
         stdout: parsed,
         stderr: overflow
