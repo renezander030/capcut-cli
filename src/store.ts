@@ -274,6 +274,16 @@ function candidatePaths(input: string): { projectDir: string; requested: string 
   return { projectDir, requested, paths };
 }
 
+/** Newest app version any readable timeline in the set declares, or null when
+ * none carries a marker. The store's version evidence covers every sibling, so
+ * a mirror written by a newer build raises it. */
+function highestVersion(parseable: DraftCandidate[]): string | null {
+  const versions = parseable
+    .map((candidate) => candidate.draft?.platform?.app_version)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  return versions.sort((a, b) => (atLeast(a, b) ? -1 : 1))[0] ?? null;
+}
+
 export function discoverDraftStore(input: string): DraftStore {
   const { projectDir, requested, paths } = candidatePaths(input);
   const candidates = paths.map(parseCandidate);
@@ -286,10 +296,7 @@ export function discoverDraftStore(input: string): DraftStore {
     );
   }
 
-  const versions = parseable
-    .map((candidate) => candidate.draft?.platform?.app_version)
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
-  const version = versions.sort((a, b) => (atLeast(a, b) ? -1 : 1))[0] ?? null;
+  const version = highestVersion(parseable);
   const modernStorage = atLeast(version, "8.7");
 
   let canonical: DraftCandidate | undefined;
@@ -332,6 +339,98 @@ export function discoverDraftStore(input: string): DraftStore {
             ? "info-primary"
             : "unknown",
     nestedTimelines: nested.files,
+  };
+}
+
+/**
+ * The store as a fresh discovery would find it immediately after a write,
+ * built from what the write already produced instead of re-reading the project.
+ *
+ * `saveDraft` keeps a per-path store so a library caller can save the same
+ * loaded draft twice without tripping its own changed-on-disk guard, and used
+ * to refresh that cache by calling `discoverDraftStore` again — re-reading,
+ * re-parsing, and re-hashing every sibling to learn one thing the write
+ * already knew: each target now holds exactly the bytes it was just handed.
+ * `written` maps target path -> the content committed there; candidates
+ * outside it are carried over untouched, so a partial write set stays honest.
+ *
+ * Everything a re-discovery would recompute is recomputed: `size` and `mtime`
+ * come from a `stat` of the file that was just renamed into place, `version`
+ * (and with it `modernStorage` and `layout`) is re-derived from the timelines
+ * the targets now hold — which is how a mirror that used to carry a newer app
+ * version stops raising the store's version once it has been overwritten — and
+ * `diverged` collapses to false on its own, because every written target now
+ * exposes the same timeline.
+ */
+export function storeAfterWrite(store: DraftStore, draft: Draft, written: Map<string, string>): DraftStore {
+  const refresh = (candidate: DraftCandidate): DraftCandidate => {
+    const content = written.get(candidate.path);
+    if (content === undefined) return candidate;
+    let size = Buffer.byteLength(content, "utf-8");
+    let mtime = candidate.mtime;
+    try {
+      const stat = statSync(candidate.path);
+      size = stat.size;
+      mtime = stat.mtime.toISOString();
+    } catch {
+      // The file is there — it was just renamed into place — but a stat can
+      // still fail on a racing sync client. Fall back to what we wrote.
+    }
+    let timelineHash: string | null = null;
+    return {
+      name: candidate.name,
+      path: candidate.path,
+      exists: true,
+      size,
+      mtime,
+      sha256: hash(content),
+      raw: content,
+      parseable: true,
+      envelopePath: candidate.envelopePath,
+      draft,
+      get timelineHash(): string {
+        if (timelineHash === null) timelineHash = hash(JSON.stringify(draft));
+        return timelineHash;
+      },
+    };
+  };
+
+  // The re-discovery this replaces was keyed on the canonical FILE, not the
+  // project directory — deliberately, so an explicitly addressed custom
+  // filename such as A.json is not lost — and that puts the canonical first in
+  // the candidate list. Keep that order: it is the order targets are written
+  // in and the order a changed-on-disk report names them in.
+  const order = candidatePaths(store.canonical.path).paths;
+  const rank = (candidate: DraftCandidate): number => {
+    const index = order.indexOf(candidate.path);
+    return index < 0 ? order.length : index;
+  };
+  const candidates = [...store.candidates].sort((a, b) => rank(a) - rank(b)).map(refresh);
+  // Same derivation discovery uses, so a target and its candidate stay one object.
+  const targets = candidates.filter((candidate) => candidate.parseable && candidate.draft);
+  const version = highestVersion(targets);
+  const modernStorage = atLeast(version, "8.7");
+  const contentReadable = targets.some((candidate) => candidate.name === "draft_content.json");
+  const infoReadable = targets.some((candidate) => candidate.name === "draft_info.json");
+  return {
+    projectDir: store.projectDir,
+    canonical: targets.find((candidate) => candidate.path === store.canonical.path) ?? refresh(store.canonical),
+    targets,
+    candidates,
+    version,
+    modernStorage,
+    get diverged(): boolean {
+      return new Set(targets.map((candidate) => candidate.timelineHash).filter(Boolean)).size > 1;
+    },
+    layout:
+      store.nestedTimelines.length > 0 && !modernStorage
+        ? "timelines-nested"
+        : contentReadable
+          ? "content-primary"
+          : infoReadable
+            ? "info-primary"
+            : "unknown",
+    nestedTimelines: store.nestedTimelines,
   };
 }
 

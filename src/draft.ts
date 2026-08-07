@@ -24,6 +24,7 @@ import {
   isManagedDraftPath,
   NESTED_TIMELINES_WRITE_WARNING,
   serializeDraftCandidate,
+  storeAfterWrite,
 } from "./store.js";
 import { assessWriteSafety } from "./version.js";
 
@@ -259,8 +260,13 @@ export function assertTargetsUnchangedOnDisk(targets: DraftCandidate[]): void {
 // file actually written, rolling back on a partial commit. Writes EXACTLY the
 // given targets — callers decide the write set (saveDraft: every readable
 // sibling; sync-timelines: only the drifted mirrors). No-ops under --dry-run.
-export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, options: { backup?: boolean } = {}): void {
-  if (dryRun) return;
+export function commitDraftTargets(
+  targets: DraftCandidate[],
+  draft: Draft,
+  options: { backup?: boolean } = {},
+): Map<string, string> {
+  const written = new Map<string, string>();
+  if (dryRun) return written;
 
   // Prepare every replacement before renaming any target. This keeps the
   // multi-file write as close to a transaction as the filesystem allows.
@@ -280,6 +286,7 @@ export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, opti
     for (const item of prepared) {
       renameSync(item.temp, item.target.path);
       committed.push(item);
+      written.set(item.target.path, item.content);
     }
   } catch (error) {
     // Roll back targets already renamed during a partial commit.
@@ -291,6 +298,9 @@ export function commitDraftTargets(targets: DraftCandidate[], draft: Draft, opti
     }
     throw error;
   }
+  // Target path -> the content committed there, so a caller holding a store
+  // for these targets can roll it forward without re-reading the project.
+  return written;
 }
 
 export function saveDraft(
@@ -359,7 +369,7 @@ export function saveDraft(
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);
 
   sortTracks(draft);
-  commitDraftTargets(store.targets, draft, options);
+  const written = commitDraftTargets(store.targets, draft, options);
 
   // App auto-upgrade tripwire (pyJianYingDraft#115, #178): warn-only. Compares
   // this store's version evidence against the CLI's last-seen record in
@@ -375,10 +385,12 @@ export function saveDraft(
   }
 
   // Refresh hashes/raw snapshots so a library caller can save the same loaded
-  // draft more than once without tripping its own conflict guard.
-  // Rediscover from the canonical file, not only the parent directory. The
-  // latter would lose explicitly addressed custom filenames such as A.json.
-  loadContexts.set(resolved, { store: discoverDraftStore(store.canonical.path) });
+  // draft more than once without tripping its own conflict guard. Rolled
+  // forward from the bytes the commit just wrote rather than by discovering
+  // the project again: a re-discovery re-read, re-parsed and re-hashed every
+  // sibling — the single most expensive step of a write on a large draft — to
+  // establish what the write already knew.
+  loadContexts.set(resolved, { store: storeAfterWrite(store, draft, written) });
 }
 
 function writeAndSync(path: string, content: string): void {
