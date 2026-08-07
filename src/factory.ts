@@ -13,7 +13,7 @@ import { basename, dirname, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
-import { findMaterialGlobal, findSegment, writeAtomic } from "./draft.js";
+import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { isManagedDraftPath, parseCandidate } from "./store.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
@@ -1331,15 +1331,7 @@ export function addText(
   // Find or create text track
   let track = draft.tracks.find((t) => t.type === "text" && (t.name === trackName || !opts.trackName));
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "text",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("text", trackName, false);
     draft.tracks.push(track);
   }
 
@@ -1414,15 +1406,7 @@ export function addAudio(
   // Find or create audio track
   let track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "audio",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("audio", trackName, false);
     draft.tracks.push(track);
   }
 
@@ -1516,15 +1500,7 @@ export function addVideo(
   // Find or create video track
   let track = draft.tracks.find((t) => t.type === "video" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "video",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("video", trackName, false);
     draft.tracks.push(track);
   }
 
@@ -1911,15 +1887,7 @@ export function applyTemplate(
   // Find or create track
   let track = draft.tracks.find((t) => t.type === template.type);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: template.type,
-      name: template.name || template.type,
-      attribute: 0,
-      segments: [],
-      is_default_name: true,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack(template.type, template.name || template.type, true);
     draft.tracks.push(track);
   }
 
@@ -2033,15 +2001,7 @@ export function duplicateSegment(
     const names = new Set(draft.tracks.map((t) => t.name));
     let name = `${sourceTrack.name}-copy`;
     for (let n = 2; names.has(name); n++) name = `${sourceTrack.name}-copy-${n}`;
-    track = {
-      id: uuid(),
-      type: sourceTrack.type,
-      name,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack(sourceTrack.type, name, false);
     draft.tracks.splice(draft.tracks.indexOf(sourceTrack) + 1, 0, track);
     createdTrack = true;
   }
@@ -2123,15 +2083,7 @@ export function addSticker(
 
   let track = draft.tracks.find((t) => t.type === "sticker" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "sticker",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("sticker", trackName, !opts.trackName);
     draft.tracks.push(track);
   }
 
@@ -2311,15 +2263,7 @@ export function addEffect(
 
   let track = draft.tracks.find((t) => t.type === "effect" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "effect",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("effect", trackName, !opts.trackName);
     draft.tracks.push(track);
   }
 
@@ -2723,15 +2667,7 @@ export function addFilter(
 
   let track = draft.tracks.find((t) => t.type === "filter" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "filter",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("filter", trackName, !opts.trackName);
     draft.tracks.push(track);
   }
 

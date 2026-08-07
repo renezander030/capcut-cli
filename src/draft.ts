@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -57,6 +57,20 @@ export interface Track {
   name: string;
   attribute: number;
   segments: Segment[];
+}
+
+// Fresh empty track. Key order is load-bearing: it is the order CapCut writes,
+// and drafts are compared byte-for-byte. Callers append or splice it themselves.
+export function makeTrack(type: string, name: string, isDefaultName: boolean): Track {
+  return {
+    id: randomUUID(),
+    type,
+    name,
+    attribute: 0,
+    segments: [],
+    is_default_name: isDefaultName,
+    flag: 0,
+  } as unknown as Track;
 }
 
 export interface MaterialText {
