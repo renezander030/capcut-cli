@@ -2,9 +2,9 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.0] — 2026-08-07
 
-Nine features in one release — the next slice of the opportunity backlog, bundled. Scope staged for review; each entry lands in full with its feature commit.
+Eight features in one release — the next slice of the opportunity backlog, bundled — plus the honest slice of the ninth: keyframeable mask geometry (#44) stays evidence-gated because no credible on-disk encoding ground truth exists anywhere public, so what ships is the `fixture` evidence harvest that unblocks it, not a guessed encoding the app would silently no-op. The headline is pipeline round-trips: `import-timeline` brings OpenTimelineIO documents back into the draft format (the inverse of `export-timeline`), and `compile --data` turns one spec plus N JSONL rows into N built-and-registered drafts. Behaviour changes are called out inline; the ones to know: `lint` gains the warning-severity `main-track-gap` check — a draft whose only finding is a main-track gap linted exit 0 before and exits 1 now (`lint --fix` closes gaps up where safe) — while the new `media-outside-draft` check is info-severity and changes no exit codes; and mutating writes now WARN on stderr in two new cases — a CapCut 7.x nested `Timelines/` layout whose root-mirror edit the app may discard, and an app auto-upgrade since the last CLI write — warn only, never a refusal. With none of the new commands or flags in play, written drafts stay byte-identical to v0.16.1.
 
 ### Added
 
