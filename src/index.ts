@@ -11,10 +11,7 @@ import {
   takeAppVersionDrift,
   trackAppVersion,
 } from "./app-versions.js";
-import { parseAss } from "./ass.js";
 import { stripBom } from "./bom.js";
-import { captionDraft } from "./caption.js";
-import { removeChroma, setChroma } from "./chroma.js";
 import {
   buildCommandSpecs,
   commandDeclaresFlag,
@@ -23,14 +20,7 @@ import {
   RELEASE_SCOPED_FLAGS,
   renderCommandIndex,
 } from "./command-specs.js";
-import {
-  type CompileSpec,
-  compileDraft,
-  parseSpec,
-  planCompile,
-  substitutePlaceholders,
-  validateSpec,
-} from "./compile.js";
+import type { CompileSpec } from "./compile.js";
 import type {
   ImageAnimOptions,
   KeyframeInput,
@@ -61,8 +51,7 @@ import {
   setTextStyle,
   textAnimSlugs,
 } from "./decorators.js";
-import { detectEncryption } from "./decrypt.js";
-import { type DoctorCheck, draftDirs, runDoctor } from "./doctor.js";
+import type { DoctorCheck } from "./doctor.js";
 import type { Draft, MaterialText, Segment, Track } from "./draft.js";
 import {
   assertTargetsUnchangedOnDisk,
@@ -83,8 +72,7 @@ import {
   setForceWrite,
   updateTextContent,
 } from "./draft.js";
-import { type Category, listEnum, type Namespace } from "./enums.js";
-import { exportBatch } from "./export-batch.js";
+import type { Category, Namespace } from "./enums.js";
 import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CutOptions } from "./factory.js";
 import {
   addAudio,
@@ -119,27 +107,10 @@ import {
   setMixMode,
   uuid,
 } from "./factory.js";
-import { sanitizeDraftBundle } from "./fixture.js";
-import { draftToOtio, type ImportPlan, otioToImportPlan } from "./interchange.js";
-import {
-  DEFAULT_LINT_OPTIONS,
-  fixDraft,
-  knownEffectIds,
-  type LintOptions,
-  lintDraft,
-  lintExitCode,
-  summarize,
-} from "./lint.js";
-import { migrateDraft } from "./migrate.js";
+import type { ImportPlan } from "./interchange.js";
+import type { LintOptions } from "./lint.js";
 import { applyTextPreset, extractTextPreset, loadPresetFile, type TextStylePreset } from "./preset.js";
-import { probeMedia } from "./probe.js";
-import { runQuickstart } from "./quickstart.js";
-import { buildRenderPlan, renderDraft } from "./render.js";
-import { replaceMedia } from "./replace.js";
-import { detectScenes, timecode } from "./scenes.js";
-import { serveQueue } from "./serve.js";
-import { addSfx } from "./sfx.js";
-import { collapseKaraokeRuns, cueWords, parseSrt, renderSrt, renderVtt, type SegmentCue } from "./srt.js";
+import type { SegmentCue } from "./srt.js";
 import {
   defaultDraftsDir,
   diagnoseDraftStore,
@@ -150,8 +121,6 @@ import {
   planTimelineSync,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
-import { translateDraft } from "./translate.js";
-import { harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } from "./user-enums.js";
 import { assessWriteSafety, detectVersion } from "./version.js";
 import type { WikimediaAsset } from "./wikimedia.js";
 
@@ -1725,7 +1694,9 @@ function cmdOpacity(draft: Draft, filePath: string, segId: string, alphaStr: str
 // lint's known-id set, and named entries from cleanly-mapped kinds become
 // writable slugs (GuanYixuan/pyCapCut#12). Plan by default; --apply writes
 // the catalogue file — the draft itself is never written.
-function cmdHarvestEnums(draft: Draft, flags: Flags): void {
+async function cmdHarvestEnums(draft: Draft, flags: Flags): Promise<void> {
+  const { knownEffectIds } = await import("./lint.js");
+  const { harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } = await import("./user-enums.js");
   const cataloguePath = userEnumsPath(flags.catalogue);
   const { error } = loadUserEnums(cataloguePath);
   const { found, known, candidates } = harvestDraft(draft, knownEffectIds());
@@ -1771,7 +1742,8 @@ function cmdHarvestEnums(draft: Draft, flags: Flags): void {
 // Raw document on stdout (pipe-able, like export-srt); --out writes the file
 // and prints a JSON summary instead. Skips are reported on stderr, never
 // silent (text tracks point at export-srt).
-function cmdExportTimeline(draft: Draft, flags: Flags): void {
+async function cmdExportTimeline(draft: Draft, flags: Flags): Promise<void> {
+  const { draftToOtio } = await import("./interchange.js");
   const { doc, stats } = draftToOtio(draft);
   const serialized = `${JSON.stringify(doc, null, 2)}\n`;
   if (flags.out) {
@@ -1848,7 +1820,8 @@ function applyImportPlan(draft: Draft, filePath: string, plan: ImportPlan): Impo
   return result;
 }
 
-function cmdImportTimeline(positional: string[], flags: Flags): void {
+async function cmdImportTimeline(positional: string[], flags: Flags): Promise<void> {
+  const { otioToImportPlan } = await import("./interchange.js");
   const otioPath = positional[1];
   if (!otioPath) die(`Missing OTIO file. Usage: ${IMPORT_TIMELINE_USAGE}`);
   if (!existsSync(otioPath)) die(`OTIO file not found: ${otioPath}`);
@@ -1921,7 +1894,8 @@ function cmdImportTimeline(positional: string[], flags: Flags): void {
   }
 }
 
-function cmdExportSrt(draft: Draft, flags: Flags): void {
+async function cmdExportSrt(draft: Draft, flags: Flags): Promise<void> {
+  const { collapseKaraokeRuns, cueWords, renderSrt, renderVtt } = await import("./srt.js");
   const granularity = flags.granularity ?? "line";
   const format = flags.format ?? "srt";
   const textTracks = getTracksByType(draft, "text");
@@ -2055,6 +2029,7 @@ function wikimediaPayload(asset: WikimediaAsset, withMedia = false): Record<stri
 }
 
 async function cmdAddAudio(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { probeMedia } = await import("./probe.js");
   const audioPath = positional[2];
   const startStr = positional[3];
   const durationStr = positional[4];
@@ -2097,6 +2072,7 @@ async function cmdAddAudio(draft: Draft, filePath: string, positional: string[],
 }
 
 async function cmdAddVideo(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { probeMedia } = await import("./probe.js");
   const videoPath = positional[2];
   const startStr = positional[3];
   const durationStr = positional[4];
@@ -2767,7 +2743,8 @@ function cmdTextRanges(draft: Draft, filePath: string, positional: string[], fla
 
 // --- Phase 3: enums + import-srt ---
 
-function cmdEnums(flags: Flags): void {
+async function cmdEnums(flags: Flags): Promise<void> {
+  const { listEnum } = await import("./enums.js");
   // bubbles ships as a starter catalogue in src/decorators.ts (no enums.json entry).
   if (flags.bubbles) {
     const entries = bubbleCatalogue();
@@ -2950,7 +2927,8 @@ function importCuesToDraft(
   );
 }
 
-function cmdImportSrt(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+async function cmdImportSrt(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { parseSrt } = await import("./srt.js");
   const srtArg = positional[2];
   if (!srtArg) die(`Usage: capcut import-srt <project> <srt-path-or-->`);
   const srtContent = stripBom(srtArg === "-" ? readFileSync(0, "utf-8") : readFileSync(srtArg, "utf-8"));
@@ -2959,7 +2937,8 @@ function cmdImportSrt(draft: Draft, filePath: string, positional: string[], flag
   importCuesToDraft(draft, filePath, cues, flags, "srt");
 }
 
-function cmdImportAss(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+async function cmdImportAss(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { parseAss } = await import("./ass.js");
   const assArg = positional[2];
   if (!assArg) die(`Usage: capcut import-ass <project> <ass-path-or-->`);
   const assContent = stripBom(assArg === "-" ? readFileSync(0, "utf-8") : readFileSync(assArg, "utf-8"));
@@ -3006,7 +2985,8 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   }
 }
 
-function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: number } {
+async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ exitCode: number }> {
+  const { DEFAULT_LINT_OPTIONS, fixDraft, lintDraft, lintExitCode, summarize } = await import("./lint.js");
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -3074,7 +3054,8 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
 
 // --- Caption / translate / migrate / sfx / chroma / export / decrypt / serve ---
 
-function cmdCaption(draft: Draft, filePath: string, flags: Flags): void {
+async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise<void> {
+  const { captionDraft } = await import("./caption.js");
   if (!flags.audio && !flags.fromSegment) {
     die("Missing --audio <path> or --from-segment <id>. One is required.");
   }
@@ -3103,6 +3084,7 @@ function cmdCaption(draft: Draft, filePath: string, flags: Flags): void {
 }
 
 async function cmdTranslate(draft: Draft, _filePath: string, flags: Flags): Promise<void> {
+  const { translateDraft } = await import("./translate.js");
   if (!flags.to) die("Missing --to <lang>. Usage: capcut translate <project> --to <lang> --out <path>");
   if (!flags.out)
     die("Missing --out <path>. The translated draft is written to a NEW file; the original is left untouched.");
@@ -3117,14 +3099,16 @@ async function cmdTranslate(draft: Draft, _filePath: string, flags: Flags): Prom
   out(result, flags);
 }
 
-function cmdMigrate(draft: Draft, filePath: string, flags: Flags): void {
+async function cmdMigrate(draft: Draft, filePath: string, flags: Flags): Promise<void> {
+  const { migrateDraft } = await import("./migrate.js");
   if (!flags.from || !flags.to) die("Usage: capcut migrate <project> --from <ver> --to <ver>");
   const result = migrateDraft(draft, flags.from, flags.to);
   saveDraft(filePath, draft);
   out(result, flags);
 }
 
-function cmdAddSfx(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+async function cmdAddSfx(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { addSfx } = await import("./sfx.js");
   const slug = positional[2];
   const startStr = positional[3];
   const durStr = positional[4];
@@ -3143,7 +3127,8 @@ function cmdAddSfx(draft: Draft, filePath: string, positional: string[], flags: 
   out({ ok: true, ...result, start_us: start, duration_us: duration }, flags);
 }
 
-function cmdChroma(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+async function cmdChroma(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { removeChroma, setChroma } = await import("./chroma.js");
   const segId = positional[2];
   if (!segId) die("Usage: capcut chroma <project> <id> --color <#RRGGBB> [--intensity N] [--shadow N]  |  --off");
   if (flags.off) {
@@ -3161,7 +3146,8 @@ function cmdChroma(draft: Draft, filePath: string, positional: string[], flags: 
   out(result, flags);
 }
 
-function cmdExport(positional: string[], flags: Flags): void {
+async function cmdExport(positional: string[], flags: Flags): Promise<void> {
+  const { exportBatch } = await import("./export-batch.js");
   const draftsDir = positional[1];
   if (!draftsDir) die("Usage: capcut export <drafts-dir> --batch [--dry-run] [--app capcut|jianying]");
   if (!flags.batch) die("`capcut export` currently only supports --batch mode. Pass --batch to confirm.");
@@ -3173,7 +3159,8 @@ function cmdExport(positional: string[], flags: Flags): void {
   out(result, flags);
 }
 
-function cmdDecrypt(positional: string[], flags: Flags): void {
+async function cmdDecrypt(positional: string[], flags: Flags): Promise<void> {
+  const { detectEncryption } = await import("./decrypt.js");
   const projectArg = positional[1];
   if (!projectArg) die("Usage: capcut decrypt <draft_content.json path>");
   // We can't use loadDraft here — the file may be unparseable. Detect raw.
@@ -3195,6 +3182,7 @@ function cmdDecrypt(positional: string[], flags: Flags): void {
 }
 
 async function cmdServe(flags: Flags): Promise<void> {
+  const { serveQueue } = await import("./serve.js");
   // Resolve our own dist path so the spawned child uses the same install.
   const selfPath = fileURLToPath(import.meta.url);
   const result = await serveQueue({
@@ -3309,7 +3297,8 @@ function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
   );
 }
 
-function cmdDoctor(flags: Flags): boolean {
+async function cmdDoctor(flags: Flags): Promise<boolean> {
+  const { runDoctor } = await import("./doctor.js");
   const report = runDoctor();
   if (flags.human) {
     const glyph: Record<DoctorCheck["status"], string> = { ok: "✓", warn: "!", missing: "✗" };
@@ -3832,7 +3821,8 @@ function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
 
 // `replace-media` swaps a segment's source file in place (placeholder > final),
 // preserving its timeline position, timing, effects, and keyframes.
-function cmdReplaceMedia(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
+async function cmdReplaceMedia(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { replaceMedia } = await import("./replace.js");
   const result = replaceMedia(draft, filePath, {
     segmentId: positional[2],
     newPath: positional[3],
@@ -3890,7 +3880,8 @@ function cmdTimeline(draft: Draft, flags: Flags): void {
 // CapCut/JianYing default dirs) for sub-folders containing a draft file. An
 // optional query substring filters by folder name. --names also reads each
 // draft's `name` field (one parse per project).
-function cmdProjects(positional: string[], flags: Flags): void {
+async function cmdProjects(positional: string[], flags: Flags): Promise<void> {
+  const { draftDirs } = await import("./doctor.js");
   const query = positional[1]?.toLowerCase();
   const roots = flags.drafts ? [{ label: "custom", path: flags.drafts }] : draftDirs();
   const projects: Array<{ name?: string; folder: string; path: string; mtime: string; root: string }> = [];
@@ -4257,7 +4248,8 @@ function cmdConcat(positional: string[], flags: Flags): void {
 // `compile` reads a declarative JSON spec and builds a whole draft via the same
 // factory functions the imperative add-* commands use. Resolves the bundled
 // _init template the same way `init` does.
-function cmdCompile(positional: string[], flags: Flags): void {
+async function cmdCompile(positional: string[], flags: Flags): Promise<void> {
+  const { compileDraft, parseSpec, planCompile } = await import("./compile.js");
   const specPath = positional[1];
   if (!specPath) die("Usage: capcut compile <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]");
   if (!existsSync(specPath)) die(`Spec file not found: ${specPath}`);
@@ -4265,7 +4257,7 @@ function cmdCompile(positional: string[], flags: Flags): void {
   // --data: mass production. One spec + N JSONL rows = N drafts. Branches
   // before anything else so the single-draft path below stays untouched.
   if (flags.data !== undefined) {
-    cmdCompileData(specPath, flags);
+    await cmdCompileData(specPath, flags);
     return;
   }
 
@@ -4307,7 +4299,11 @@ function cmdCompile(positional: string[], flags: Flags): void {
 // matching batch's "no changes written" promise as far as filesystem writes
 // allow. With --continue-on-error the rows that validate are built, failures
 // are reported per row, and the exit code is 1 when any row failed.
-function cmdCompileData(specPath: string, flags: Flags): void {
+async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
+  const compile = await import("./compile.js");
+  const { compileDraft, planCompile, substitutePlaceholders } = compile;
+  // An assertion signature is only callable through an explicitly typed binding.
+  const validateSpec: (spec: unknown) => asserts spec is CompileSpec = compile.validateSpec;
   if (flags.check || flags.plan) die("--data cannot be combined with --check/--plan; validate the spec alone first");
   if (flags.out) {
     die("--out names a single draft directory; with --data each row names its own draft — use --drafts <dir>");
@@ -4406,7 +4402,8 @@ function cmdCompileData(specPath: string, flags: Flags): void {
 // `render` produces a low-res ffmpeg proxy preview of the timeline. Read-only:
 // it never mutates the draft. With --dry-run it returns the ffmpeg plan without
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
-function cmdRender(draft: Draft, filePath: string, flags: Flags): void {
+async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
+  const { buildRenderPlan, renderDraft } = await import("./render.js");
   const opts = {
     out: flags.out,
     scale: flags.scale,
@@ -4427,7 +4424,8 @@ function cmdRender(draft: Draft, filePath: string, flags: Flags): void {
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
 }
 
-function cmdDetectScenes(positional: string[], flags: Flags): void {
+async function cmdDetectScenes(positional: string[], flags: Flags): Promise<void> {
+  const { detectScenes, timecode } = await import("./scenes.js");
   const videoPath = positional[1];
   if (!videoPath) {
     die("Missing video. Usage: capcut detect-scenes <video> [--threshold <0..1>] [--min-gap <seconds>] [--limit <n>]");
@@ -4527,13 +4525,13 @@ async function main(): Promise<void> {
 
   // `enums` is a pure lookup — no project needed.
   if (cmd === "enums") {
-    cmdEnums(flags);
+    await cmdEnums(flags);
     process.exit(0);
   }
 
   // `doctor` inspects the environment, not a draft — no project needed.
   if (cmd === "doctor") {
-    process.exit(cmdDoctor(flags) ? 0 : 1);
+    process.exit((await cmdDoctor(flags)) ? 0 : 1);
   }
 
   // `diagnose` must inspect unreadable/divergent sibling files before loadDraft.
@@ -4546,6 +4544,7 @@ async function main(): Promise<void> {
   if (cmd === "fixture") {
     if (!projectPath) die("Usage: capcut fixture <project> --out <dir>");
     if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir>");
+    const { sanitizeDraftBundle } = await import("./fixture.js");
     const report = sanitizeDraftBundle(projectPath, flags.out);
     out(report, flags);
     if (!flags.quiet) {
@@ -4588,7 +4587,7 @@ async function main(): Promise<void> {
 
   // `projects` scans the disk for draft folders — no single project needed.
   if (cmd === "projects") {
-    cmdProjects(positional, flags);
+    await cmdProjects(positional, flags);
     process.exit(0);
   }
 
@@ -4616,13 +4615,13 @@ async function main(): Promise<void> {
 
   // `decrypt` operates on a raw file (which may be unparseable) — skip loadDraft.
   if (cmd === "decrypt") {
-    cmdDecrypt(positional, flags);
+    await cmdDecrypt(positional, flags);
     process.exit(0);
   }
 
   // `export` iterates a directory of drafts — projectPath is the directory itself, not a single draft.
   if (cmd === "export") {
-    cmdExport(positional, flags);
+    await cmdExport(positional, flags);
     process.exit(0);
   }
 
@@ -4662,6 +4661,7 @@ async function main(): Promise<void> {
     }
     const templateDir = resolveTemplateDir(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
+    const { runQuickstart } = await import("./quickstart.js");
     const result = runQuickstart({
       name,
       templateDir,
@@ -4684,20 +4684,20 @@ async function main(): Promise<void> {
 
   // `compile` builds a brand-new draft from a declarative spec — no existing project.
   if (cmd === "compile") {
-    cmdCompile(positional, flags);
+    await cmdCompile(positional, flags);
     process.exit(0);
   }
 
   // `import-timeline` reads an .otio file (not a draft) and builds a new draft
   // (--out) or appends onto an existing one (--into) — handled directly.
   if (cmd === "import-timeline") {
-    cmdImportTimeline(positional, flags);
+    await cmdImportTimeline(positional, flags);
     process.exit(0);
   }
 
   // `detect-scenes` analyzes a raw video file for cut points — no draft needed.
   if (cmd === "detect-scenes") {
-    cmdDetectScenes(positional, flags);
+    await cmdDetectScenes(positional, flags);
     process.exit(0);
   }
 
@@ -4717,19 +4717,19 @@ async function main(): Promise<void> {
       break;
     case "replace-media":
       requireArgs(positional, 4, "capcut replace-media <project> <segment-id> <new-file> [--retime]");
-      cmdReplaceMedia(draft, filePath, positional, flags);
+      await cmdReplaceMedia(draft, filePath, positional, flags);
       break;
     case "timeline":
       cmdTimeline(draft, flags);
       break;
     case "render":
-      cmdRender(draft, filePath, flags);
+      await cmdRender(draft, filePath, flags);
       break;
     case "version":
       cmdVersion(draft, filePath, flags);
       break;
     case "lint": {
-      const { exitCode } = cmdLint(draft, filePath, flags);
+      const { exitCode } = await cmdLint(draft, filePath, flags);
       process.exit(exitCode);
       break;
     }
@@ -4771,13 +4771,13 @@ async function main(): Promise<void> {
       cmdOpacity(draft, filePath, positional[2], positional[3], flags);
       break;
     case "export-srt":
-      cmdExportSrt(draft, flags);
+      await cmdExportSrt(draft, flags);
       break;
     case "export-timeline":
-      cmdExportTimeline(draft, flags);
+      await cmdExportTimeline(draft, flags);
       break;
     case "harvest-enums":
-      cmdHarvestEnums(draft, flags);
+      await cmdHarvestEnums(draft, flags);
       break;
     case "materials":
       cmdMaterials(draft, flags);
@@ -4899,32 +4899,32 @@ async function main(): Promise<void> {
       break;
     case "import-srt":
       requireArgs(positional, 3, "capcut import-srt <project> <srt-path-or-->");
-      cmdImportSrt(draft, filePath, positional, flags);
+      await cmdImportSrt(draft, filePath, positional, flags);
       break;
     case "import-ass":
       requireArgs(positional, 3, "capcut import-ass <project> <ass-path-or-->");
-      cmdImportAss(draft, filePath, positional, flags);
+      await cmdImportAss(draft, filePath, positional, flags);
       break;
     case "text-ranges":
       requireArgs(positional, 3, "capcut text-ranges <project> <id> --styles @path.json");
       cmdTextRanges(draft, filePath, positional, flags);
       break;
     case "caption":
-      cmdCaption(draft, filePath, flags);
+      await cmdCaption(draft, filePath, flags);
       break;
     case "translate":
       await cmdTranslate(draft, filePath, flags);
       break;
     case "migrate":
-      cmdMigrate(draft, filePath, flags);
+      await cmdMigrate(draft, filePath, flags);
       break;
     case "add-sfx":
       requireArgs(positional, 5, "capcut add-sfx <project> <slug> <start> <duration>");
-      cmdAddSfx(draft, filePath, positional, flags);
+      await cmdAddSfx(draft, filePath, positional, flags);
       break;
     case "chroma":
       requireArgs(positional, 3, "capcut chroma <project> <id> --color <#RRGGBB>  |  --off");
-      cmdChroma(draft, filePath, positional, flags);
+      await cmdChroma(draft, filePath, positional, flags);
       break;
     default:
       die(`Unknown command: ${cmd}. Run 'capcut --help' for usage.`);
