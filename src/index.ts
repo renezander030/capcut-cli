@@ -120,7 +120,7 @@ import {
   uuid,
 } from "./factory.js";
 import { sanitizeDraftBundle } from "./fixture.js";
-import { draftToOtio } from "./interchange.js";
+import { draftToOtio, type ImportPlan, otioToImportPlan } from "./interchange.js";
 import {
   DEFAULT_LINT_OPTIONS,
   fixDraft,
@@ -168,6 +168,7 @@ export const COMMANDS = [
   "opacity",
   "export-srt",
   "export-timeline",
+  "import-timeline",
   "materials",
   "segment",
   "material",
@@ -422,6 +423,7 @@ Edit:
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
+  import-timeline <f.otio> (--out <dir> | --into <project>)  Import an OpenTimelineIO cut
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
 
@@ -765,6 +767,20 @@ Subtitles (Phase 3):
              the exit ramp when an app build rejects the draft. DaVinci
              Resolve imports .otio natively. Text tracks are skipped with a
              pointer to export-srt.
+  import-timeline <file.otio> (--out <new-project> | --into <project>)
+             The inverse of export-timeline: read OpenTimelineIO JSON (the
+             schema set export-timeline emits) and build the cut as a draft.
+             Clips become video/audio segments with their source ranges, gaps
+             become timeline offsets, LinearTimeWarp becomes segment speed.
+             Media that exists on disk is staged into assets/ (the add-video
+             copy); missing media becomes a placeholder material to swap with
+             replace-media. Unsupported OTIO features are reported in the
+             JSON result (skipped), never silently dropped.
+             --out <new-project>   Build a fresh draft directory at this path
+                                   [--template <dir> overrides the template]
+             --into <project>      Append onto an existing draft as NEW
+                                   tracks (existing segments are never
+                                   touched or overlapped)
 
 Navigation: info → tracks/materials → segments → segment <id>
             info → materials --type X → material <id>
@@ -941,6 +957,8 @@ interface Flags {
   apply?: boolean;
   // compile --data
   data?: string;
+  // import-timeline
+  into?: string;
   // detect-scenes
   threshold?: number;
   minGap?: number;
@@ -1302,6 +1320,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.continueOnError = true;
     } else if (a === "--data" && i + 1 < args.length) {
       flags.data = args[++i];
+    } else if (a === "--into" && i + 1 < args.length) {
+      flags.into = args[++i];
     } else if (a === "--check") {
       flags.check = true;
     } else if (a === "--plan") {
@@ -1746,6 +1766,143 @@ function cmdExportTimeline(draft: Draft, flags: Flags): void {
   if (!flags.quiet) {
     for (const skip of stats.skipped) {
       process.stderr.write(`skipped track "${skip.track}" (${skip.type}): ${skip.reason}\n`);
+    }
+  }
+}
+
+const IMPORT_TIMELINE_USAGE = "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)";
+
+interface ImportApplyResult {
+  tracks: number;
+  clips: number;
+  placeholders: Array<{ track: string; clip: string; path: string | null }>;
+}
+
+// Apply a parsed OTIO plan onto a draft through the same factory functions the
+// add-* commands use. Imported clips always land on FRESH tracks: appending
+// into an existing track by name could overlap the segments already there, so
+// a name collision de-collides with a numeric suffix instead.
+function applyImportPlan(draft: Draft, filePath: string, plan: ImportPlan): ImportApplyResult {
+  const result: ImportApplyResult = { tracks: 0, clips: 0, placeholders: [] };
+  const claimed = new Set(draft.tracks.map((t) => `${t.type} ${t.name}`));
+  for (const track of plan.tracks) {
+    if (track.clips.length === 0) continue;
+    const base = track.name || track.kind;
+    let name = base;
+    for (let n = 2; claimed.has(`${track.kind} ${name}`); n++) name = `${base} (${n})`;
+    claimed.add(`${track.kind} ${name}`);
+
+    for (const clip of track.clips) {
+      // Media on disk is staged into assets/ (the add-video/add-audio copy);
+      // a MissingReference or a target_url that is not on disk becomes a
+      // placeholder material for replace-media/relink to repair later.
+      const onDisk = clip.mediaPath !== null && existsSync(clip.mediaPath);
+      const placeholder = onDisk ? undefined : { path: clip.mediaPath ?? "", name: clip.name };
+      const common = {
+        path: clip.mediaPath ?? "",
+        start: clip.targetStartUs,
+        duration: clip.targetDurationUs,
+        trackName: name,
+        placeholder,
+      };
+      const created =
+        track.kind === "video"
+          ? addVideo(draft, filePath, common)
+          : addAudio(draft, filePath, { ...common, volume: clip.volume ?? undefined });
+      const segment = findSegment(draft, created.segmentId)?.segment;
+      if (!segment) die(`import-timeline: created segment disappeared: ${created.segmentId}`);
+      segment.source_timerange = { start: clip.sourceStartUs, duration: clip.sourceDurationUs };
+      segment.speed = clip.speed;
+      if (clip.volume !== null) segment.volume = clip.volume;
+      // ExternalReference.available_range is the media's intrinsic length —
+      // stamp it so a re-export reproduces the same available_range.
+      if (clip.mediaDurationUs > 0) {
+        const found = findMaterialGlobal(draft, created.materialId);
+        if (found) found.material.duration = clip.mediaDurationUs;
+      }
+      if (placeholder) result.placeholders.push({ track: name, clip: clip.name, path: clip.mediaPath });
+      result.clips++;
+    }
+    result.tracks++;
+  }
+  return result;
+}
+
+function cmdImportTimeline(positional: string[], flags: Flags): void {
+  const otioPath = positional[1];
+  if (!otioPath) die(`Missing OTIO file. Usage: ${IMPORT_TIMELINE_USAGE}`);
+  if (!existsSync(otioPath)) die(`OTIO file not found: ${otioPath}`);
+  if (flags.out && flags.into) die(`--out and --into are mutually exclusive. Usage: ${IMPORT_TIMELINE_USAGE}`);
+  if (!flags.out && !flags.into) {
+    die(
+      `Pass --out <new-project> to build a fresh draft or --into <project> to append. Usage: ${IMPORT_TIMELINE_USAGE}`,
+    );
+  }
+
+  let doc: unknown;
+  try {
+    doc = JSON.parse(stripBom(readFileSync(otioPath, "utf-8")));
+  } catch (e) {
+    die(`import-timeline: ${otioPath} is not valid JSON: ${(e as Error).message}`);
+  }
+  let plan: ImportPlan;
+  try {
+    plan = otioToImportPlan(doc);
+  } catch (e) {
+    die((e as Error).message);
+  }
+
+  let draft: Draft;
+  let filePath: string;
+  let draftPath: string;
+  if (flags.out) {
+    // Fresh draft from the bundled template — the same resolution init/compile use.
+    const outDir = path.resolve(flags.out);
+    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
+    const bundledTemplate = path.join(cliDir, "templates", "_init");
+    let templateDir = flags.template ?? externalTemplate;
+    if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
+      templateDir = bundledTemplate;
+    }
+    const created = initDraft({ name: path.basename(outDir), templateDir, draftsDir: path.dirname(outDir) });
+    ({ draft, filePath } = loadDraft(created.filePath));
+    draftPath = created.draftPath;
+    // Display name from the timeline, fps from the document's rate, so a
+    // re-export converts at the same frame rate.
+    if (plan.name) draft.name = plan.name;
+    draft.fps = plan.rate;
+  } else {
+    ({ draft, filePath } = loadDraft(flags.into as string));
+    draftPath = path.dirname(filePath);
+  }
+
+  const applied = applyImportPlan(draft, filePath, plan);
+  saveDraft(filePath, draft);
+
+  out(
+    {
+      ok: true,
+      mode: flags.out ? "out" : "into",
+      draft_path: draftPath,
+      file_path: filePath,
+      tracks: applied.tracks,
+      clips: applied.clips,
+      gaps: plan.gaps,
+      placeholders: applied.placeholders,
+      duration_us: draft.duration,
+      skipped: plan.skipped,
+    },
+    flags,
+  );
+  if (!flags.quiet) {
+    for (const skip of plan.skipped) {
+      process.stderr.write(`skipped in "${skip.track}" (${skip.type}): ${skip.reason}\n`);
+    }
+    for (const ph of applied.placeholders) {
+      process.stderr.write(
+        `placeholder: "${ph.clip}" on track "${ph.track}" (${ph.path ?? "no media reference"}) — swap in the file with \`capcut replace-media\`\n`,
+      );
     }
   }
 }
@@ -3793,6 +3950,8 @@ const SUMMARIES: Record<string, string> = {
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
   "export-timeline":
     "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
+  "import-timeline":
+    "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
   "harvest-enums":
     "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
   materials: "List material types and counts; filter with --type.",
@@ -4537,6 +4696,13 @@ async function main(): Promise<void> {
   // `compile` builds a brand-new draft from a declarative spec — no existing project.
   if (cmd === "compile") {
     cmdCompile(positional, flags);
+    process.exit(0);
+  }
+
+  // `import-timeline` reads an .otio file (not a draft) and builds a new draft
+  // (--out) or appends onto an existing one (--into) — handled directly.
+  if (cmd === "import-timeline") {
+    cmdImportTimeline(positional, flags);
     process.exit(0);
   }
 

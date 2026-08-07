@@ -165,6 +165,7 @@ const usages = {
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
   "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
+  "import-timeline": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
   materials: "capcut materials <project> [--type <type>]",
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
@@ -402,6 +403,16 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("format", ["--format"], "enum", "Subtitle output format.", { values: ["srt", "vtt"], default: "srt" }),
   ],
   "export-timeline": [OUT],
+  "import-timeline": [
+    option("out", ["--out"], "path", "Build a NEW draft directory at this path from the OTIO timeline."),
+    option(
+      "into",
+      ["--into"],
+      "path",
+      "Append the OTIO timeline onto this existing draft as new tracks (existing segments are never touched).",
+    ),
+    option("template", ["--template"], "path", "Template directory for --out."),
+  ],
   "import-srt": [
     TRACK_NAME,
     STYLE_REF,
@@ -587,6 +598,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --mask-field         -> mask (v0.16 explicit mask array variant)
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
+//   --into               -> import-timeline (v0.17 append target)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -600,6 +612,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--full",
   "--granularity",
   "--highlight-words",
+  "--into",
   "--json",
   "--keep-materials",
   "--keep-track",
@@ -656,6 +669,7 @@ const mutating = new Set([
   "batch",
   "import-srt",
   "import-ass",
+  "import-timeline",
   "text-ranges",
   "caption",
   "translate",
@@ -678,7 +692,15 @@ const mutating = new Set([
 
 const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
 const textOutputs = new Set(["export-srt", "export-timeline", "completions"]);
-const fileOutputs = new Set(["render", "translate", "compile", "cut", "save-template", "make-preset"]);
+const fileOutputs = new Set([
+  "render",
+  "translate",
+  "compile",
+  "cut",
+  "save-template",
+  "make-preset",
+  "import-timeline",
+]);
 
 function inferType(name: string): ArgumentType {
   if (/project|file|path|dir|template|audio|video|image|srt|ass|spec|draft/i.test(name)) return "path";

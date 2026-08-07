@@ -1386,6 +1386,10 @@ export interface AddAudioOptions {
   duration: number; // microseconds (0 = use file duration)
   volume?: number; // 0.0-1.0, default 1.0
   trackName?: string; // default "audio"
+  // Placeholder clip (import-timeline: MissingReference / media not on disk):
+  // skip the assets copy and reference `path` verbatim ("" or a broken path),
+  // with `name` as the display name — the replace-media workflow swaps it later.
+  placeholder?: { path: string; name: string };
 }
 
 export function addAudio(
@@ -1398,13 +1402,14 @@ export function addAudio(
   const trackName = opts.trackName ?? "audio";
   const volume = opts.volume ?? 1.0;
 
-  // Copy file into draft assets directory (collision-safe)
+  // Copy file into draft assets directory (collision-safe). Placeholder clips
+  // reference their (possibly empty/broken) path verbatim — nothing to copy.
   const draftDir = dirname(filePath);
   const assetsDir = resolve(draftDir, "assets", "audio");
-  const destPath = copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
+  const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
   // Use the local assets path — CapCut rewrites to placeholder on open
   const localPath = destPath;
-  const filename = basename(localPath);
+  const filename = opts.placeholder ? opts.placeholder.name : basename(localPath);
 
   // Find or create audio track
   let track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
@@ -1478,6 +1483,10 @@ export interface AddVideoOptions {
   width?: number; // default 1920
   height?: number; // default 1080
   trackName?: string; // default "video"
+  // Placeholder clip (import-timeline: MissingReference / media not on disk):
+  // skip the assets copy and reference `path` verbatim ("" or a broken path),
+  // with `name` as the display name — the replace-media workflow swaps it later.
+  placeholder?: { path: string; name: string };
 }
 
 export function addVideo(
@@ -1495,13 +1504,14 @@ export function addVideo(
   const ext = opts.path.split(".").pop()?.toLowerCase() || "";
   const materialType = opts.type ?? (["jpg", "jpeg", "png", "webp", "bmp", "tiff"].includes(ext) ? "photo" : "video");
 
-  // Copy file into draft assets directory (collision-safe)
+  // Copy file into draft assets directory (collision-safe). Placeholder clips
+  // reference their (possibly empty/broken) path verbatim — nothing to copy.
   const draftDir = dirname(filePath);
   const assetsDir = resolve(draftDir, "assets", "video");
-  const destPath = copyAssetDeduped(opts.path, assetsDir, "media");
+  const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "media");
   // Use the local assets path — CapCut rewrites to placeholder on open
   const localPath = destPath;
-  const filename = basename(localPath);
+  const filename = opts.placeholder ? opts.placeholder.name : basename(localPath);
 
   // Find or create video track
   let track = draft.tracks.find((t) => t.type === "video" && t.name === trackName);

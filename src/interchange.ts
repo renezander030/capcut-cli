@@ -131,6 +131,254 @@ function clipForSegment(draft: Draft, segment: Segment, rate: number, toFrames: 
   };
 }
 
+/**
+ * OpenTimelineIO import (`import-timeline`) — the inverse of `draftToOtio`.
+ *
+ * Reads the exact schema set the exporter emits (Timeline.1 / Stack.1 /
+ * Track.1 / Clip.1 / Gap.1, ExternalReference / MissingReference,
+ * LinearTimeWarp) into a flat plan the command applies through the same
+ * factory functions `add-video` / `add-audio` use. Everything the CLI cannot
+ * represent — unknown track kinds, transitions, nested stacks, other effects,
+ * generator references, markers, a non-zero global start — is REPORTED in
+ * `skipped`, never silently dropped (the export-timeline house rule).
+ *
+ * Speed inverts the exporter's documented LinearTimeWarp relationship
+ * (timeline duration = source_range.duration / time_scalar): speed =
+ * time_scalar, and the clip's timeline duration is recomputed from its source
+ * duration. Times convert from frames back to CapCut microseconds at each
+ * RationalTime's own rate (falling back to the timeline rate).
+ */
+
+export interface ImportClipPlan {
+  name: string;
+  targetStartUs: number;
+  targetDurationUs: number;
+  sourceStartUs: number;
+  sourceDurationUs: number;
+  speed: number;
+  volume: number | null;
+  /** ExternalReference target_url; null = MissingReference (or an unsupported reference, reported). */
+  mediaPath: string | null;
+  /** ExternalReference available_range duration (0 = unknown). */
+  mediaDurationUs: number;
+}
+
+export interface ImportTrackPlan {
+  kind: "video" | "audio";
+  name: string;
+  clips: ImportClipPlan[];
+}
+
+export interface ImportPlan {
+  name: string;
+  rate: number;
+  tracks: ImportTrackPlan[];
+  clips: number;
+  gaps: number;
+  skipped: OtioSkip[];
+}
+
+function schemaOf(node: unknown): string {
+  if (node && typeof node === "object" && typeof (node as OtioObject).OTIO_SCHEMA === "string") {
+    return (node as { OTIO_SCHEMA: string }).OTIO_SCHEMA;
+  }
+  return "";
+}
+
+function usFromRationalTime(rt: unknown, fallbackRate: number, where: string): number {
+  if (schemaOf(rt) !== "RationalTime.1") {
+    throw new Error(`import-timeline: ${where} is not a RationalTime.1`);
+  }
+  const { rate, value } = rt as { rate?: unknown; value?: unknown };
+  const effectiveRate = typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : fallbackRate;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`import-timeline: ${where} has no numeric value`);
+  }
+  return Math.round((value / effectiveRate) * 1_000_000);
+}
+
+function timeRangeUs(range: unknown, fallbackRate: number, where: string): { startUs: number; durationUs: number } {
+  if (schemaOf(range) !== "TimeRange.1") {
+    throw new Error(`import-timeline: ${where} is not a TimeRange.1`);
+  }
+  const r = range as { start_time?: unknown; duration?: unknown };
+  return {
+    startUs: usFromRationalTime(r.start_time, fallbackRate, `${where}.start_time`),
+    durationUs: usFromRationalTime(r.duration, fallbackRate, `${where}.duration`),
+  };
+}
+
+const IMPORTABLE_TRACK_KINDS: Record<string, "video" | "audio"> = { Video: "video", Audio: "audio" };
+
+function clipPlan(node: OtioObject, rate: number, trackLabel: string, skipped: OtioSkip[]): ImportClipPlan | null {
+  const meta = (node.metadata as { capcut?: Record<string, unknown> } | undefined)?.capcut;
+  const fallbackName = typeof node.name === "string" && node.name ? node.name : "clip";
+
+  if (node.source_range === null || node.source_range === undefined) {
+    skipped.push({ track: trackLabel, type: "Clip.1", reason: `clip "${fallbackName}" has no source_range — skipped` });
+    return null;
+  }
+  const source = timeRangeUs(node.source_range, rate, `clip "${fallbackName}" source_range`);
+
+  // Speed: invert the exporter's LinearTimeWarp contract (time_scalar = speed;
+  // timeline duration = source duration / time_scalar). Only the first valid
+  // LinearTimeWarp counts; everything else on the effects list is reported.
+  let speed = 1;
+  let sawTimeWarp = false;
+  for (const effect of Array.isArray(node.effects) ? node.effects : []) {
+    const schema = schemaOf(effect);
+    const scalar = (effect as { time_scalar?: unknown }).time_scalar;
+    if (schema === "LinearTimeWarp.1" && !sawTimeWarp && typeof scalar === "number" && scalar > 0) {
+      speed = scalar;
+      sawTimeWarp = true;
+    } else {
+      skipped.push({
+        track: trackLabel,
+        type: schema || "effect",
+        reason: `unsupported effect on clip "${fallbackName}" — only one LinearTimeWarp with a positive time_scalar maps to speed`,
+      });
+    }
+  }
+
+  let mediaPath: string | null = null;
+  let mediaName = "";
+  let mediaDurationUs = 0;
+  const ref = node.media_reference;
+  const refSchema = schemaOf(ref);
+  if (refSchema === "ExternalReference.1") {
+    const r = ref as { target_url?: unknown; name?: unknown; available_range?: unknown };
+    mediaPath = typeof r.target_url === "string" && r.target_url ? r.target_url : null;
+    mediaName = typeof r.name === "string" ? r.name : "";
+    if (r.available_range !== null && r.available_range !== undefined) {
+      mediaDurationUs = timeRangeUs(r.available_range, rate, `clip "${fallbackName}" available_range`).durationUs;
+    }
+  } else if (refSchema === "MissingReference.1") {
+    mediaName = typeof (ref as { name?: unknown }).name === "string" ? (ref as { name: string }).name : "";
+  } else {
+    skipped.push({
+      track: trackLabel,
+      type: refSchema || "media_reference",
+      reason: `unsupported media reference on clip "${fallbackName}" — imported as a placeholder for replace-media`,
+    });
+  }
+
+  if (Array.isArray(node.markers) && node.markers.length > 0) {
+    skipped.push({
+      track: trackLabel,
+      type: "markers",
+      reason: `markers on clip "${fallbackName}" have no CapCut equivalent`,
+    });
+  }
+
+  const metaVolume = meta && typeof meta.volume === "number" && Number.isFinite(meta.volume) ? meta.volume : null;
+  return {
+    name: (typeof node.name === "string" && node.name) || mediaName || "clip",
+    targetStartUs: 0, // stamped by the track walk
+    targetDurationUs: Math.round(source.durationUs / speed),
+    sourceStartUs: source.startUs,
+    sourceDurationUs: source.durationUs,
+    speed,
+    volume: metaVolume,
+    mediaPath,
+    mediaDurationUs,
+  };
+}
+
+export function otioToImportPlan(doc: unknown): ImportPlan {
+  if (schemaOf(doc) !== "Timeline.1") {
+    throw new Error(
+      `import-timeline: not an OpenTimelineIO Timeline.1 document (OTIO_SCHEMA: ${schemaOf(doc) || "missing"})`,
+    );
+  }
+  const timeline = doc as OtioObject;
+  const skipped: OtioSkip[] = [];
+
+  const globalStart = timeline.global_start_time as { rate?: unknown; value?: unknown } | null | undefined;
+  const rate =
+    globalStart && typeof globalStart.rate === "number" && Number.isFinite(globalStart.rate) && globalStart.rate > 0
+      ? globalStart.rate
+      : 30;
+  if (globalStart && typeof globalStart.value === "number" && globalStart.value !== 0) {
+    skipped.push({
+      track: "(timeline)",
+      type: "global_start_time",
+      reason: "non-zero timeline start is ignored — CapCut drafts start at 0",
+    });
+  }
+
+  const stack = timeline.tracks;
+  if (schemaOf(stack) !== "Stack.1" || !Array.isArray((stack as OtioObject).children)) {
+    throw new Error("import-timeline: timeline has no Stack.1 tracks container");
+  }
+
+  const plan: ImportPlan = {
+    name: typeof timeline.name === "string" ? timeline.name : "",
+    rate,
+    tracks: [],
+    clips: 0,
+    gaps: 0,
+    skipped,
+  };
+
+  for (const child of (stack as { children: unknown[] }).children) {
+    const schema = schemaOf(child);
+    const track = child as OtioObject;
+    const label = typeof track.name === "string" && track.name ? track.name : schema || "(unnamed)";
+    if (schema !== "Track.1") {
+      skipped.push({
+        track: label,
+        type: schema || "unknown",
+        reason: "unsupported stack child — only Track.1 imports",
+      });
+      continue;
+    }
+    const kind = IMPORTABLE_TRACK_KINDS[String(track.kind)];
+    if (!kind) {
+      skipped.push({
+        track: label,
+        type: String(track.kind ?? "unknown"),
+        reason: "unsupported track kind — only Video and Audio tracks import",
+      });
+      continue;
+    }
+    if (Array.isArray(track.effects) && track.effects.length > 0) {
+      skipped.push({ track: label, type: "effects", reason: "track-level effects have no CapCut equivalent" });
+    }
+    if (Array.isArray(track.markers) && track.markers.length > 0) {
+      skipped.push({ track: label, type: "markers", reason: "track-level markers have no CapCut equivalent" });
+    }
+
+    const clips: ImportClipPlan[] = [];
+    let cursorUs = 0;
+    for (const item of Array.isArray(track.children) ? (track.children as unknown[]) : []) {
+      const itemSchema = schemaOf(item);
+      if (itemSchema === "Gap.1") {
+        cursorUs += timeRangeUs((item as OtioObject).source_range, rate, `gap in track "${label}"`).durationUs;
+        plan.gaps++;
+        continue;
+      }
+      if (itemSchema !== "Clip.1") {
+        skipped.push({
+          track: label,
+          type: itemSchema || "unknown",
+          reason:
+            "unsupported timeline item — only Clip.1 and Gap.1 import (transitions overlap, they consume no time)",
+        });
+        continue;
+      }
+      const clip = clipPlan(item as OtioObject, rate, label, skipped);
+      if (!clip) continue;
+      clip.targetStartUs = cursorUs;
+      cursorUs += clip.targetDurationUs;
+      clips.push(clip);
+      plan.clips++;
+    }
+    plan.tracks.push({ kind, name: typeof track.name === "string" ? track.name : "", clips });
+  }
+
+  return plan;
+}
+
 export function draftToOtio(draft: Draft): { doc: OtioObject; stats: OtioStats } {
   const rate = typeof draft.fps === "number" && draft.fps > 0 ? draft.fps : 30;
   const toFrames = (us: number) => Math.round((us / 1_000_000) * rate);

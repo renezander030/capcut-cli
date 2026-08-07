@@ -19,6 +19,7 @@
 | `opacity` | `capcut opacity <project> <id> <alpha>` | yes | Set a segment's opacity (0.0-1.0). |
 | `export-srt` | `capcut export-srt <project> [options]` | no | Export subtitles to SRT or WebVTT on stdout, per line or per word. |
 | `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | no | Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively). |
+| `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | yes | Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent. |
 | `materials` | `capcut materials <project> [--type <type>]` | no | List material types and counts; filter with --type. |
 | `segment` | `capcut segment <project> <id>` | no | Full detail for one segment and its material. |
 | `material` | `capcut material <project> <id>` | no | Full detail for one material. |

@@ -629,6 +629,62 @@
       }
     },
     {
+      "name": "import-timeline",
+      "summary": "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
+      "usage": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
+      "positionals": [
+        {
+          "name": "file.otio",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "new-project",
+          "type": "path",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "name": "out",
+          "flags": [
+            "--out"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Build a NEW draft directory at this path from the OTIO timeline."
+        },
+        {
+          "name": "into",
+          "flags": [
+            "--into"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Append the OTIO timeline onto this existing draft as new tracks (existing segments are never touched)."
+        },
+        {
+          "name": "template",
+          "flags": [
+            "--template"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Template directory for --out."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "file",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "materials",
       "summary": "List material types and counts; filter with --type.",
       "usage": "capcut materials <project> [--type <type>]",
