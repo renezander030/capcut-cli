@@ -2,7 +2,15 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.1] — 2026-08-07
+
+A maintenance release: nothing was added to the command surface, which is identical to 0.17.0 flag for flag. What changed is what the same commands cost and what they let a hostile draft do.
+
+Security is the part to read. `export --batch` built the AppleScript and PowerShell it runs by splicing the draft folder's name into a quoted string literal, so a folder named with the right characters could break out and run arbitrary commands; both now pass the path as an argument or a provably complete escape. Alongside those: `render --burn-captions` validated a draft's caption colour before it reaches the ffmpeg filter, `compile` refuses a spec `name` that escapes the draft store, draft writes stage through an unpredictable exclusively-created temp file, `serve` masks credential values in the args it echoes, and Wikimedia downloads take only the last component of a `File:` title.
+
+Performance was measured, not estimated — base and branch interleaved run-for-run. On a 4000-caption / 2.9 MB project `lint --fix` drops 3193 ms to 596 ms and `lint` 1465 ms to 367 ms, with `texts`, `segments`, `export-srt`, `shift`, `set-text` and `restore` between 41% and 53% faster; the CLI now compiles 7 modules at startup instead of 32, so every invocation begins 22-27% sooner. The package is 7% smaller unpacked and ships 28 fewer files.
+
+Behaviour changes, all narrow: a caption colour that is neither a hex form nor a known ffmpeg colour name now falls back to the default instead of reaching the filter; a `compile` spec whose `name` leaves the draft store is rejected; `serve`'s echoed args carry a mask where a credential value used to sit; and history snapshots inherit the `.bak`'s `0600` rather than the umask's `0644`. **Drafts written are byte-identical to 0.17.0** — held to a 72-command oracle covering every add/edit/read command, both preset paths and 22 error paths, plus per-command file comparison on a synthetic project and the committed `capcut-8.7-windows` fixture.
 
 ### Changed
 
