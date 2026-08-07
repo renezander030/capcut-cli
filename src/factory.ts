@@ -2208,6 +2208,62 @@ export interface AddEffectOptions {
   bindSegmentId?: string;
 }
 
+// addEffect/addFilter share their track plumbing. The uuid() order is
+// load-bearing — segment, then material, then track — because drafts are
+// compared byte-for-byte.
+function effectTrackSlot(
+  draft: Draft,
+  type: "effect" | "filter",
+  trackNameOpt: string | undefined,
+): { segId: string; matId: string; track: Track } {
+  const segId = uuid();
+  const matId = uuid();
+  const trackName = trackNameOpt ?? type;
+
+  let track = draft.tracks.find((t) => t.type === type && t.name === trackName);
+  if (!track) {
+    track = makeTrack(type, trackName, !trackNameOpt);
+    draft.tracks.push(track);
+  }
+  return { segId, matId, track };
+}
+
+// Effect/filter track segments: no clip, no speed, no companions — just the
+// segment pointing at the material with a target_timerange. Registers the
+// material first, so both land in the same order addEffect always wrote them.
+function pushEffectSegment(
+  draft: Draft,
+  slot: { segId: string; matId: string; track: Track },
+  material: Record<string, unknown>,
+  range: { start: number; duration: number },
+  name: string,
+): { segmentId: string; materialId: string; trackId: string; name: string } {
+  if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
+  (draft.materials.video_effects as Array<Record<string, unknown>>).push(material);
+
+  const seg: Segment = {
+    id: slot.segId,
+    material_id: slot.matId,
+    raw_segment_id: slot.track.id,
+    target_timerange: { start: range.start, duration: range.duration },
+    source_timerange: { start: 0, duration: range.duration },
+    speed: 1,
+    volume: 1,
+    visible: true,
+    reverse: false,
+    clip: null,
+    render_index: 11000,
+    track_render_index: 0,
+    track_attribute: 0,
+    extra_material_refs: [],
+    common_keyframes: [],
+    keyframe_refs: [],
+  } as unknown as Segment;
+  slot.track.segments.push(seg);
+
+  return { segmentId: slot.segId, materialId: slot.matId, trackId: slot.track.id, name };
+}
+
 export function addEffect(
   draft: Draft,
   opts: AddEffectOptions,
@@ -2257,15 +2313,7 @@ export function addEffect(
     bindSegmentId = bound.segment.id;
   }
 
-  const segId = uuid();
-  const matId = uuid();
-  const trackName = opts.trackName ?? "effect";
-
-  let track = draft.tracks.find((t) => t.type === "effect" && t.name === trackName);
-  if (!track) {
-    track = makeTrack("effect", trackName, !opts.trackName);
-    draft.tracks.push(track);
-  }
+  const slot = effectTrackSlot(draft, "effect", opts.trackName);
 
   const effectMaterial = {
     adjust_params: (opts.params || []).map((v, i) => ({ name: `param_${i}`, value: v, default_value: v })),
@@ -2281,7 +2329,7 @@ export function addEffect(
     disable_effect_faces: [],
     effect_id: meta.effect_id,
     formula_id: "",
-    id: matId,
+    id: slot.matId,
     name: meta.name,
     platform: "all",
     render_index: 11000,
@@ -2295,32 +2343,7 @@ export function addEffect(
     value: opts.intensity ?? 1.0,
     version: "",
   };
-  if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
-  (draft.materials.video_effects as Array<Record<string, unknown>>).push(effectMaterial);
-
-  // Effect track segments: no clip, no speed, no companions — just the segment
-  // pointing at the effect material with a target_timerange.
-  const seg: Segment = {
-    id: segId,
-    material_id: matId,
-    raw_segment_id: track.id,
-    target_timerange: { start: opts.start, duration: opts.duration },
-    source_timerange: { start: 0, duration: opts.duration },
-    speed: 1,
-    volume: 1,
-    visible: true,
-    reverse: false,
-    clip: null,
-    render_index: 11000,
-    track_render_index: 0,
-    track_attribute: 0,
-    extra_material_refs: [],
-    common_keyframes: [],
-    keyframe_refs: [],
-  } as unknown as Segment;
-  track.segments.push(seg);
-
-  return { segmentId: segId, materialId: matId, trackId: track.id, name: meta.name };
+  return pushEffectSegment(draft, slot, effectMaterial, opts, meta.name);
 }
 
 // --- Mix mode (blend mode) on video segments ---
@@ -2661,15 +2684,7 @@ export function addFilter(
     meta = { name: hit.name, effect_id: hit.effect_id, resource_id: hit.resource_id };
   }
 
-  const segId = uuid();
-  const matId = uuid();
-  const trackName = opts.trackName ?? "filter";
-
-  let track = draft.tracks.find((t) => t.type === "filter" && t.name === trackName);
-  if (!track) {
-    track = makeTrack("filter", trackName, !opts.trackName);
-    draft.tracks.push(track);
-  }
+  const slot = effectTrackSlot(draft, "filter", opts.trackName);
 
   const value = opts.intensity ?? 1.0;
   const filterMaterial = {
@@ -2681,7 +2696,7 @@ export function addFilter(
     common_keyframes: [],
     effect_id: meta.effect_id,
     formula_id: "",
-    id: matId,
+    id: slot.matId,
     name: meta.name,
     platform: "all",
     render_index: 11000,
@@ -2695,28 +2710,5 @@ export function addFilter(
     value,
     version: "",
   };
-  if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
-  (draft.materials.video_effects as Array<Record<string, unknown>>).push(filterMaterial);
-
-  const seg: Segment = {
-    id: segId,
-    material_id: matId,
-    raw_segment_id: track.id,
-    target_timerange: { start: opts.start, duration: opts.duration },
-    source_timerange: { start: 0, duration: opts.duration },
-    speed: 1,
-    volume: 1,
-    visible: true,
-    reverse: false,
-    clip: null,
-    render_index: 11000,
-    track_render_index: 0,
-    track_attribute: 0,
-    extra_material_refs: [],
-    common_keyframes: [],
-    keyframe_refs: [],
-  } as unknown as Segment;
-  track.segments.push(seg);
-
-  return { segmentId: segId, materialId: matId, trackId: track.id, name: meta.name };
+  return pushEffectSegment(draft, slot, filterMaterial, opts, meta.name);
 }
