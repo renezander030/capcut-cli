@@ -2378,18 +2378,9 @@ export function setMixMode(
   if (!(slug in MIX_MODES)) {
     throw new Error(`Unknown blend mode: ${mode}. Valid: ${mixModeSlugs().join(", ")}`);
   }
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  const seg = found.segment;
-  // Mix mode lives on the *video material*, not the segment. Look up by material_id.
-  const videos = (draft.materials.videos ?? []) as Array<Record<string, unknown> & { id: string; type?: string }>;
-  const mat = videos.find((v) => v.id === seg.material_id);
-  if (!mat) {
-    throw new Error(`mix-mode only applies to video/photo segments (no video material for ${segmentId})`);
-  }
-  if (mat.type !== "video" && mat.type !== "photo") {
-    throw new Error(`mix-mode only applies to video/photo materials (got type=${mat.type})`);
-  }
+  // Mix mode lives on the *video material*, not the segment — the same lookup
+  // crop needs, so it shares findCropMaterial.
+  const { seg, mat } = findCropMaterial(draft, segmentId, "mix-mode");
   const value = MIX_MODES[slug];
   mat.mix_mode = value;
   return { segmentId: seg.id, material_id: mat.id, mix_mode: value };
@@ -2436,10 +2427,12 @@ export function cropRectForRatio(width: number, height: number, preset: string):
   return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
 }
 
-// The crop lives on the *video material*, not the segment (same as mix-mode).
+// The crop lives on the *video material*, not the segment (same as mix-mode,
+// which shares this lookup). `label` names the caller in the thrown errors.
 function findCropMaterial(
   draft: Draft,
   segmentId: string,
+  label = "crop",
 ): { seg: Segment; mat: Record<string, unknown> & { id: string; type?: string } } {
   const found = findSegment(draft, segmentId);
   if (!found) throw new Error(`Segment not found: ${segmentId}`);
@@ -2447,10 +2440,10 @@ function findCropMaterial(
   const videos = (draft.materials.videos ?? []) as Array<Record<string, unknown> & { id: string; type?: string }>;
   const mat = videos.find((v) => v.id === seg.material_id);
   if (!mat) {
-    throw new Error(`crop only applies to video/photo segments (no video material for ${segmentId})`);
+    throw new Error(`${label} only applies to video/photo segments (no video material for ${segmentId})`);
   }
   if (mat.type !== "video" && mat.type !== "photo") {
-    throw new Error(`crop only applies to video/photo materials (got type=${mat.type})`);
+    throw new Error(`${label} only applies to video/photo materials (got type=${mat.type})`);
   }
   return { seg, mat };
 }
