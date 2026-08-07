@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, it } from "node:test";
 import { DEFAULT_LINT_OPTIONS, fixDraft, lintDraft } from "../dist/lint.js";
+
+const dirs = [];
+function scratch() {
+  const dir = mkdtempSync(join(tmpdir(), "capcut-cli-lint-hot-"));
+  dirs.push(dir);
+  return dir;
+}
+after(() => {
+  for (const dir of dirs) if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+});
 
 function seg(id, materialId, refs = []) {
   return {
@@ -72,5 +85,60 @@ describe("lint material-id resolution", () => {
 
     fixDraft(draft, { ...DEFAULT_LINT_OPTIONS, checkLocalPaths: false });
     assert.deepEqual(draft.tracks[0].segments[0].extra_material_refs, ["canvas-1", "speed-1"]);
+  });
+});
+
+// ffprobeAvailable() shells out. A draft with nothing probe-able must never
+// pay for that spawn, and a draft with reachable media must still probe.
+describe("lint probes lazily", () => {
+  function probeShim(dir) {
+    const log = join(dir, "probe-calls.log");
+    const shim = join(dir, "fake-ffprobe.sh");
+    writeFileSync(shim, `#!/bin/sh\necho "$@" >> "${log}"\nexit 1\n`);
+    chmodSync(shim, 0o755);
+    return { shim, log };
+  }
+
+  it("never spawns the probe binary when no material has a readable local path", () => {
+    const dir = scratch();
+    const { shim, log } = probeShim(dir);
+    const draft = draftWith(
+      {
+        texts: [{ id: "text-1", type: "text", content: JSON.stringify({ text: "hi" }) }],
+        videos: [
+          { id: "gone", type: "video", path: join(dir, "not-here.mp4") },
+          { id: "remote", type: "video", path: "https://example.invalid/clip.mp4" },
+          { id: "pathless", type: "video", path: "" },
+        ],
+      },
+      [seg("s1", "text-1")],
+    );
+    const issues = lintDraft(draft, { ...DEFAULT_LINT_OPTIONS, ffprobeCmd: shim });
+    assert.equal(existsSync(log), false, `probe binary was spawned: ${existsSync(log) && readFileSync(log, "utf-8")}`);
+    // The path checks themselves are untouched by the laziness.
+    assert.equal(issues.filter((i) => i.code === "missing-file").length, 1);
+    assert.equal(issues.find((i) => i.code === "missing-file").location.material_id, "gone");
+  });
+
+  it("still probes once a material's local file is on disk", () => {
+    const dir = scratch();
+    const { shim, log } = probeShim(dir);
+    const media = join(dir, "clip.mp4");
+    writeFileSync(media, "not really a video");
+    const draft = draftWith({ videos: [{ id: "real", type: "video", path: media }] }, [seg("s1", "real")]);
+    lintDraft(draft, { ...DEFAULT_LINT_OPTIONS, ffprobeCmd: shim });
+    assert.equal(existsSync(log), true, "an existing local file must still be probed");
+    assert.match(readFileSync(log, "utf-8"), /-version/);
+  });
+
+  it("honours probeMedia:false without spawning anything", () => {
+    const dir = scratch();
+    const { shim, log } = probeShim(dir);
+    const media = join(dir, "clip.mp4");
+    writeFileSync(media, "not really a video");
+    const draft = draftWith({ videos: [{ id: "real", type: "video", path: media }] }, [seg("s1", "real")]);
+    const issues = lintDraft(draft, { ...DEFAULT_LINT_OPTIONS, ffprobeCmd: shim, probeMedia: false });
+    assert.equal(existsSync(log), false, "probeMedia:false must stay a no-spawn path");
+    assert.equal(issues.filter((i) => i.code === "media-unreadable").length, 0);
   });
 });

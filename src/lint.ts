@@ -241,7 +241,16 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     // Media probing (VFR / unreadable) is best-effort: only files that exist,
     // only when ffprobe runs — a host without ffprobe lints exactly as before.
     const probeCmd = opts.ffprobeCmd ?? "ffprobe";
-    const shouldProbe = (opts.probeMedia ?? true) && ffprobeAvailable(probeCmd);
+    // Resolved on the first material that would actually be probed, because
+    // ffprobeAvailable() spawns `ffprobe -version`: a caption-only draft (or
+    // one whose media is all missing or remote) never probes anything, and
+    // paid for that spawn regardless. probe.ts memoizes per command string,
+    // so the spawn still happens at most once and the answer never changes.
+    let probeReady: boolean | null = null;
+    const shouldProbe = (): boolean => {
+      if (probeReady === null) probeReady = (opts.probeMedia ?? true) && ffprobeAvailable(probeCmd);
+      return probeReady;
+    };
     for (const kind of ["videos", "audios"] as const) {
       for (const mat of draft.materials[kind] ?? []) {
         const m = mat as { id: string; path?: string; type?: string };
@@ -258,7 +267,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           });
           continue;
         }
-        if (!shouldProbe) continue;
+        if (!shouldProbe()) continue;
         const probe = probeMedia(m.path, probeCmd);
         if (probe === null) {
           issues.push({
