@@ -520,6 +520,28 @@ export function setBgBlur(
   return { segmentId: seg.id, canvas_id: id, blur };
 }
 
+/**
+ * Resolve the text material behind a segment — the opening move of every
+ * text-editing command. Pass `label` to additionally require a text *track*;
+ * it names the command in that error ("bubble-text only applies to ...").
+ * Commands that happily edit a text material on any track omit it.
+ */
+export function requireTextMaterial(
+  draft: Draft,
+  segmentId: string,
+  label?: string,
+): { seg: Segment; text: MaterialText } {
+  const found = findSegment(draft, segmentId);
+  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  if (label !== undefined && found.track.type !== "text") {
+    throw new Error(`${label} only applies to text segments (track type: ${found.track.type})`);
+  }
+  const seg = found.segment;
+  const text = findMaterial(draft.materials.texts as MaterialText[], seg.material_id);
+  if (!text) throw new Error(`Text material not found for segment ${segmentId}`);
+  return { seg, text };
+}
+
 export interface TextStyleOptions {
   alpha?: number;
   vertical?: boolean;
@@ -549,11 +571,7 @@ export function setTextStyle(
   segmentId: string,
   opts: TextStyleOptions,
 ): { materialId: string; applied: string[] } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  const seg = found.segment;
-  const text = findMaterial(draft.materials.texts as MaterialText[], seg.material_id);
-  if (!text) throw new Error(`Text material not found for segment ${segmentId}`);
+  const { text } = requireTextMaterial(draft, segmentId);
 
   const applied: string[] = [];
   const t = text as unknown as Record<string, unknown>;
@@ -773,6 +791,33 @@ export function imageAnimCatalogue(): Array<{
   }));
 }
 
+// Find or create the per-segment sticker_animation container. Text and image
+// animations share it: the first extra_material_ref that resolves into
+// materials.material_animations wins, otherwise a fresh container is appended
+// and linked. Key order is load-bearing — drafts are compared byte-for-byte.
+function ensureAnimContainer(draft: Draft, seg: Segment): { animations: Array<Record<string, unknown>>; id: string } {
+  draft.materials.material_animations ??= [] as Array<Record<string, unknown>>;
+  const animsArr = draft.materials.material_animations;
+  const animsById = Object.fromEntries(animsArr.map((a) => [(a as { id: string }).id, a]));
+
+  for (const ref of seg.extra_material_refs || []) {
+    const m = animsById[ref];
+    if (m) return m as unknown as { animations: Array<Record<string, unknown>>; id: string };
+  }
+
+  const id = randomUUID();
+  const fresh = {
+    animations: [] as Array<Record<string, unknown>>,
+    id,
+    multi_language_current: "none",
+    type: "sticker_animation",
+  };
+  animsArr.push(fresh);
+  seg.extra_material_refs ||= [];
+  seg.extra_material_refs.push(id);
+  return fresh;
+}
+
 export interface ImageAnimOptions {
   intro?: string;
   outro?: string;
@@ -800,31 +845,7 @@ export function addImageAnim(
   if (!found) throw new Error(`Segment not found: ${segmentId}`);
   const seg = found.segment;
 
-  draft.materials.material_animations ??= [] as Array<Record<string, unknown>>;
-  const animsArr = draft.materials.material_animations;
-  const animsById = Object.fromEntries(animsArr.map((a) => [(a as { id: string }).id, a]));
-
-  let container: { animations: Array<Record<string, unknown>>; id: string } | null = null;
-  for (const ref of seg.extra_material_refs || []) {
-    const m = animsById[ref];
-    if (m) {
-      container = m as unknown as { animations: Array<Record<string, unknown>>; id: string };
-      break;
-    }
-  }
-  if (!container) {
-    const id = randomUUID();
-    const fresh = {
-      animations: [] as Array<Record<string, unknown>>,
-      id,
-      multi_language_current: "none",
-      type: "sticker_animation",
-    };
-    animsArr.push(fresh);
-    seg.extra_material_refs ||= [];
-    seg.extra_material_refs.push(id);
-    container = fresh;
-  }
+  const container = ensureAnimContainer(draft, seg);
 
   const added: Array<{ type: string; name: string; duration_us: number; start_us: number }> = [];
   const targetDur = seg.target_timerange.duration;
@@ -867,13 +888,13 @@ export function addImageAnim(
       thirdResourceId = "0";
     }
 
-    if (container!.animations.some((a) => (a as { type: string }).type === animType)) {
+    if (container.animations.some((a) => (a as { type: string }).type === animType)) {
       throw new Error(`segment already has a ${animType} video animation`);
     }
     const dur = overrideDur ?? defaultDur;
     if (dur > targetDur) throw new Error(`duration (${dur}us) exceeds segment duration (${targetDur}us)`);
     const start = animType === "out" ? targetDur - dur : 0;
-    container!.animations.push({
+    container.animations.push({
       anim_adjust_params: null,
       category_id: categoryId,
       category_name: categoryId,
@@ -917,34 +938,7 @@ export function addTextAnim(
   if (!found) throw new Error(`Segment not found: ${segmentId}`);
   const seg = found.segment;
 
-  draft.materials.material_animations ??= [] as Array<Record<string, unknown>>;
-  const animsArr = draft.materials.material_animations;
-  const animsById = Object.fromEntries(
-    animsArr.map((a) => [(a as { id: string }).id, a as { animations?: Array<Record<string, unknown>>; id: string }]),
-  );
-
-  // Find or create the per-segment sticker_animation container.
-  let container: { animations: Array<Record<string, unknown>>; id: string } | null = null;
-  for (const ref of seg.extra_material_refs || []) {
-    const m = animsById[ref];
-    if (m) {
-      container = m as { animations: Array<Record<string, unknown>>; id: string };
-      break;
-    }
-  }
-  if (!container) {
-    const id = randomUUID();
-    const fresh = {
-      animations: [] as Array<Record<string, unknown>>,
-      id,
-      multi_language_current: "none",
-      type: "sticker_animation",
-    };
-    animsArr.push(fresh);
-    seg.extra_material_refs ||= [];
-    seg.extra_material_refs.push(id);
-    container = fresh;
-  }
+  const container = ensureAnimContainer(draft, seg);
 
   const added: Array<{ type: string; name: string; duration_us: number; start_us: number }> = [];
   const targetDur = seg.target_timerange.duration;
@@ -959,14 +953,14 @@ export function addTextAnim(
       );
     }
     const name = meta.title ?? meta.name ?? slug;
-    if (container!.animations.some((a) => (a as { type: string }).type === animType)) {
+    if (container.animations.some((a) => (a as { type: string }).type === animType)) {
       throw new Error(`segment already has a ${animType} text animation`);
     }
     const dur = overrideDur ?? meta.duration ?? meta.default_duration ?? 500000;
     if (dur > targetDur) throw new Error(`duration (${dur}us) exceeds segment duration (${targetDur}us)`);
     const start = animType === "out" ? targetDur - dur : 0;
     const categoryId = animType === "in" ? "in_fav" : "out_fav";
-    container!.animations.push({
+    container.animations.push({
       anim_adjust_params: null,
       category_id: categoryId,
       category_name: categoryId,
@@ -1012,7 +1006,7 @@ export interface TextRangeInput {
   underline?: boolean;
 }
 
-function hexToRgb01(hex: string): [number, number, number] {
+export function hexToRgb01(hex: string): [number, number, number] {
   const h = hex.replace("#", "");
   return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
 }
@@ -1023,11 +1017,7 @@ export function setTextRanges(
   ranges: TextRangeInput[],
 ): { segmentId: string; material_id: string; styles: number; text_length: number } {
   if (ranges.length === 0) throw new Error("at least one range required");
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  const seg = found.segment;
-  const text = findMaterial(draft.materials.texts as MaterialText[], seg.material_id);
-  if (!text) throw new Error(`Text material not found for segment ${segmentId}`);
+  const { seg, text } = requireTextMaterial(draft, segmentId);
 
   const content = JSON.parse(text.content) as {
     styles: Array<Record<string, unknown>>;
@@ -1273,14 +1263,7 @@ export function setBubble(
   segmentId: string,
   opts: BubbleOptions,
 ): { segmentId: string; bubble_id: string; effect_id: string; resource_id: string } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  if (found.track.type !== "text") {
-    throw new Error(`bubble-text only applies to text segments (track type: ${found.track.type})`);
-  }
-  const seg = found.segment;
-  const text = findMaterial(draft.materials.texts as MaterialText[], seg.material_id);
-  if (!text) throw new Error(`Text material not found for segment ${segmentId}`);
+  const { seg, text } = requireTextMaterial(draft, segmentId, "bubble-text");
 
   let effectId = opts.effectId;
   let resourceId = opts.resourceId;
