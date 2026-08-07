@@ -24,4 +24,49 @@ describe("windows export script generation", () => {
     const script = windowsExportScript("C:\\p", "jianying");
     assert.ok(script.includes("'JianyingPro'"));
   });
+
+  // Read the `Start-Process -FilePath '…'` literal back the way PowerShell's
+  // tokenizer does: any single-quote character ends the string unless it is
+  // doubled, in which case it decodes to one literal quote.
+  function readFilePathLiteral(script) {
+    const open = script.indexOf("-FilePath '") + "-FilePath '".length;
+    let value = "";
+    let i = open;
+    while (i < script.length) {
+      const c = script[i];
+      if (/['\u2018\u2019\u201a\u201b]/.test(c)) {
+        if (/['\u2018\u2019\u201a\u201b]/.test(script[i + 1])) {
+          value += script[i + 1];
+          i += 2;
+          continue;
+        }
+        return { value, rest: script.slice(i + 1) };
+      }
+      value += c;
+      i += 1;
+    }
+    return { value, rest: null };
+  }
+
+  // Regression: the draft directory was interpolated raw into this single-quoted
+  // literal, so a folder name carrying a quote closed the string early and the
+  // remainder ran as PowerShell.
+  it("keeps an injected quote inside the draft path literal", async () => {
+    const { windowsExportScript } = await import(EXPORT_BATCH);
+    const dir = "C:\\drafts\\demo'; Start-Process calc.exe; #";
+    const script = windowsExportScript(dir, "capcut");
+
+    const { value, rest } = readFilePathLiteral(script);
+    assert.equal(value, `${dir}\\draft_content.json`, "the whole folder name stays one string literal");
+    assert.ok(rest !== null, "literal must be closed");
+    assert.equal(rest.split("\n")[0], ";", "nothing runs after the literal but the statement terminator");
+    assert.ok(!/^\s*Start-Process calc\.exe/m.test(rest), "payload never becomes its own command");
+  });
+
+  it("round-trips a legitimate apostrophe in a folder name", async () => {
+    const { windowsExportScript } = await import(EXPORT_BATCH);
+    const dir = "C:\\Users\\Rene's Drafts\\demo";
+    const { value } = readFilePathLiteral(windowsExportScript(dir, "capcut"));
+    assert.equal(value, `${dir}\\draft_content.json`);
+  });
 });

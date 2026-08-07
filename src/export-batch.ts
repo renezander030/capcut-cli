@@ -85,28 +85,50 @@ function listDraftDirs(parent: string): string[] {
     });
 }
 
-function runMacOSExport(draftDir: string, app: "capcut" | "jianying"): { ok: boolean; message: string } {
+// Build the full `osascript` argument list for one draft. The draft path is NOT
+// interpolated into the script: it is passed as an argument and read back out of
+// `on run argv`, so a folder named `foo" & (do shell script "…") & "` stays inert
+// data instead of closing the AppleScript literal and running arbitrary shell.
+// Pure (no I/O) so it can be unit-tested off-macOS.
+export function macosExportArgs(draftDir: string, app: "capcut" | "jianying"): string[] {
   const appName = app === "capcut" ? "CapCut" : "JianYingPro";
   // Minimal AppleScript: open the project file, give the app a moment, trigger Export from the menu.
   // The Export menu path varies between versions; this is a sketch — production use needs hardening.
   const script = `
-    tell application "${appName}"
-      activate
-      delay 1
-      open POSIX file "${draftDir}/draft_content.json"
-      delay 5
-    end tell
-    tell application "System Events"
-      tell process "${appName}"
-        click menu item "Export" of menu "File" of menu bar 1
+    on run argv
+      set draftFile to POSIX file (item 1 of argv)
+      tell application "${appName}"
+        activate
+        delay 1
+        open draftFile
+        delay 5
       end tell
-    end tell
+      tell application "System Events"
+        tell process "${appName}"
+          click menu item "Export" of menu "File" of menu bar 1
+        end tell
+      end tell
+    end run
   `;
-  const r = spawnSync("osascript", ["-e", script], { encoding: "utf-8", timeout: 30_000 });
+  return ["-e", script, `${draftDir}/draft_content.json`];
+}
+
+function runMacOSExport(draftDir: string, app: "capcut" | "jianying"): { ok: boolean; message: string } {
+  const r = spawnSync("osascript", macosExportArgs(draftDir, app), { encoding: "utf-8", timeout: 30_000 });
   if (r.status !== 0) {
     return { ok: false, message: `osascript failed (status ${r.status}): ${r.stderr || r.stdout || "unknown"}` };
   }
   return { ok: true, message: "Export triggered via AppleScript; check your CapCut export queue" };
+}
+
+// PowerShell single-quoted literals treat only the quote character as special,
+// and the parser accepts the Unicode curly variants as delimiters too — so a lone
+// one of any of them inside a folder name closes the literal early and lets the
+// rest of the name run as commands. Doubling each one keeps the literal closed,
+// and PowerShell decodes a doubled quote back to the character itself, so a path
+// like `C:\Users\Rene's Drafts` still opens exactly as written.
+function psQuote(s: string): string {
+  return s.replace(/['\u2018\u2019\u201a\u201b]/g, (quote) => quote + quote);
 }
 
 // Build the PowerShell automation for one draft. Pure (no I/O) so it can be
@@ -117,7 +139,7 @@ export function windowsExportScript(draftDir: string, app: "capcut" | "jianying"
   const draftFile = `${draftDir}\\draft_content.json`;
   return [
     "Add-Type -AssemblyName System.Windows.Forms;",
-    `Start-Process -FilePath '${draftFile}';`,
+    `Start-Process -FilePath '${psQuote(draftFile)}';`,
     "Start-Sleep -Seconds 6;",
     `$p = Get-Process '${exe}' -ErrorAction SilentlyContinue | Select-Object -First 1;`,
     "if ($p) { [System.Windows.Forms.SendKeys]::SendWait('^e'); } else { exit 3 }",
