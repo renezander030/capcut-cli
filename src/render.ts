@@ -142,7 +142,7 @@ function textSegments(draft: Draft): Array<{ seg: Segment; text: string; color: 
         out.push({
           seg: s,
           text: raw,
-          color: typeof material.text_color === "string" ? material.text_color.replace("#", "0x") : "white",
+          color: safeColor(material.text_color),
           fontSize: Number(material.font_size ?? 15),
           y: s.clip?.transform.y ?? -0.6,
         });
@@ -162,6 +162,23 @@ function atempoFor(speed: number): string | null {
 
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
+}
+
+// drawtext options are colon-separated, so a draft-supplied colour that carries a
+// `:` escapes the fontcolor value and appends options of its own — `textfile=`
+// would read a local file into the render. Accept only ffmpeg's two colour
+// spellings: `0xRRGGBB[AA]` hex (what `#rrggbb` becomes) or a bare colour name,
+// either with an optional `@alpha`. The charset has no `:` and no backslash, so a
+// value that matches provably cannot leave the option it is written into. Names
+// are checked on shape rather than against ffmpeg's ~140-entry colour list — the
+// charset is what makes them safe, and passing them through keeps an unknown name
+// failing in ffmpeg the way it does today instead of being silently repaired.
+const FFMPEG_COLOR = /^(?:0x[0-9a-fA-F]{3,8}|[a-zA-Z]+)(?:@(?:0|1|0?\.\d+))?$/;
+
+function safeColor(raw: unknown): string {
+  if (typeof raw !== "string") return "white";
+  const color = raw.replace("#", "0x");
+  return FFMPEG_COLOR.test(color) ? color : "white";
 }
 
 // drawtext is whitespace/colon/quote sensitive; sanitize aggressively for a proxy.
