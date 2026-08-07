@@ -1,7 +1,5 @@
 import type { Draft } from "./draft.js";
 
-export type SchemaVersion = "5.9" | "6.0" | "9.6";
-
 export interface MigrationResult {
   ok: boolean;
   from: string;

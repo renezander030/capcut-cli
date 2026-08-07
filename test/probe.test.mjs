@@ -3,14 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import {
-  displayDimensions,
-  normalizeRotation,
-  parseMediaProbe,
-  parseProbeStreams,
-  probeMedia,
-  probeVideoDimensions,
-} from "../dist/probe.js";
+import { normalizeRotation, parseMediaProbe, probeMedia } from "../dist/probe.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
 
@@ -18,68 +11,41 @@ const hasFfprobe = spawnSync("ffprobe", ["-version"], { encoding: "utf-8" }).sta
 
 const REAL_MEDIA = join(process.cwd(), "media", "two-sisters-vietnam-short.mp4"); // 64x64
 
-describe("probe: parseProbeStreams", () => {
-  it("reads width/height off the first video stream", () => {
-    const json = JSON.stringify({ streams: [{ codec_type: "video", width: 1920, height: 1080 }] });
-    assert.deepEqual(parseProbeStreams(json), { width: 1920, height: 1080, rotation: 0 });
+describe("probe: full media metadata", () => {
+  it("reads width/height off the first video stream, unrotated", () => {
+    const parsed = parseMediaProbe(JSON.stringify({ streams: [{ codec_type: "video", width: 1920, height: 1080 }] }));
+    assert.equal(parsed.width, 1920);
+    assert.equal(parsed.height, 1080);
+    assert.equal(parsed.rotation, 0);
   });
 
-  it("reads rotation from tags.rotate (older ffmpeg)", () => {
-    const json = JSON.stringify({
-      streams: [{ codec_type: "video", width: 1920, height: 1080, tags: { rotate: "90" } }],
-    });
-    assert.deepEqual(parseProbeStreams(json), { width: 1920, height: 1080, rotation: 90 });
+  it("reads rotation from a Display Matrix side_data entry (newer ffmpeg) and swaps W/H", () => {
+    const parsed = parseMediaProbe(
+      JSON.stringify({
+        streams: [
+          {
+            codec_type: "video",
+            width: 1920,
+            height: 1080,
+            side_data_list: [{ side_data_type: "Display Matrix", rotation: -90 }],
+          },
+        ],
+      }),
+    );
+    assert.equal(parsed.rotation, 270);
+    // A 90/270 rotation reports the on-screen (portrait) dimensions.
+    assert.equal(parsed.width, 1080);
+    assert.equal(parsed.height, 1920);
   });
 
-  it("reads rotation from a Display Matrix side_data entry (newer ffmpeg)", () => {
-    const json = JSON.stringify({
-      streams: [
-        {
-          codec_type: "video",
-          width: 1920,
-          height: 1080,
-          side_data_list: [{ side_data_type: "Display Matrix", rotation: -90 }],
-        },
-      ],
-    });
-    assert.deepEqual(parseProbeStreams(json), { width: 1920, height: 1080, rotation: 270 });
-  });
-
-  it("skips audio-only streams and returns null", () => {
-    const json = JSON.stringify({ streams: [{ codec_type: "audio" }] });
-    assert.equal(parseProbeStreams(json), null);
+  it("returns null when the container has neither a video nor an audio stream", () => {
+    assert.equal(parseMediaProbe(JSON.stringify({ streams: [{ codec_type: "subtitle" }] })), null);
   });
 
   it("returns null on malformed JSON", () => {
-    assert.equal(parseProbeStreams("not json"), null);
-  });
-});
-
-describe("probe: displayDimensions", () => {
-  it("leaves landscape unchanged at 0/180", () => {
-    assert.deepEqual(displayDimensions({ width: 1920, height: 1080, rotation: 0 }), {
-      width: 1920,
-      height: 1080,
-    });
-    assert.deepEqual(displayDimensions({ width: 1920, height: 1080, rotation: 180 }), {
-      width: 1920,
-      height: 1080,
-    });
+    assert.equal(parseMediaProbe("not json"), null);
   });
 
-  it("swaps W/H for a 90/270 rotation (portrait phone clip)", () => {
-    assert.deepEqual(displayDimensions({ width: 1920, height: 1080, rotation: 90 }), {
-      width: 1080,
-      height: 1920,
-    });
-    assert.deepEqual(displayDimensions({ width: 1920, height: 1080, rotation: 270 }), {
-      width: 1080,
-      height: 1920,
-    });
-  });
-});
-
-describe("probe: full media metadata", () => {
   it("parses duration, fps, codecs, dimensions, rotation, and audio channels", () => {
     const parsed = parseMediaProbe(
       JSON.stringify({
@@ -174,8 +140,8 @@ describe("add-video: dimension resolution", () => {
 
   it("auto-probes a real file via ffprobe", (t) => {
     if (!hasFfprobe) return t.skip("ffprobe not installed");
-    const probed = probeVideoDimensions(REAL_MEDIA);
-    if (!probed) return t.skip("test media not available");
+    const probed = probeMedia(REAL_MEDIA);
+    if (!probed?.width || !probed.height) return t.skip("test media not available");
     const r = spawnCli(["add-video", fix.path, REAL_MEDIA, "0", "1s", "--track-name", "probe"]);
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.equal(r.json.dimension_source, "ffprobe");

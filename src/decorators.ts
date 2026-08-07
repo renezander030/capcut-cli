@@ -302,10 +302,6 @@ export function addKeyframes(
 // catalogues carry empirically-verified effect_ids from live CapCut projects
 // (knossos-recon) that do NOT match upstream pyJianYingDraft metadata.
 
-export function transitionSlugs(namespace: Namespace = "capcut"): string[] {
-  return slugsFor("transitions", namespace);
-}
-
 export function addTransition(
   draft: Draft,
   segmentId: string,

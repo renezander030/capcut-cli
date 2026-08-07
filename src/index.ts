@@ -882,7 +882,6 @@ interface Flags {
   // import-srt
   styleRef?: string;
   timeOffset?: string;
-  font?: string;
   // text-ranges
   styles?: string;
   // make-preset / --preset
@@ -1185,7 +1184,9 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     } else if (a === "--time-offset" && i + 1 < args.length) {
       flags.timeOffset = args[++i];
     } else if (a === "--font" && i + 1 < args.length) {
-      flags.font = args[++i];
+      // Accepted and ignored: no command ever read it. The value token stays
+      // consumed so the positional stream still parses exactly as it did.
+      i++;
     } else if ((a === "--in" || a === "--fade-in") && i + 1 < args.length) {
       flags.fadeIn = args[++i];
     } else if (a === "--fade-out" && i + 1 < args.length) {

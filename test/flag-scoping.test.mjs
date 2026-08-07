@@ -86,3 +86,18 @@ describe("flag scoping — scoped flags still work on the command that declares 
     assert.match(r.stderr, /--granularity must be line\|word/);
   });
 });
+
+describe("flag scoping — pre-release global flags keep swallowing their value token", () => {
+  const src = tmpDraft();
+  after(() => src.cleanup());
+
+  // --font predates RELEASE_SCOPED_FLAGS, so it is parsed globally on every
+  // command and its value token is consumed. Nothing reads the value, but the
+  // token-swallowing is observable in the positional stream, so it is pinned
+  // here: dropping the parse branch would change add-text's output text.
+  it("add-text drops a '--font <name>' pair from the text rather than keeping it verbatim", () => {
+    const r = spawnCli(["add-text", src.path, "0s", "2s", "hello", "--font", "Arial", "world"]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(r.json.text, "hello world");
+  });
+});
