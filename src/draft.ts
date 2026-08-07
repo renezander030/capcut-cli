@@ -489,8 +489,30 @@ export function findSegment(draft: Draft, id: string): { track: Track; segment: 
   return null;
 }
 
+// id -> material index, one per materials array, so a caller that resolves a
+// material per segment does not rescan the whole array each time (lint walks
+// materials.texts once per caption).
+//
+// Keyed on the array itself and validated by its length, which is exactly what
+// changes when membership does: every command that adds a material pushes onto
+// the array, every command that drops one replaces the array with a filtered
+// copy (a brand-new key, so a fresh index), and `migrate` moves entries between
+// arrays — all of which the length check or the key change catches. Mutating a
+// material in place stays visible without any invalidation, because the index
+// holds the same objects the array does; that is the case lint's fixDraft
+// relies on when it rewrites a text material's `content`.
+const materialIndex = new WeakMap<object, { length: number; index: Map<string, unknown> }>();
+
 export function findMaterial<T extends { id: string }>(arr: T[], id: string): T | undefined {
-  return arr.find((m) => m.id === id);
+  const cached = materialIndex.get(arr);
+  if (cached !== undefined && cached.length === arr.length) return cached.index.get(id) as T | undefined;
+  // Miss: answer from the scan this function has always done, so a malformed
+  // draft still fails with the identical TypeError, then index for next time.
+  const found = arr.find((m) => m.id === id);
+  const index = new Map<string, T>();
+  for (const m of arr) if (!index.has(m.id)) index.set(m.id, m); // first id wins, as find() did
+  materialIndex.set(arr, { length: arr.length, index });
+  return found;
 }
 
 export function getTracksByType(draft: Draft, type: string): Track[] {
