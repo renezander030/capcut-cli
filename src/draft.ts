@@ -13,6 +13,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { appVersionEvidence, formatAppVersionDriftWarning, trackAppVersion } from "./app-versions.js";
 import { stripBom } from "./bom.js";
 import {
   type DraftCandidate,
@@ -20,6 +21,7 @@ import {
   discoverDraftStore,
   editorProcesses,
   isManagedDraftPath,
+  NESTED_TIMELINES_WRITE_WARNING,
   serializeDraftCandidate,
 } from "./store.js";
 import { assessWriteSafety } from "./version.js";
@@ -329,10 +331,35 @@ export function saveDraft(
     }
   }
 
+  // CapCut 7.x nested Timelines/ layout (issue #50): the live document is
+  // reported to be Timelines/<id>/draft_info.json, with the root file a
+  // regenerated mirror the app rebuilds on open. Detection-only guard — the
+  // write below still targets the root candidates byte-identically (PR #51's
+  // canonical flip was rejected pending a field artifact) — but the edit is
+  // no longer silent: warn, never refuse. Shares skipVersionGuard with the
+  // version guard: restore's mirror re-sync is the escape hatch, not a new
+  // sighting of the hazard.
+  if (options.skipVersionGuard !== true && store.layout === "timelines-nested") {
+    process.stderr.write(`WARNING: ${NESTED_TIMELINES_WRITE_WARNING}\n`);
+  }
+
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);
 
   sortTracks(draft);
   commitDraftTargets(store.targets, draft, options);
+
+  // App auto-upgrade tripwire (pyJianYingDraft#115, #178): warn-only. Compares
+  // this store's version evidence against the CLI's last-seen record in
+  // ~/.config/capcut-cli/app-versions.json and names old -> new on stderr when
+  // the app moved underneath the pipeline; the guard above stays the only
+  // refusal. The drift is also remembered for the command's JSON result (see
+  // out() / takeAppVersionDrift). Shares skipVersionGuard with the guard:
+  // restore's mirror re-sync is the escape hatch, not a sighting.
+  if (options.skipVersionGuard !== true) {
+    const { drift, error } = trackAppVersion(store.projectDir, appVersionEvidence(draft, store.version));
+    if (error) process.stderr.write(`WARNING: ${error}\n`);
+    if (drift) process.stderr.write(`WARNING: ${formatAppVersionDriftWarning(drift)}\n`);
+  }
 
   // Refresh hashes/raw snapshots so a library caller can save the same loaded
   // draft more than once without tripping its own conflict guard.

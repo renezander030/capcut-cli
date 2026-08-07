@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { platform, release } from "node:os";
 import { delimiter, join } from "node:path";
+import { appVersionsPath, scanTrackedStores } from "./app-versions.js";
 import { probeFfmpegCapabilities } from "./render.js";
 import { draftDirCandidates } from "./store.js";
 
@@ -119,6 +120,37 @@ export function runDoctor(): DoctorReport {
         fix: found ? undefined : "Open a project in CapCut/JianYing once, or pass the draft path directly.",
       });
     }
+  }
+
+  // App auto-upgrade tripwire (pyJianYingDraft#115): re-inspect every draft
+  // store the CLI has written to and flag the ones whose app/version evidence
+  // moved since. Warn only — the write-time version guard decides refusals.
+  const scan = scanTrackedStores();
+  if (scan.error) {
+    checks.push({
+      name: "app-upgrade",
+      status: "warn",
+      detail: `${scan.error} — treated as empty; the next mutating write rebuilds it`,
+      fix: `Delete or repair ${appVersionsPath()}.`,
+    });
+  } else if (scan.drifts.length > 0) {
+    for (const drift of scan.drifts) {
+      checks.push({
+        name: "app-upgrade",
+        status: "warn",
+        detail: `${drift.store_dir}: ${drift.changes.join(", ")} (recorded ${drift.from.seen_at})`,
+        fix: 'The app may have auto-updated. See "Pinning app updates" in docs/version-support.md.',
+      });
+    }
+  } else {
+    checks.push({
+      name: "app-upgrade",
+      status: "ok",
+      detail:
+        scan.tracked === 0
+          ? "no tracked draft stores yet (the tripwire records on the first mutating write)"
+          : `no app-version drift across ${scan.tracked} tracked draft store(s)`,
+    });
   }
 
   // `ok` reflects only hard failures (missing), not optional-tool warnings.

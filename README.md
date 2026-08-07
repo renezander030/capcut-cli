@@ -24,9 +24,9 @@ JSON in, JSON out: every command reads and writes the local draft store directly
 - **Library** — `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"` (typed, zero-dep)
 - **Queue runner** — `capcut serve` reads JSONL jobs from stdin, for [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **New in v0.16.0:** first-class support for the newer Mac draft layout (`draft_info.json`-primary) across edits, `sync-timelines`, `register`, and `diagnose`, version-aware mask writes with `--mask-field` and a lint mismatch check, the cut exported as OpenTimelineIO (`export-timeline`) for DaVinci Resolve handoff, learning store effect ids from app-authored drafts (`harvest-enums`), VFR and unreadable-media checks in `lint` with concrete ffmpeg fixes, and safe auto-repair of dangling companion refs (`lint --fix`). Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.17.0:** OpenTimelineIO import as a new draft or appended tracks (`import-timeline`, the inverse of `export-timeline`), one spec plus N JSONL rows building N registered drafts (`compile --data`), transactional draft rename (`rename`), main-track-gap and outside-the-draft media checks in `lint` with `--fix` close-up and stage-in, an app auto-upgrade tripwire that warns old -> new on the first write after an update, detection of and write warnings for the CapCut 7.x nested `Timelines/` layout, mask-keyframe evidence harvesting in every `fixture` bundle (#44), and a Simplified-Chinese command reference plus JianYing-first quickstart. Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.15.0:** a write-time version guard that refuses beyond-evidence or known-broken drafts unless `--force-write`, in-place segment deletion with orphaned-material cleanup (`remove`), raw store resource ids, working `--intensity`, and whole-timeline `--full` on `add-filter`/`add-effect`, experimental per-segment `--bind` on `add-effect`, and `lint` unknown-slug coverage extended to transitions, masks, sound effects, bubbles, and fonts. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.16.0:** first-class support for the newer Mac draft layout (`draft_info.json`-primary) across edits, `sync-timelines`, `register`, and `diagnose`, version-aware mask writes with `--mask-field` and a lint mismatch check, the cut exported as OpenTimelineIO (`export-timeline`) for DaVinci Resolve handoff, learning store effect ids from app-authored drafts (`harvest-enums`), VFR and unreadable-media checks in `lint` with concrete ffmpeg fixes, and safe auto-repair of dangling companion refs (`lint --fix`). Full details in the [changelog](./CHANGELOG.md).
 
 ## Install
 
@@ -66,7 +66,7 @@ JSON by default (pipe to `jq`); add `-H` for a human-readable table. Pass `--jia
 | **Long-form → short** | `cut` · `detect-scenes` (ffmpeg scene-cut detection) |
 | **Automation** | `serve` (stateless JSONL runner) · `migrate` · `doctor` · `sync-timelines` (8.7 mirror repair) |
 
-**Full reference** for every command, option, and exit code: **[docs/command-reference.md](./docs/command-reference.md)**.
+**Full reference** for every command, option, and exit code: **[docs/command-reference.md](./docs/command-reference.md)** (简体中文: [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)).
 
 ## Sponsor
 
@@ -86,7 +86,8 @@ CapCut/JianYing store each project as local JSON. capcut-cli loads that store, v
 
 ## Docs & examples
 
-- [docs/command-reference.md](./docs/command-reference.md) — every command and flag
+- [docs/command-reference.md](./docs/command-reference.md) — every command and flag ([简体中文](./docs/command-reference.zh-CN.md))
+- [docs/quickstart.zh-CN.md](./docs/quickstart.zh-CN.md) — 剪映快速上手 (JianYing-first quickstart, Simplified Chinese)
 - [examples/](./examples/) — end-to-end recipes (VO alignment, serve automation, batch subtitle correction)
 - [docs/version-support.md](./docs/version-support.md) · [docs/jianying-encryption.md](./docs/jianying-encryption.md)
 - [CHANGELOG.md](./CHANGELOG.md) · [Releases](https://github.com/renezander030/capcut-cli/releases) — what's new

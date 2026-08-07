@@ -6,7 +6,7 @@
 |---|---|:---:|---|
 | `info` | `capcut info <project>` | no | Project overview + material summary. |
 | `version` | `capcut version <project>` | no | Detect CapCut/JianYing version, schema flags, and support status. |
-| `lint` | `capcut lint <project> [options]` | no | Schema-aware checks (overlaps, line length, missing files); exit 0/1/2 for CI. |
+| `lint` | `capcut lint <project> [options]` | no | Schema-aware checks (overlaps, line length, missing files, main-track gaps, external media); exit 0/1/2 for CI. |
 | `tracks` | `capcut tracks <project>` | no | List all tracks. |
 | `segments` | `capcut segments <project> [--track <type>]` | no | List segments with timing; filter by --track <type>. |
 | `texts` | `capcut texts <project>` | no | List all text/subtitle content. |
@@ -19,6 +19,7 @@
 | `opacity` | `capcut opacity <project> <id> <alpha>` | yes | Set a segment's opacity (0.0-1.0). |
 | `export-srt` | `capcut export-srt <project> [options]` | no | Export subtitles to SRT or WebVTT on stdout, per line or per word. |
 | `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | no | Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively). |
+| `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | yes | Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent. |
 | `materials` | `capcut materials <project> [--type <type>]` | no | List material types and counts; filter with --type. |
 | `segment` | `capcut segment <project> <id>` | no | Full detail for one segment and its material. |
 | `material` | `capcut material <project> <id>` | no | Full detail for one material. |
@@ -58,6 +59,7 @@
 | `chroma` | `capcut chroma <project> <id> (--color <hex> \| --off) [options]` | yes | Green-screen / chroma key a video segment, or --off. |
 | `prune` | `capcut prune <project>` | yes | Remove materials no segment references. |
 | `register` | `capcut register <project-dir> [--apply] [--drafts <dir>]` | yes | Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak). |
+| `rename` | `capcut rename <project> <new-name> [--drafts <dir>]` | yes | Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists). |
 | `relink` | `capcut relink <project> (--dir <path> \| --from <prefix> --to <prefix>)` | yes | Repair broken media paths (--dir or --from/--to). |
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | yes | Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes. |
 | `timeline` | `capcut timeline <project> [--cols <number>]` | no | Show the track/segment layout (JSON, or -H ASCII bars). |
@@ -71,7 +73,7 @@
 | `harvest-enums` | `capcut harvest-enums <project> [--apply] [--catalogue <path>]` | no | Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs). |
 | `doctor` | `capcut doctor` | no | Environment preflight (Node, whisper, API key, project dir). |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | no | Inspect canonical draft files, divergence, and editor-write safety. |
-| `fixture` | `capcut fixture <project> --out <dir>` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue. |
+| `fixture` | `capcut fixture <project> --out <dir>` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44). |
 | `sync-timelines` | `capcut sync-timelines <project-dir> [--apply]` | yes | Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors). |
 | `restore` | `capcut restore <project> [--step <number> \| --list]` | yes | Undo writes from .bak / snapshot history (--step N, --list). |
 | `serve` | `capcut serve [--queue <path>] [options]` | no | Run a stateless JSONL job queue from stdin/--queue. |
@@ -79,6 +81,6 @@
 | `export` | `capcut export <drafts-dir> --batch [options]` | yes | EXPERIMENTAL UI-automated render queue (macOS). |
 | `init` | `capcut init <name> [--template <dir>] [--drafts <dir>]` | yes | Create a new empty draft from a template. |
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
-| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
+| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |

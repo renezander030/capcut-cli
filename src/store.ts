@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
@@ -29,9 +29,13 @@ export interface DraftCandidate {
 /** Which primary project file drives this store: draft_content.json (the
  * layout every pre-Mac-10.x build uses), draft_info.json with no
  * draft_content.json beside it (reported as the primary project file on newer
- * Mac builds — jianying-mcp#5, pyJianYingDraft#177/#194), or neither
- * (timeline readable only from a mirror such as template-2.tmp). */
-export type DraftStoreLayout = "content-primary" | "info-primary" | "unknown";
+ * Mac builds — jianying-mcp#5, pyJianYingDraft#177/#194), a pre-8.7 store
+ * carrying a nested Timelines/ directory (CapCut 7.x is reported to keep the
+ * live document at Timelines/<main_timeline_id>/draft_info.json with the root
+ * file a regenerated mirror — issue #50; DETECTION ONLY, reads and writes
+ * still target the root candidates), or neither (timeline readable only from
+ * a mirror such as template-2.tmp). */
+export type DraftStoreLayout = "content-primary" | "info-primary" | "timelines-nested" | "unknown";
 
 export interface DraftStore {
   projectDir: string;
@@ -42,6 +46,12 @@ export interface DraftStore {
   modernStorage: boolean;
   diverged: boolean;
   layout: DraftStoreLayout;
+  /** Project-relative paths of the nested Timelines/ documents (issue #50):
+   * Timelines/project.json plus every Timelines/<id>/draft_info.json /
+   * draft_content.json found. Reporting only — never read as a timeline
+   * source, never part of the write set. Populated whenever the structure
+   * exists, even on >= 8.7 stores where the layout value stays untouched. */
+  nestedTimelines: string[];
 }
 
 export interface DraftStoreReport {
@@ -52,6 +62,7 @@ export interface DraftStoreReport {
   modern_storage: boolean;
   diverged: boolean;
   layout: DraftStoreLayout;
+  nested_timelines: string[];
   write_guard: "ok" | "warn" | "refuse";
   editor_running: string[];
   candidates: Array<{
@@ -174,6 +185,71 @@ export function parseCandidate(path: string): DraftCandidate {
   }
 }
 
+// Nested timeline document names probed inside each Timelines/<id>/ directory.
+const NESTED_TIMELINE_FILES = ["draft_info.json", "draft_content.json"] as const;
+
+/**
+ * CapCut 7.x nested Timelines/ layout (issue #50): the app is reported to keep
+ * the live document at Timelines/<main_timeline_id>/draft_info.json (pointer:
+ * Timelines/project.json) and to regenerate the project-root file from it on
+ * open. DETECTION ONLY — PR #51 flipped canonical reads to the nested file for
+ * every pre-8.7 project and was rejected pending a field artifact, so
+ * discovery keeps reading and writing the root candidates unchanged and this
+ * structure is merely reported (layout "timelines-nested") so mutating
+ * commands can warn instead of staying silent. The layout counts as present
+ * when Timelines/ holds a project.json and/or a <id>/draft_info.json (or
+ * draft_content.json); project.json is never parsed here.
+ */
+function detectNestedTimelines(projectDir: string): { present: boolean; files: string[] } {
+  const none = { present: false, files: [] };
+  const timelinesDir = join(projectDir, "Timelines");
+  try {
+    if (!statSync(timelinesDir).isDirectory()) return none;
+  } catch {
+    return none;
+  }
+  const files: string[] = [];
+  if (existsSync(join(timelinesDir, "project.json"))) files.push("Timelines/project.json");
+  let entries: string[];
+  try {
+    entries = readdirSync(timelinesDir).sort();
+  } catch {
+    return none;
+  }
+  for (const entry of entries) {
+    const entryDir = join(timelinesDir, entry);
+    try {
+      if (!statSync(entryDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    for (const name of NESTED_TIMELINE_FILES) {
+      if (existsSync(join(entryDir, name))) files.push(`Timelines/${entry}/${name}`);
+    }
+  }
+  return { present: files.length > 0, files };
+}
+
+/** Warning every mutating write prints on a `timelines-nested` project (issue
+ * #50). Warn, never refuse: the nested-live-document claim has no committed
+ * field artifact yet, and the write itself still targets the root files. */
+export const NESTED_TIMELINES_WRITE_WARNING =
+  "Nested Timelines/ layout detected (CapCut 7.x — issue #50): the app is reported to keep the live document at " +
+  "Timelines/<id>/draft_info.json and to regenerate the project-root files from it, so this root-mirror edit may " +
+  "be discarded the next time the project opens. The CLI still writes the root files only — no verified fixture " +
+  "for the nested layout exists yet. If you have such a project, contribute a bundle: " +
+  "`capcut fixture <project> --out <dir>`.";
+
+/** The `diagnose` next_action / `version` note naming the layout — same shape
+ * as the draft_info-primary action below (name the layout, state the risk,
+ * end with the fixture CTA). */
+export const NESTED_TIMELINES_ACTION =
+  "Timelines/ directory with a nested timeline document: CapCut 7.x is reported to keep the live document at " +
+  "Timelines/<id>/draft_info.json, with the project-root file a regenerated mirror (issue #50). Edit commands " +
+  "still read and write the project-root files, so CapCut 7.x may discard those edits on the next open. " +
+  "Evidence for this layout is report-only — if you have such a project, contribute a bundle: " +
+  "`capcut fixture <project> --out <dir>`.";
+
 function candidatePaths(input: string): { projectDir: string; requested: string | null; paths: string[] } {
   const resolved = resolve(input);
   const isFile = existsSync(resolved) && statSync(resolved).isFile();
@@ -218,6 +294,12 @@ export function discoverDraftStore(input: string): DraftStore {
   const timelineHashes = new Set(parseable.map((candidate) => candidate.timelineHash).filter(Boolean));
   const contentReadable = parseable.some((candidate) => candidate.name === "draft_content.json");
   const infoReadable = parseable.some((candidate) => candidate.name === "draft_info.json");
+  // Issue #50 detection only: the nested layout changes NOTHING about
+  // canonical, targets, or divergence — mutating commands read store.layout
+  // to warn that a root-mirror edit may be discarded by the app. Gated to
+  // pre-8.7 stores: the claim is specific to CapCut 7.x, and >= 8.7 storage
+  // keeps its established template-2.tmp selection and layout value.
+  const nested = detectNestedTimelines(projectDir);
   return {
     projectDir,
     canonical,
@@ -226,7 +308,15 @@ export function discoverDraftStore(input: string): DraftStore {
     version,
     modernStorage,
     diverged: timelineHashes.size > 1,
-    layout: contentReadable ? "content-primary" : infoReadable ? "info-primary" : "unknown",
+    layout:
+      nested.present && !modernStorage
+        ? "timelines-nested"
+        : contentReadable
+          ? "content-primary"
+          : infoReadable
+            ? "info-primary"
+            : "unknown",
+    nestedTimelines: nested.files,
   };
 }
 
@@ -417,11 +507,12 @@ export function planTimelineSync(input: string): TimelineSyncResult {
   // is promoted to canonical so the repair works there too instead of refusing
   // (pre-v0.16 behaviour). Round-trip evidence for that layout is
   // synthetic-only, so the plan carries a canonical_note with the fixture CTA.
+  // The promotion is presence-based (no readable draft_content.json), not
+  // keyed on store.layout, so the detection-only timelines-nested value
+  // (issue #50) cannot change which file the repair reads from.
   const canonical =
     store.targets.find((candidate) => candidate.name === "draft_content.json") ??
-    (store.layout === "info-primary"
-      ? store.targets.find((candidate) => candidate.name === "draft_info.json")
-      : undefined);
+    store.targets.find((candidate) => candidate.name === "draft_info.json");
   if (!canonical?.draft) {
     throw new Error(
       "sync-timelines needs a readable draft_content.json or draft_info.json (the canonical timeline source). " +
@@ -515,7 +606,12 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
         "(plan only) to review the repair before deciding whether to --apply.",
     );
   }
-  if (store.layout === "info-primary") {
+  // Presence-based, not `layout === "info-primary"`: a timelines-nested store
+  // without a readable draft_content.json still drives edits from
+  // draft_info.json, and that promotion must stay named.
+  const contentReadable = store.targets.some((candidate) => candidate.name === "draft_content.json");
+  const infoReadable = store.targets.some((candidate) => candidate.name === "draft_info.json");
+  if (!contentReadable && infoReadable) {
     actions.push(
       "No draft_content.json: the timeline lives in draft_info.json (draft_info-primary layout, reported as the " +
         "primary project file on newer Mac builds). Edit commands, register, and sync-timelines treat it as " +
@@ -523,6 +619,7 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
         "your app, contribute a bundle: `capcut fixture <project> --out <dir>`.",
     );
   }
+  if (store.layout === "timelines-nested") actions.push(NESTED_TIMELINES_ACTION);
   if (running.length > 0) actions.push(`Close ${running.join(" / ")} before editing this managed draft.`);
   if (actions.length === 0)
     actions.push("Storage targets are readable and agree. A normal CLI write will synchronize them.");
@@ -535,6 +632,7 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
     modern_storage: store.modernStorage,
     diverged: store.diverged,
     layout: store.layout,
+    nested_timelines: store.nestedTimelines,
     write_guard: safety?.action ?? "ok",
     editor_running: running,
     candidates: store.candidates.map((candidate) => ({

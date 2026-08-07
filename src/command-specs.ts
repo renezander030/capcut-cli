@@ -165,6 +165,7 @@ const usages = {
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
   "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
+  "import-timeline": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
   materials: "capcut materials <project> [--type <type>]",
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
@@ -203,6 +204,7 @@ const usages = {
   chroma: "capcut chroma <project> <id> (--color <hex> | --off) [options]",
   prune: "capcut prune <project>",
   register: "capcut register <project-dir> [--apply] [--drafts <dir>]",
+  rename: "capcut rename <project> <new-name> [--drafts <dir>]",
   relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
@@ -224,7 +226,7 @@ const usages = {
   "replace-media": "capcut replace-media <project> <segment-id> <new-file> [--retime]",
   init: "capcut init <name> [--template <dir>] [--drafts <dir>]",
   quickstart: "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]",
-  compile: "capcut compile <spec.json> [--out <draftdir>] [--check | --plan]",
+  compile: "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
 } as const satisfies Record<string, string>;
@@ -401,6 +403,16 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("format", ["--format"], "enum", "Subtitle output format.", { values: ["srt", "vtt"], default: "srt" }),
   ],
   "export-timeline": [OUT],
+  "import-timeline": [
+    option("out", ["--out"], "path", "Build a NEW draft directory at this path from the OTIO timeline."),
+    option(
+      "into",
+      ["--into"],
+      "path",
+      "Append the OTIO timeline onto this existing draft as new tracks (existing segments are never touched).",
+    ),
+    option("template", ["--template"], "path", "Template directory for --out."),
+  ],
   "import-srt": [
     TRACK_NAME,
     STYLE_REF,
@@ -458,6 +470,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
+  rename: [option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one.")],
   "harvest-enums": [
     option("apply", ["--apply"], "boolean", "Write the new entries into the user catalogue (default: plan only)."),
     option(
@@ -527,6 +540,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("template", ["--template"], "path", "Template directory."),
     option("check", ["--check"], "boolean", "Validate without writing."),
     option("plan", ["--plan"], "boolean", "Print the normalized build plan without writing."),
+    option(
+      "data",
+      ["--data"],
+      "path",
+      "JSONL rows file ('-' for stdin): build one draft per row, substituting {{key}} placeholders from the row into the spec's string values (and so the draft name). Same per-line error contract as batch: the first bad row aborts with its row number before any draft is written.",
+    ),
+    option(
+      "continue_on_error",
+      ["--continue-on-error"],
+      "boolean",
+      "With --data: build only the rows that validate and exit 1 if any fail (batch's contract).",
+    ),
   ],
   render: [
     OUT,
@@ -572,6 +597,8 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --bind               -> add-effect (v0.15 per-segment attachment)
 //   --mask-field         -> mask (v0.16 explicit mask array variant)
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
+//   --data               -> compile (v0.17 one-draft-per-JSONL-row)
+//   --into               -> import-timeline (v0.17 append target)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -579,11 +606,13 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--bind",
   "--catalogue",
   "--color-cycle",
+  "--data",
   "--easing",
   "--format",
   "--full",
   "--granularity",
   "--highlight-words",
+  "--into",
   "--json",
   "--keep-materials",
   "--keep-track",
@@ -640,6 +669,7 @@ const mutating = new Set([
   "batch",
   "import-srt",
   "import-ass",
+  "import-timeline",
   "text-ranges",
   "caption",
   "translate",
@@ -648,6 +678,7 @@ const mutating = new Set([
   "chroma",
   "prune",
   "register",
+  "rename",
   "relink",
   "replace-media",
   "sync-timelines",
@@ -661,7 +692,15 @@ const mutating = new Set([
 
 const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
 const textOutputs = new Set(["export-srt", "export-timeline", "completions"]);
-const fileOutputs = new Set(["render", "translate", "compile", "cut", "save-template", "make-preset"]);
+const fileOutputs = new Set([
+  "render",
+  "translate",
+  "compile",
+  "cut",
+  "save-template",
+  "make-preset",
+  "import-timeline",
+]);
 
 function inferType(name: string): ArgumentType {
   if (/project|file|path|dir|template|audio|video|image|srt|ass|spec|draft/i.test(name)) return "path";

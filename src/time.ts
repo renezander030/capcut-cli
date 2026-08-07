@@ -1,10 +1,6 @@
 const US_PER_SEC = 1_000_000;
 const US_PER_MS = 1_000;
 
-export function usToSeconds(us: number): number {
-  return us / US_PER_SEC;
-}
-
 export function secondsToUs(s: number): number {
   return Math.round(s * US_PER_SEC);
 }

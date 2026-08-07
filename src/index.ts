@@ -4,6 +4,13 @@ import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFil
 import { homedir, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  appVersionEvidence,
+  assessAppVersionDrift,
+  formatAppVersionDriftWarning,
+  takeAppVersionDrift,
+  trackAppVersion,
+} from "./app-versions.js";
 import { parseAss } from "./ass.js";
 import { stripBom } from "./bom.js";
 import { captionDraft } from "./caption.js";
@@ -16,7 +23,14 @@ import {
   RELEASE_SCOPED_FLAGS,
   renderCommandIndex,
 } from "./command-specs.js";
-import { type CompileSpec, compileDraft, parseSpec, planCompile } from "./compile.js";
+import {
+  type CompileSpec,
+  compileDraft,
+  parseSpec,
+  planCompile,
+  substitutePlaceholders,
+  validateSpec,
+} from "./compile.js";
 import type {
   ImageAnimOptions,
   KeyframeInput,
@@ -80,6 +94,7 @@ import {
   addText,
   addVideo,
   applyDraftRegistration,
+  applyDraftRename,
   applyTemplate,
   type CropRect,
   copyTextStyle,
@@ -93,6 +108,7 @@ import {
   initDraft,
   mixModeSlugs,
   planDraftRegistration,
+  planDraftRename,
   pruneOrphanMaterials,
   removeSegment,
   resolveAssetPath,
@@ -104,7 +120,7 @@ import {
   uuid,
 } from "./factory.js";
 import { sanitizeDraftBundle } from "./fixture.js";
-import { draftToOtio } from "./interchange.js";
+import { draftToOtio, type ImportPlan, otioToImportPlan } from "./interchange.js";
 import {
   DEFAULT_LINT_OPTIONS,
   fixDraft,
@@ -129,6 +145,8 @@ import {
   diagnoseDraftStore,
   discoverDraftStore,
   editorProcesses,
+  NESTED_TIMELINES_ACTION,
+  NESTED_TIMELINES_WRITE_WARNING,
   planTimelineSync,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
@@ -152,6 +170,7 @@ export const COMMANDS = [
   "opacity",
   "export-srt",
   "export-timeline",
+  "import-timeline",
   "materials",
   "segment",
   "material",
@@ -191,6 +210,7 @@ export const COMMANDS = [
   "chroma",
   "prune",
   "register",
+  "rename",
   "relink",
   "replace-media",
   "timeline",
@@ -240,7 +260,8 @@ Overview (start here):
   materials  <project>                          List all material types + counts
   materials  <project> --type <type>            List items of one material type
   version    <project>                          Detect CapCut/JianYing version + schema flags + support status
-  lint       <project>                          Schema-aware checks (overlaps, line length, missing files)
+  lint       <project>                          Schema-aware checks (overlaps, line length, missing
+             files, main-track gaps, media outside the draft folder)
              Options:
                --max-chars <n>     Caption line cap (default 42)
                --max-cue-secs <n>  Caption duration cap (default 7)
@@ -248,10 +269,16 @@ Overview (start here):
                --no-check-paths    Skip local-file existence checks
                --fix               Auto-repair issues stamped fixable:true
                                    (cue-too-long, caption-overlap,
-                                   caption-gap-too-small, line-too-long).
-                                   Never shrinks a caption below 100ms and
-                                   never splits words; instances it cannot
-                                   repair are reported with fixable:false.
+                                   caption-gap-too-small, line-too-long,
+                                   main-track-gap, media-outside-draft).
+                                   Never shrinks a caption below 100ms,
+                                   never splits words, only closes a
+                                   main-track gap when no other track has
+                                   content at or after it, and stages
+                                   external media into assets/ only when
+                                   the source file still exists; instances
+                                   it cannot repair are reported with
+                                   fixable:false.
                                    Combine with --dry-run to preview.
              Exit codes: 0 clean · 1 warnings · 2 errors. Info-level issues
              (e.g. unknown-effect-slug, which store-downloaded effects from
@@ -277,10 +304,18 @@ Create:
              editable project. Pass at least one of --video / --audio / --srt.
              Durations come from ffprobe when available (5s placeholder if not).
              Exit codes: 0 created & lint-clean · 2 created but lint errors
-  compile    <spec.json> [--out <draftdir>] [--drafts <dir>]
+  compile    <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]
              Build a whole draft from a declarative JSON spec (the inverse of
              describe). Times are in seconds. Media paths resolve relative to
              the spec file. Validates the full spec before writing anything.
+             --data <rows.jsonl|->  Build ONE DRAFT PER JSONL ROW: {{key}}
+             placeholders in the spec's string values (and so the draft name)
+             are substituted from each row. Mirrors batch's per-line error
+             contract: the first bad row aborts with its row number before
+             any draft is written; --continue-on-error builds the rows that
+             validate and exits 1 if any failed. Prints a summary JSON array
+             (row, ok, name, draft_path | error). Each row names its own
+             draft, so use --drafts (not --out) with --data.
 
 Preview:
   render     <project> [--out <file.mp4>] [options]
@@ -390,6 +425,7 @@ Edit:
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
+  import-timeline <f.otio> (--out <dir> | --into <project>)  Import an OpenTimelineIO cut
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
 
@@ -415,6 +451,20 @@ Maintenance & inspection:
              and nothing is written. Refuses to write while the editor is
              running unless --force-write. Exits 2 on --apply when a target
              stays blocked (unknown store root, unreadable root_meta_info.json).
+  rename     <project> <new-name> [--drafts <dir>]  Rename a draft after
+             creation: the draft folder on disk, plus draft_name and every
+             self-referential path field in draft_meta_info.json and in the
+             draft's entry in the store's root_meta_info.json — one
+             transaction (a failed step restores the rewritten files and puts
+             the folder back), same atomic writes as register with a .bak per
+             rewritten file. Refuses when the target folder already exists,
+             when a metadata file exists but does not parse (repair with
+             register --apply first), and while the editor is running unless
+             --force-write. A missing sidecar/index entry is reported and the
+             folder is renamed anyway (register --apply recreates them).
+             Timeline files are never touched; media references under the old
+             folder path are counted (stale_media_refs) with the exact relink
+             repair command printed. --dry-run previews.
   relink     <project> --dir <d> | --from <p> --to <q>  Repair broken media paths
   replace-media <project> <segment-id> <new-file> [--retime]
              Swap a segment's source clip (placeholder > final render) while
@@ -719,6 +769,20 @@ Subtitles (Phase 3):
              the exit ramp when an app build rejects the draft. DaVinci
              Resolve imports .otio natively. Text tracks are skipped with a
              pointer to export-srt.
+  import-timeline <file.otio> (--out <new-project> | --into <project>)
+             The inverse of export-timeline: read OpenTimelineIO JSON (the
+             schema set export-timeline emits) and build the cut as a draft.
+             Clips become video/audio segments with their source ranges, gaps
+             become timeline offsets, LinearTimeWarp becomes segment speed.
+             Media that exists on disk is staged into assets/ (the add-video
+             copy); missing media becomes a placeholder material to swap with
+             replace-media. Unsupported OTIO features are reported in the
+             JSON result (skipped), never silently dropped.
+             --out <new-project>   Build a fresh draft directory at this path
+                                   [--template <dir> overrides the template]
+             --into <project>      Append onto an existing draft as NEW
+                                   tracks (existing segments are never
+                                   touched or overlapped)
 
 Navigation: info → tracks/materials → segments → segment <id>
             info → materials --type X → material <id>
@@ -818,7 +882,6 @@ interface Flags {
   // import-srt
   styleRef?: string;
   timeOffset?: string;
-  font?: string;
   // text-ranges
   styles?: string;
   // make-preset / --preset
@@ -893,6 +956,10 @@ interface Flags {
   check?: boolean;
   plan?: boolean;
   apply?: boolean;
+  // compile --data
+  data?: string;
+  // import-timeline
+  into?: string;
   // detect-scenes
   threshold?: number;
   minGap?: number;
@@ -1117,7 +1184,9 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     } else if (a === "--time-offset" && i + 1 < args.length) {
       flags.timeOffset = args[++i];
     } else if (a === "--font" && i + 1 < args.length) {
-      flags.font = args[++i];
+      // Accepted and ignored: no command ever read it. The value token stays
+      // consumed so the positional stream still parses exactly as it did.
+      i++;
     } else if ((a === "--in" || a === "--fade-in") && i + 1 < args.length) {
       flags.fadeIn = args[++i];
     } else if (a === "--fade-out" && i + 1 < args.length) {
@@ -1252,6 +1321,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.bundle = args[++i];
     } else if (a === "--continue-on-error") {
       flags.continueOnError = true;
+    } else if (a === "--data" && i + 1 < args.length) {
+      flags.data = args[++i];
+    } else if (a === "--into" && i + 1 < args.length) {
+      flags.into = args[++i];
     } else if (a === "--check") {
       flags.check = true;
     } else if (a === "--plan") {
@@ -1295,8 +1368,14 @@ function out(data: unknown, flags: Flags): void {
   // In --dry-run, stamp an object result with dryRun:true so callers can tell a
   // preview from a committed write. Arrays (read commands) are left untouched.
   let payload = data;
-  if (isDryRun() && data !== null && typeof data === "object" && !Array.isArray(data)) {
-    payload = { ...(data as Record<string, unknown>), dryRun: true };
+  if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+    // App auto-upgrade tripwire: a mutating write that found this store's app
+    // version drifted from the last-seen record stamps the drift into the
+    // JSON result (warn only — the write already happened or was refused by
+    // the version guard on its own terms).
+    const drift = takeAppVersionDrift();
+    if (drift) payload = { ...(payload as Record<string, unknown>), app_version_drift: drift };
+    if (isDryRun()) payload = { ...(payload as Record<string, unknown>), dryRun: true };
   }
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
@@ -1690,6 +1769,143 @@ function cmdExportTimeline(draft: Draft, flags: Flags): void {
   if (!flags.quiet) {
     for (const skip of stats.skipped) {
       process.stderr.write(`skipped track "${skip.track}" (${skip.type}): ${skip.reason}\n`);
+    }
+  }
+}
+
+const IMPORT_TIMELINE_USAGE = "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)";
+
+interface ImportApplyResult {
+  tracks: number;
+  clips: number;
+  placeholders: Array<{ track: string; clip: string; path: string | null }>;
+}
+
+// Apply a parsed OTIO plan onto a draft through the same factory functions the
+// add-* commands use. Imported clips always land on FRESH tracks: appending
+// into an existing track by name could overlap the segments already there, so
+// a name collision de-collides with a numeric suffix instead.
+function applyImportPlan(draft: Draft, filePath: string, plan: ImportPlan): ImportApplyResult {
+  const result: ImportApplyResult = { tracks: 0, clips: 0, placeholders: [] };
+  const claimed = new Set(draft.tracks.map((t) => `${t.type} ${t.name}`));
+  for (const track of plan.tracks) {
+    if (track.clips.length === 0) continue;
+    const base = track.name || track.kind;
+    let name = base;
+    for (let n = 2; claimed.has(`${track.kind} ${name}`); n++) name = `${base} (${n})`;
+    claimed.add(`${track.kind} ${name}`);
+
+    for (const clip of track.clips) {
+      // Media on disk is staged into assets/ (the add-video/add-audio copy);
+      // a MissingReference or a target_url that is not on disk becomes a
+      // placeholder material for replace-media/relink to repair later.
+      const onDisk = clip.mediaPath !== null && existsSync(clip.mediaPath);
+      const placeholder = onDisk ? undefined : { path: clip.mediaPath ?? "", name: clip.name };
+      const common = {
+        path: clip.mediaPath ?? "",
+        start: clip.targetStartUs,
+        duration: clip.targetDurationUs,
+        trackName: name,
+        placeholder,
+      };
+      const created =
+        track.kind === "video"
+          ? addVideo(draft, filePath, common)
+          : addAudio(draft, filePath, { ...common, volume: clip.volume ?? undefined });
+      const segment = findSegment(draft, created.segmentId)?.segment;
+      if (!segment) die(`import-timeline: created segment disappeared: ${created.segmentId}`);
+      segment.source_timerange = { start: clip.sourceStartUs, duration: clip.sourceDurationUs };
+      segment.speed = clip.speed;
+      if (clip.volume !== null) segment.volume = clip.volume;
+      // ExternalReference.available_range is the media's intrinsic length —
+      // stamp it so a re-export reproduces the same available_range.
+      if (clip.mediaDurationUs > 0) {
+        const found = findMaterialGlobal(draft, created.materialId);
+        if (found) found.material.duration = clip.mediaDurationUs;
+      }
+      if (placeholder) result.placeholders.push({ track: name, clip: clip.name, path: clip.mediaPath });
+      result.clips++;
+    }
+    result.tracks++;
+  }
+  return result;
+}
+
+function cmdImportTimeline(positional: string[], flags: Flags): void {
+  const otioPath = positional[1];
+  if (!otioPath) die(`Missing OTIO file. Usage: ${IMPORT_TIMELINE_USAGE}`);
+  if (!existsSync(otioPath)) die(`OTIO file not found: ${otioPath}`);
+  if (flags.out && flags.into) die(`--out and --into are mutually exclusive. Usage: ${IMPORT_TIMELINE_USAGE}`);
+  if (!flags.out && !flags.into) {
+    die(
+      `Pass --out <new-project> to build a fresh draft or --into <project> to append. Usage: ${IMPORT_TIMELINE_USAGE}`,
+    );
+  }
+
+  let doc: unknown;
+  try {
+    doc = JSON.parse(stripBom(readFileSync(otioPath, "utf-8")));
+  } catch (e) {
+    die(`import-timeline: ${otioPath} is not valid JSON: ${(e as Error).message}`);
+  }
+  let plan: ImportPlan;
+  try {
+    plan = otioToImportPlan(doc);
+  } catch (e) {
+    die((e as Error).message);
+  }
+
+  let draft: Draft;
+  let filePath: string;
+  let draftPath: string;
+  if (flags.out) {
+    // Fresh draft from the bundled template — the same resolution init/compile use.
+    const outDir = path.resolve(flags.out);
+    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
+    const bundledTemplate = path.join(cliDir, "templates", "_init");
+    let templateDir = flags.template ?? externalTemplate;
+    if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
+      templateDir = bundledTemplate;
+    }
+    const created = initDraft({ name: path.basename(outDir), templateDir, draftsDir: path.dirname(outDir) });
+    ({ draft, filePath } = loadDraft(created.filePath));
+    draftPath = created.draftPath;
+    // Display name from the timeline, fps from the document's rate, so a
+    // re-export converts at the same frame rate.
+    if (plan.name) draft.name = plan.name;
+    draft.fps = plan.rate;
+  } else {
+    ({ draft, filePath } = loadDraft(flags.into as string));
+    draftPath = path.dirname(filePath);
+  }
+
+  const applied = applyImportPlan(draft, filePath, plan);
+  saveDraft(filePath, draft);
+
+  out(
+    {
+      ok: true,
+      mode: flags.out ? "out" : "into",
+      draft_path: draftPath,
+      file_path: filePath,
+      tracks: applied.tracks,
+      clips: applied.clips,
+      gaps: plan.gaps,
+      placeholders: applied.placeholders,
+      duration_us: draft.duration,
+      skipped: plan.skipped,
+    },
+    flags,
+  );
+  if (!flags.quiet) {
+    for (const skip of plan.skipped) {
+      process.stderr.write(`skipped in "${skip.track}" (${skip.type}): ${skip.reason}\n`);
+    }
+    for (const ph of applied.placeholders) {
+      process.stderr.write(
+        `placeholder: "${ph.clip}" on track "${ph.track}" (${ph.path ?? "no media reference"}) — swap in the file with \`capcut replace-media\`\n`,
+      );
     }
   }
 }
@@ -2759,8 +2975,18 @@ function cmdImportAss(draft: Draft, filePath: string, positional: string[], flag
 
 // --- Version & lint ---
 
-function cmdVersion(draft: Draft, flags: Flags): void {
+function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   const v = detectVersion(draft);
+  // App auto-upgrade tripwire, read-only: compare this store's evidence
+  // against the last-seen record without updating it — only mutating writes
+  // record a sighting, so the drift stays visible here until the next write.
+  const store = discoverDraftStore(filePath);
+  const { drift, error } = assessAppVersionDrift(store.projectDir, appVersionEvidence(draft, store.version));
+  if (error && !flags.quiet) process.stderr.write(`WARNING: ${error}\n`);
+  // CapCut 7.x nested Timelines/ layout (issue #50): `version` answers "will a
+  // write be honored?", and on this layout a root-mirror write may be
+  // discarded by the app — name the layout alongside the write-guard notes.
+  if (store.layout === "timelines-nested") v.support.notes.push(NESTED_TIMELINES_ACTION);
   if (flags.human) {
     console.log(`App:          ${v.app}${v.app_source !== "unknown" ? ` (${v.app_source})` : ""}`);
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
@@ -2772,12 +2998,16 @@ function cmdVersion(draft: Draft, flags: Flags): void {
     console.log(`Text-ranges:  ${v.schema.has_text_ranges ? "yes" : "no"}`);
     console.log(`Audio fades:  ${v.schema.has_audio_fades ? "yes" : "no"}`);
     console.log(`Schema int:   ${v.schema.schema_int ?? "(absent)"}`);
-    if (v.support.notes.length > 0) {
+    if (drift) {
+      console.log(`App drift:    ${drift.changes.join(", ")} (recorded ${drift.from.seen_at})`);
+    }
+    const notes = drift ? [...v.support.notes, formatAppVersionDriftWarning(drift)] : v.support.notes;
+    if (notes.length > 0) {
       console.log("");
-      for (const n of v.support.notes) console.log(`  - ${n}`);
+      for (const n of notes) console.log(`  - ${n}`);
     }
   } else {
-    out(v, flags);
+    out({ ...v, app_version_drift: drift }, flags);
   }
 }
 
@@ -2791,6 +3021,8 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
     probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
     ffprobeCmd: flags.ffprobeCmd,
+    draftDir: path.dirname(path.resolve(filePath)),
+    dryRun: isDryRun(),
   };
 
   if (flags.fix) {
@@ -3210,6 +3442,66 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
   return ok ? 0 : 2;
 }
 
+// `rename` gives a draft a new display name + folder name after creation —
+// no tool in the ecosystem has this (VectCutAPI#45): users recreate whole
+// drafts to fix a name. register's thin sibling: same store discovery, same
+// temp+fsync+rename writes with a .bak per rewritten file, but here the
+// folder rename and both metadata rewrites are one transaction — a failed
+// step restores the rewritten files and puts the folder back. Timeline files
+// (draft_content.json / draft_info.json) are never touched; absolute media
+// references under the old folder path are counted and reported for relink.
+function cmdRename(positional: string[], flags: Flags): number {
+  const projectPath = positional[1];
+  const newName = positional[2];
+  if (!projectPath || newName === undefined) die("Usage: capcut rename <project> <new-name> [--drafts <dir>]");
+  const result = planDraftRename(projectPath, newName, { draftsDir: flags.drafts });
+  const { plan } = result;
+
+  if (!flags.forceWrite) {
+    const running = editorProcesses();
+    if (running.length > 0) {
+      die(
+        `${running.join(" / ")} is running. Close the editor before renaming this draft, ` +
+          "or pass --force-write if you accept that the app may overwrite the change.",
+      );
+    }
+  }
+
+  const report = {
+    old_name: plan.old_name,
+    new_name: plan.new_name,
+    old_path: plan.old_path,
+    new_path: plan.new_path,
+    updated: plan.updates,
+    targets: plan.targets,
+    stale_media_refs: plan.stale_media_refs,
+  };
+
+  if (isDryRun()) {
+    const message = `Dry run — would rename ${plan.old_path} -> ${plan.new_path} and rewrite ${plan.updates.length} file(s); nothing was written.`;
+    out({ ok: true, renamed: false, ...report, backups: [], message }, flags);
+    if (!flags.quiet) process.stderr.write(`${message}\n`);
+    return 0;
+  }
+
+  const { backups } = applyDraftRename(result, { forceWrite: flags.forceWrite === true });
+
+  out({ ok: true, renamed: true, ...report, backups }, flags);
+  if (!flags.quiet) {
+    process.stderr.write(`Renamed "${plan.old_name}" -> "${plan.new_name}": ${plan.new_path}\n`);
+    for (const target of plan.targets) {
+      if (target.action === "none") process.stderr.write(`note: ${target.file}: ${target.detail}\n`);
+    }
+    if (plan.stale_media_refs > 0) {
+      process.stderr.write(
+        `WARNING: ${plan.stale_media_refs} media reference(s) inside the timeline still point at the old folder path. ` +
+          `Repair them: capcut relink "${plan.new_path}" --from "${plan.old_path}" --to "${plan.new_path}"\n`,
+      );
+    }
+  }
+  return 0;
+}
+
 // `sync-timelines` repairs a draft whose mirror files (template-2.tmp /
 // draft_info.json — including the pre-open mirror's stale GUID) drifted from
 // draft_content.json, the CapCut >= 8.7 "CLI edit silently ignored" failure
@@ -3306,6 +3598,15 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   // dry-run path behaves the same; see docs/version-support.md).
   const safety = assessWriteSafety(canonicalDraft, plan.version);
 
+  // CapCut 7.x nested Timelines/ layout (issue #50): --apply rewrites root
+  // mirrors outside saveDraft, so it repeats saveDraft's warn-only layout
+  // guard — the app may regenerate those mirrors from the nested document and
+  // discard this repair. Warn on the dry-run preview too, like the version
+  // boundary above.
+  const warnNestedTimelines = (): void => {
+    if (plan.layout === "timelines-nested") process.stderr.write(`WARNING: ${NESTED_TIMELINES_WRITE_WARNING}\n`);
+  };
+
   if (isDryRun()) {
     const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from ${plan.canonical}; nothing was written.`;
     out(
@@ -3326,6 +3627,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       flags,
     );
     if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+    warnNestedTimelines();
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     warnUnreconcilable();
     return 0;
@@ -3335,11 +3637,21 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   if (safety.action === "warn" || (safety.action === "refuse" && flags.forceWrite)) {
     process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
   }
+  warnNestedTimelines();
 
   // Optimistic concurrency: neither the canonical source nor a mirror we are
   // about to rewrite may have changed on disk between the plan read and now.
   if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates]);
   commitDraftTargets(driftedCandidates, canonicalDraft);
+
+  // App auto-upgrade tripwire: --apply writes outside saveDraft, so it runs
+  // the same warn-only last-seen comparison (the JSON result below picks the
+  // drift up through out()).
+  {
+    const track = trackAppVersion(plan.project_dir, appVersionEvidence(canonicalDraft, plan.version));
+    if (track.error) process.stderr.write(`WARNING: ${track.error}\n`);
+    if (track.drift) process.stderr.write(`WARNING: ${formatAppVersionDriftWarning(track.drift)}\n`);
+  }
 
   const verify = planTimelineSync(projectPath);
   if (!verify.plan.in_sync) {
@@ -3638,11 +3950,12 @@ function cmdProjects(positional: string[], flags: Flags): void {
 // COMMANDS name has an entry here, so a new command can't ship undescribed.
 const SUMMARIES: Record<string, string> = {
   quickstart: "One-command first draft: create + add one input + lint + print the open-in-CapCut step.",
-  fixture: "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue.",
+  fixture:
+    "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
   "replace-media": "Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes.",
   info: "Project overview + material summary.",
   version: "Detect CapCut/JianYing version, schema flags, and support status.",
-  lint: "Schema-aware checks (overlaps, line length, missing files); exit 0/1/2 for CI.",
+  lint: "Schema-aware checks (overlaps, line length, missing files, main-track gaps, external media); exit 0/1/2 for CI.",
   tracks: "List all tracks.",
   segments: "List segments with timing; filter by --track <type>.",
   texts: "List all text/subtitle content.",
@@ -3656,6 +3969,8 @@ const SUMMARIES: Record<string, string> = {
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
   "export-timeline":
     "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
+  "import-timeline":
+    "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
   "harvest-enums":
     "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
   materials: "List material types and counts; filter with --type.",
@@ -3703,6 +4018,8 @@ const SUMMARIES: Record<string, string> = {
   prune: "Remove materials no segment references.",
   register:
     "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak).",
+  rename:
+    "Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists).",
   relink: "Repair broken media paths (--dir or --from/--to).",
   timeline: "Show the track/segment layout (JSON, or -H ASCII bars).",
   projects: "List CapCut/JianYing draft folders on disk.",
@@ -3947,8 +4264,15 @@ function cmdConcat(positional: string[], flags: Flags): void {
 // _init template the same way `init` does.
 function cmdCompile(positional: string[], flags: Flags): void {
   const specPath = positional[1];
-  if (!specPath) die("Usage: capcut compile <spec.json> [--out <draftdir>] [--drafts <dir>]");
+  if (!specPath) die("Usage: capcut compile <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]");
   if (!existsSync(specPath)) die(`Spec file not found: ${specPath}`);
+
+  // --data: mass production. One spec + N JSONL rows = N drafts. Branches
+  // before anything else so the single-draft path below stays untouched.
+  if (flags.data !== undefined) {
+    cmdCompileData(specPath, flags);
+    return;
+  }
 
   let spec: CompileSpec;
   try {
@@ -3983,6 +4307,117 @@ function cmdCompile(positional: string[], flags: Flags): void {
   });
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Compiled: ${result.draft_path}\n`);
+}
+
+// `compile --data`: one spec + N JSONL rows = N built-and-registered drafts,
+// each through the exact single-draft compile path (same validation, same
+// factory functions, same store registration). Row errors mirror `batch`'s
+// per-line contract: by default the first bad row aborts with its row number
+// — every row is validated up front (JSON shape, spec validation, media
+// pre-flight, name/directory collisions), so nothing is written on abort,
+// matching batch's "no changes written" promise as far as filesystem writes
+// allow. With --continue-on-error the rows that validate are built, failures
+// are reported per row, and the exit code is 1 when any row failed.
+function cmdCompileData(specPath: string, flags: Flags): void {
+  if (flags.check || flags.plan) die("--data cannot be combined with --check/--plan; validate the spec alone first");
+  if (flags.out) {
+    die("--out names a single draft directory; with --data each row names its own draft — use --drafts <dir>");
+  }
+
+  let template: unknown;
+  try {
+    template = JSON.parse(stripBom(readFileSync(specPath, "utf-8")));
+  } catch (e) {
+    die(`compile: spec is not valid JSON: ${(e as Error).message}`);
+  }
+
+  if (flags.data !== "-" && !existsSync(flags.data as string)) die(`Rows file not found: ${flags.data}`);
+  const input = stripBom(readFileSync(flags.data === "-" ? 0 : (flags.data as string), "utf-8")).trim();
+  if (!input) die(flags.data === "-" ? "No input on stdin for --data" : `No rows in ${flags.data}`);
+
+  const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
+  const bundledTemplate = path.join(cliDir, "templates", "_init");
+  let templateDir = flags.template ?? externalTemplate;
+  if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
+    templateDir = bundledTemplate;
+  }
+  const draftsRoot = path.resolve(flags.drafts ?? requireDraftsDir());
+  const specDir = path.dirname(path.resolve(specPath));
+
+  // Validation phase — nothing is written here. Row numbers are 1-based file
+  // line numbers (blank lines skipped but counted), matching batch's `line`.
+  interface RowPlan {
+    row: number;
+    spec?: CompileSpec;
+    outDir?: string;
+    error?: string;
+  }
+  const lines = input.split("\n");
+  const plans: RowPlan[] = [];
+  const claimedNames = new Set<string>();
+  for (let index = 0; index < lines.length; index++) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) continue;
+    const row = index + 1;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("row must be a JSON object");
+      }
+      const spec = substitutePlaceholders(template, parsed as Record<string, unknown>);
+      validateSpec(spec);
+      planCompile(spec, specDir);
+      const name = spec.name ?? "compiled-draft";
+      const outDir = path.resolve(draftsRoot, name);
+      if (claimedNames.has(name)) {
+        throw new Error(`duplicate draft name '${name}' — template the spec's "name" so every row is unique`);
+      }
+      if (existsSync(outDir)) throw new Error(`draft directory already exists: ${outDir}`);
+      claimedNames.add(name);
+      plans.push({ row, spec, outDir });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!flags.continueOnError) {
+        die(
+          `compile --data aborted at row ${row}; no drafts written: ${msg}. ` +
+            "Pass --continue-on-error to build only the rows that validate.",
+        );
+      }
+      plans.push({ row, error: msg });
+    }
+  }
+  if (plans.length === 0) die("compile --data: no rows to build");
+
+  // Build phase — each valid row runs the same compileDraft the single path uses.
+  const results: Array<Record<string, unknown>> = [];
+  let failed = 0;
+  for (const plan of plans) {
+    if (plan.error !== undefined) {
+      failed++;
+      results.push({ row: plan.row, ok: false, error: plan.error });
+      continue;
+    }
+    try {
+      const result = compileDraft(plan.spec as CompileSpec, { templateDir, outDir: plan.outDir as string, specDir });
+      results.push({ row: plan.row, ok: true, name: result.name, draft_path: result.draft_path });
+      if (!flags.quiet) process.stderr.write(`Compiled: ${result.draft_path}\n`);
+    } catch (e) {
+      // Post-pre-flight build failures are the race class (media vanished
+      // mid-run). Earlier rows are already on disk — a filesystem build has
+      // no in-memory clone to roll back — so report what was built, honestly.
+      const msg = e instanceof Error ? e.message : String(e);
+      failed++;
+      results.push({ row: plan.row, ok: false, error: msg });
+      if (!flags.continueOnError) {
+        out(results, flags);
+        die(`compile --data aborted at row ${plan.row}: ${msg}. Rows before it are already built (see summary).`);
+      }
+    }
+  }
+
+  out(results, flags);
+  if (failed > 0) process.exit(1);
 }
 
 // `render` produces a low-res ffmpeg proxy preview of the timeline. Read-only:
@@ -4144,6 +4579,12 @@ async function main(): Promise<void> {
     process.exit(cmdRegister(projectPath, flags));
   }
 
+  // `rename` moves the draft folder and rewrites its registration metadata —
+  // no loadDraft: the timeline files are exactly what rename must never touch.
+  if (cmd === "rename") {
+    process.exit(cmdRename(positional, flags));
+  }
+
   // `sync-timelines` must see drifted/unreadable siblings itself — loadDraft would
   // pick template-2.tmp as canonical on modern storage, the opposite of the repair.
   if (cmd === "sync-timelines") {
@@ -4277,6 +4718,13 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // `import-timeline` reads an .otio file (not a draft) and builds a new draft
+  // (--out) or appends onto an existing one (--into) — handled directly.
+  if (cmd === "import-timeline") {
+    cmdImportTimeline(positional, flags);
+    process.exit(0);
+  }
+
   // `detect-scenes` analyzes a raw video file for cut points — no draft needed.
   if (cmd === "detect-scenes") {
     cmdDetectScenes(positional, flags);
@@ -4308,7 +4756,7 @@ async function main(): Promise<void> {
       cmdRender(draft, filePath, flags);
       break;
     case "version":
-      cmdVersion(draft, flags);
+      cmdVersion(draft, filePath, flags);
       break;
     case "lint": {
       const { exitCode } = cmdLint(draft, filePath, flags);

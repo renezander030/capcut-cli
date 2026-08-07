@@ -24,9 +24,9 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **v0.16.0 新增：** 完整支持较新 Mac 版本的草稿布局（以 `draft_info.json` 为主文件，覆盖编辑命令、`sync-timelines`、`register` 与 `diagnose`）、按版本证据选择蒙版数组并新增 `--mask-field` 与 lint 不匹配检查、把时间线导出为 OpenTimelineIO（`export-timeline`，DaVinci Resolve 可直接导入）、从应用生成的草稿学习商店特效 ID（`harvest-enums`）、`lint` 新增可变帧率与不可读媒体检查并给出具体的 ffmpeg 修复命令，以及安全自动修复悬空素材引用（`lint --fix`）。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.17.0 新增：** 导入 OpenTimelineIO 时间线为新草稿或向现有草稿追加轨道（`import-timeline`，`export-timeline` 的逆操作）、一份规格加 N 行 JSONL 批量生成 N 个已注册草稿（`compile --data`）、事务式重命名草稿（`rename`）、`lint` 新增主轨道空隙与草稿外媒体检查（`--fix` 可在安全时闭合空隙、把媒体收进草稿）、应用自动升级绊线（升级后的首次写入即以 旧 -> 新 提示版本变化）、检测 CapCut 7.x 嵌套 `Timelines/` 布局并在写入时警告、每个 `fixture` 包新增蒙版关键帧证据报告（#44），以及简体中文命令参考与面向剪映用户的快速上手指南。完整说明见 [更新日志](./CHANGELOG.md)。
 
-> **v0.15.0 新增：** 写入时版本护栏，拒绝写入超出已验证范围或已知不兼容的草稿（`--force-write` 可覆盖）、就地删除片段并回收由此孤立的素材（`remove`）、滤镜与特效支持原始资源 ID、强度调节与整条时间线范围（`add-filter`/`add-effect` 的 `--resource-id`、`--intensity`、`--full`）、实验性逐片段绑定（仅 `add-effect` 的 `--bind`），以及 `lint` 未知 slug 检查扩展到转场、蒙版、音效、气泡与字体。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.16.0 新增：** 完整支持较新 Mac 版本的草稿布局（以 `draft_info.json` 为主文件，覆盖编辑命令、`sync-timelines`、`register` 与 `diagnose`）、按版本证据选择蒙版数组并新增 `--mask-field` 与 lint 不匹配检查、把时间线导出为 OpenTimelineIO（`export-timeline`，DaVinci Resolve 可直接导入）、从应用生成的草稿学习商店特效 ID（`harvest-enums`）、`lint` 新增可变帧率与不可读媒体检查并给出具体的 ffmpeg 修复命令，以及安全自动修复悬空素材引用（`lint --fix`）。完整说明见 [更新日志](./CHANGELOG.md)。
 
 ## 安装
 
@@ -48,6 +48,8 @@ capcut info ./my-first/                         # 查看草稿（加 -H 显示�
 
 然后在 CapCut 中打开项目审阅并渲染。所有短视频平台都禁止自动上传，所以最后的发布按钮由你来点。
 
+**剪映（国内版）用户：** 版本须知（6.0+ 加密）、草稿目录位置与 `--jianying` 命名空间，见 **[剪映快速上手](./docs/quickstart.zh-CN.md)**。
+
 ## 常用命令
 
 默认输出 JSON（可管道给 `jq`）；加 `-H` 显示人类可读表格。加 `--jianying` 使用剪映枚举命名空间。运行 `capcut <command> --help` 查看完整参数。
@@ -66,7 +68,7 @@ capcut info ./my-first/                         # 查看草稿（加 -H 显示�
 | **长视频切短** | `cut` · `detect-scenes`（ffmpeg 场景切点检测）|
 | **自动化** | `serve`（无状态 JSONL 执行器）· `migrate` · `doctor` · `sync-timelines`（8.7 时间线镜像修复）|
 
-**完整命令参考**（每个命令、参数与退出码）：**[docs/command-reference.md](./docs/command-reference.md)**。
+**完整命令参考**（每个命令、参数与退出码）：**[docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)**（[英文原版](./docs/command-reference.md)）。
 
 ## 赞助
 
@@ -86,7 +88,8 @@ CapCut / 剪映把每个项目存为本地 JSON。capcut-cli 加载这个存储�
 
 ## 文档与示例
 
-- [docs/command-reference.md](./docs/command-reference.md) —— 每个命令与参数
+- [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md) —— 每个命令与参数（[英文原版](./docs/command-reference.md)）
+- [docs/quickstart.zh-CN.md](./docs/quickstart.zh-CN.md) —— 剪映快速上手：版本须知、草稿目录、`--jianying` 命名空间
 - [examples/](./examples/) —— 端到端示例（配音对齐、serve 自动化、批量字幕修正）
 - [docs/version-support.md](./docs/version-support.md) · [docs/jianying-encryption.md](./docs/jianying-encryption.md)
 - [CHANGELOG.md](./CHANGELOG.md) · [Releases](https://github.com/renezander030/capcut-cli/releases) —— 更新内容

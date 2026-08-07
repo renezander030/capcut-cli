@@ -22,6 +22,16 @@ export function keyframeProperties(): string[] {
   return Object.keys(PROPERTY_MAP);
 }
 
+/**
+ * The on-disk `property_type` identifiers the keyframe machinery knows how to
+ * write. Used by the `fixture` mask-keyframe harvest (#44) to split the
+ * property types found in a real draft into known vs unknown — an unknown one
+ * on a masked segment is exactly the ground-truth signal that issue needs.
+ */
+export function keyframePropertyTypes(): string[] {
+  return Object.values(PROPERTY_MAP);
+}
+
 // CapCut's UI easing presets ("Cubic In", "Cubic Out", ...) are NOT stored as
 // named curveType values. The UI writes curveType "FreeCurveInOut" plus bezier
 // control handles on both keyframes of the eased segment: handle x is a fixed
@@ -291,10 +301,6 @@ export function addKeyframes(
 // (enums.ts). IMAGE_ANIMS and VIDEO_EFFECTS keep inline maps because those
 // catalogues carry empirically-verified effect_ids from live CapCut projects
 // (knossos-recon) that do NOT match upstream pyJianYingDraft metadata.
-
-export function transitionSlugs(namespace: Namespace = "capcut"): string[] {
-  return slugsFor("transitions", namespace);
-}
 
 export function addTransition(
   draft: Draft,

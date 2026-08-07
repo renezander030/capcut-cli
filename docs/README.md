@@ -4,6 +4,7 @@ Reference documentation for `capcut-cli` users and contributors. Source code liv
 
 ## What's in here
 
+- **[`quickstart.zh-CN.md`](./quickstart.zh-CN.md)** — 剪映快速上手 (JianYing-first quickstart, Simplified Chinese); the command reference is also translated: [`command-reference.zh-CN.md`](./command-reference.zh-CN.md)
 - **[`draft-schema/`](./draft-schema/)** — annotated reference for the CapCut / JianYing project file (`draft_content.json` on Windows, `draft_info.json` on macOS). Read this before writing your own CLI / agent / pipeline against the format. Covers the top-level shape, tracks and segments, materials, keyframes and animations, effects and masks, and the CapCut↔JianYing differences.
 
 ## What's NOT in here

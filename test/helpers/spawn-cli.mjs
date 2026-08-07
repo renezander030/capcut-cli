@@ -25,7 +25,15 @@ export function spawnCli(args, opts = {}) {
     r = spawnSync("node", [CLI, ...args], {
       cwd: opts.cwd,
       input: opts.input,
-      env: { ...process.env, ...(opts.env ?? {}) },
+      // Isolate the app-version tripwire state per spawn (removed with
+      // captureDir) so mutating-command tests never touch the developer's
+      // real ~/.config/capcut-cli/app-versions.json. Tests that exercise the
+      // tripwire across invocations pass their own path via opts.env.
+      env: {
+        ...process.env,
+        CAPCUT_CLI_APP_VERSIONS: join(captureDir, "app-versions.json"),
+        ...(opts.env ?? {}),
+      },
       timeout: opts.timeout ?? 30_000,
       stdio: ["pipe", stdoutFd, stderrFd],
     });

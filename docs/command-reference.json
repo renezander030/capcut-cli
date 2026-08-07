@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -117,7 +117,7 @@
     },
     {
       "name": "lint",
-      "summary": "Schema-aware checks (overlaps, line length, missing files); exit 0/1/2 for CI.",
+      "summary": "Schema-aware checks (overlaps, line length, missing files, main-track gaps, external media); exit 0/1/2 for CI.",
       "usage": "capcut lint <project> [options]",
       "positionals": [
         {
@@ -622,6 +622,62 @@
       "output": {
         "type": "text",
         "description": "Plain text on stdout."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "import-timeline",
+      "summary": "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
+      "usage": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
+      "positionals": [
+        {
+          "name": "file.otio",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "new-project",
+          "type": "path",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "name": "out",
+          "flags": [
+            "--out"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Build a NEW draft directory at this path from the OTIO timeline."
+        },
+        {
+          "name": "into",
+          "flags": [
+            "--into"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Append the OTIO timeline onto this existing draft as new tracks (existing segments are never touched)."
+        },
+        {
+          "name": "template",
+          "flags": [
+            "--template"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Template directory for --out."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "file",
+        "description": "JSON by default; use -H where supported for human output."
       },
       "exit_codes": {
         "0": "success",
@@ -3771,6 +3827,49 @@
       }
     },
     {
+      "name": "rename",
+      "summary": "Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists).",
+      "usage": "capcut rename <project> <new-name> [--drafts <dir>]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "new-name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "dir",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "drafts",
+          "flags": [
+            "--drafts"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Draft store root when the draft does not live inside a known one."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "relink",
       "summary": "Repair broken media paths (--dir or --from/--to).",
       "usage": "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",
@@ -4213,7 +4312,7 @@
     },
     {
       "name": "fixture",
-      "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue.",
+      "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
       "usage": "capcut fixture <project> --out <dir>",
       "positionals": [
         {
@@ -4619,7 +4718,7 @@
     {
       "name": "compile",
       "summary": "Build a draft from a declarative JSON spec (the inverse of describe).",
-      "usage": "capcut compile <spec.json> [--out <draftdir>] [--check | --plan]",
+      "usage": "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
       "positionals": [
         {
           "name": "spec.json",
@@ -4677,6 +4776,24 @@
           "type": "boolean",
           "required": false,
           "description": "Print the normalized build plan without writing."
+        },
+        {
+          "name": "data",
+          "flags": [
+            "--data"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "JSONL rows file ('-' for stdin): build one draft per row, substituting {{key}} placeholders from the row into the spec's string values (and so the draft name). Same per-line error contract as batch: the first bad row aborts with its row number before any draft is written."
+        },
+        {
+          "name": "continue_on_error",
+          "flags": [
+            "--continue-on-error"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "With --data: build only the rows that validate and exit 1 if any fail (batch's contract)."
         }
       ],
       "mutates": true,

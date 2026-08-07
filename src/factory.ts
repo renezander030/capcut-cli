@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
@@ -68,7 +77,7 @@ function sameContent(a: string, b: string): boolean {
  *
  * Returns the destination path the draft should reference.
  */
-function copyAssetDeduped(srcPath: string, assetsDir: string, fallbackName: string): string {
+export function copyAssetDeduped(srcPath: string, assetsDir: string, fallbackName: string): string {
   mkdirSync(assetsDir, { recursive: true });
   const filename = basename(srcPath) || fallbackName;
   const destPath = resolve(assetsDir, filename);
@@ -702,6 +711,361 @@ export function applyDraftRegistration(
   return { applied, backups };
 }
 
+// --- Rename (folder + registration metadata; see cmdRename in index.ts) ---
+// `register`'s thin sibling: the same store-root discovery and the same
+// temp+fsync+rename writes, but instead of repairing metadata to match the
+// draft, it moves the draft folder and rewrites the name and every
+// self-referential path recorded about it. Timeline files (draft_content.json
+// / draft_info.json) are never written.
+
+export interface RenameTarget {
+  file: "draft_meta_info.json" | "root_meta_info.json";
+  path: string | null;
+  state: "present" | "missing" | "unregistered" | "unknown-store-root";
+  action: "update" | "none";
+  detail: string;
+  updated_fields: string[];
+}
+
+export interface RenamePlan {
+  old_name: string;
+  new_name: string;
+  old_path: string;
+  new_path: string;
+  store_root: string | null;
+  store_root_source: string;
+  targets: RenameTarget[];
+  /** Absolute paths the rename rewrites, as they will exist AFTER the folder rename. */
+  updates: string[];
+  /** Old-folder-path references left inside timeline files (read-only there; `relink` repairs them). */
+  stale_media_refs: number;
+}
+
+interface RenameWrite {
+  file: RenameTarget["file"];
+  /** Where the file lives BEFORE the folder rename (concurrency check + rollback source). */
+  readPath: string;
+  /** Where the rewritten file lands AFTER the folder rename. */
+  writePath: string;
+  content: string;
+  /** Raw pre-plan content. Rename only rewrites files that exist, so never null. */
+  previous: string;
+}
+
+export interface RenameResult {
+  plan: RenamePlan;
+  writes: RenameWrite[];
+}
+
+/**
+ * Rewrite a registration entry (sidecar or index) for a renamed draft folder:
+ * `draft_name` becomes the new name, and every top-level string field whose
+ * value points at or under the old folder gets the new folder prefix — which
+ * covers draft_fold_path / draft_json_file plus any version-specific absolute
+ * path an app build stores — with tm_draft_modified bumped when anything
+ * changed. Every other field is preserved. Returns the changed field names.
+ */
+function renameEntryFields(
+  existing: Record<string, unknown>,
+  oldDir: string,
+  newDir: string,
+  newName: string,
+  nowMs: number,
+): { changed: string[]; fixed: Record<string, unknown> } {
+  const fixed = structuredClone(existing);
+  const changed: string[] = [];
+  for (const [key, value] of Object.entries(fixed)) {
+    if (typeof value !== "string") continue;
+    if (value === oldDir) {
+      fixed[key] = newDir;
+      changed.push(key);
+    } else if (value.startsWith(`${oldDir}/`) || value.startsWith(`${oldDir}\\`)) {
+      fixed[key] = `${newDir}${value.slice(oldDir.length)}`;
+      changed.push(key);
+    }
+  }
+  if (fixed.draft_name !== newName) {
+    fixed.draft_name = newName;
+    changed.push("draft_name");
+  }
+  if (changed.length > 0) fixed.tm_draft_modified = nowMs * 1000;
+  return { changed, fixed };
+}
+
+/**
+ * Plan for `capcut rename`: move the draft folder to `<parent>/<newName>` and
+ * rewrite the draft's registration metadata (draft_meta_info.json sidecar +
+ * the entry in the store's root_meta_info.json) to match. Accepts the project
+ * directory or its primary timeline file path, like register. Refuses invalid
+ * names, an existing target folder, and metadata that exists but cannot be
+ * parsed — rename never renames around a file it cannot update. A missing
+ * sidecar or index entry is only reported (register recreates those); the
+ * folder is renamed anyway. Timeline files are read only to count references
+ * to the old folder path (stale_media_refs — relink repairs them after).
+ */
+export function planDraftRename(
+  input: string,
+  newName: string,
+  options: { draftsDir?: string; now?: number } = {},
+): RenameResult {
+  const resolved = resolve(input);
+  if (
+    existsSync(resolved) &&
+    statSync(resolved).isFile() &&
+    !["draft_content.json", "draft_info.json"].includes(basename(resolved))
+  ) {
+    throw new Error(
+      `rename moves the whole draft folder and cannot target ${basename(resolved)} directly. ` +
+        `Pass the project directory instead: capcut rename ${dirname(resolved)} <new-name>`,
+    );
+  }
+  const projectDir = existsSync(resolved) && statSync(resolved).isFile() ? dirname(resolved) : resolved;
+  if (!existsSync(projectDir) || !statSync(projectDir).isDirectory()) {
+    throw new Error(`Draft folder not found: ${projectDir}`);
+  }
+  if (newName.trim() === "" || newName === "." || newName === "..") {
+    throw new Error(`rename needs a non-empty folder name (got "${newName}").`);
+  }
+  if (/[/\\]/.test(newName)) {
+    throw new Error(
+      `rename takes a plain folder name, not a path (got "${newName}"). The draft stays in ${dirname(projectDir)}.`,
+    );
+  }
+  const newDir = resolve(dirname(projectDir), newName);
+  if (newDir === projectDir) {
+    throw new Error(`Draft is already named "${newName}" — nothing to rename.`);
+  }
+  if (existsSync(newDir)) {
+    throw new Error(`Refusing to rename: the target folder already exists: ${newDir}`);
+  }
+  const nowMs = options.now ?? Date.now();
+
+  // The per-folder sidecar. Present-but-unparseable refuses the whole rename:
+  // proceeding would leave the app a sidecar whose recorded name/paths can
+  // never be updated. register --apply repairs it (with a .bak) first.
+  const metaPath = resolve(projectDir, "draft_meta_info.json");
+  const metaRaw = existsSync(metaPath) ? stripBom(readFileSync(metaPath, "utf-8")) : null;
+  let metaParsed: Record<string, unknown> | null = null;
+  if (metaRaw !== null) {
+    try {
+      const parsed = JSON.parse(metaRaw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        metaParsed = parsed as Record<string, unknown>;
+    } catch {
+      // metaParsed stays null → refused below.
+    }
+    if (metaParsed === null) {
+      throw new Error(
+        "rename must update draft_meta_info.json but it does not parse as JSON. " +
+          `Repair it first — capcut register ${projectDir} --apply rewrites the sidecar with a .bak — then re-run rename.`,
+      );
+    }
+  }
+
+  const oldName =
+    metaParsed && typeof metaParsed.draft_name === "string" && metaParsed.draft_name !== ""
+      ? metaParsed.draft_name
+      : basename(projectDir);
+  const { root: storeRoot, source: storeRootSource } = discoverStoreRoot(projectDir, options.draftsDir);
+
+  const targets: RenameTarget[] = [];
+  const writes: RenameWrite[] = [];
+
+  // Target 1: the per-folder draft_meta_info.json sidecar.
+  if (metaParsed === null) {
+    targets.push({
+      file: "draft_meta_info.json",
+      path: metaPath,
+      state: "missing",
+      action: "none",
+      detail:
+        "missing — the folder is renamed anyway; run `capcut register <project> --apply` afterwards to recreate the sidecar.",
+      updated_fields: [],
+    });
+  } else {
+    const { changed, fixed } = renameEntryFields(metaParsed, projectDir, newDir, newName, nowMs);
+    targets.push({
+      file: "draft_meta_info.json",
+      path: metaPath,
+      state: "present",
+      action: changed.length > 0 ? "update" : "none",
+      detail:
+        changed.length > 0
+          ? `fields (${changed.join(", ")}) will be rewritten for the new name and folder path; other fields are preserved`
+          : "already consistent with the new name and folder path",
+      updated_fields: changed,
+    });
+    if (changed.length > 0) {
+      writes.push({
+        file: "draft_meta_info.json",
+        readPath: metaPath,
+        writePath: resolve(newDir, "draft_meta_info.json"),
+        content: JSON.stringify(fixed, null, 0),
+        previous: metaRaw as string,
+      });
+    }
+  }
+
+  // Target 2: the draft's entry in the store's root_meta_info.json index.
+  if (storeRoot === null) {
+    targets.push({
+      file: "root_meta_info.json",
+      path: null,
+      state: "unknown-store-root",
+      action: "none",
+      detail: `${projectDir} does not live inside a known CapCut draft store (${storeRootSource}); no index entry to update. Pass --drafts <dir> if the store root is elsewhere.`,
+      updated_fields: [],
+    });
+  } else {
+    const indexPath = resolve(storeRoot, "root_meta_info.json");
+    const indexRaw = existsSync(indexPath) ? stripBom(readFileSync(indexPath, "utf-8")) : null;
+    if (indexRaw === null) {
+      targets.push({
+        file: "root_meta_info.json",
+        path: indexPath,
+        state: "missing",
+        action: "none",
+        detail: "missing — nothing to update; run `capcut register <project> --apply` after the rename to create it.",
+        updated_fields: [],
+      });
+    } else {
+      let index: Record<string, unknown> | null = null;
+      try {
+        const parsed = JSON.parse(indexRaw) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) index = parsed as Record<string, unknown>;
+      } catch {
+        // Unreadable index — refused below rather than renamed around (it lists every draft).
+      }
+      if (index === null) {
+        throw new Error(
+          "rename must update the draft's entry in root_meta_info.json, but the index does not parse as JSON; " +
+            "refusing to rename around the file that lists every draft. Restore it from a backup or let the " +
+            "CapCut app rebuild it, then re-run rename.",
+        );
+      }
+      const storeKey = findDraftStoreKey(index) ?? "all_draft_store";
+      const store = (Array.isArray(index[storeKey]) ? index[storeKey] : []) as Array<Record<string, unknown>>;
+      const entryIndex = store.findIndex((e) => e && typeof e === "object" && e.draft_fold_path === projectDir);
+      if (entryIndex === -1) {
+        targets.push({
+          file: "root_meta_info.json",
+          path: indexPath,
+          state: "unregistered",
+          action: "none",
+          detail: `no entry for this folder in ${storeKey} — nothing to update; run \`capcut register <project> --apply\` after the rename to add one.`,
+          updated_fields: [],
+        });
+      } else {
+        const { changed, fixed } = renameEntryFields(store[entryIndex], projectDir, newDir, newName, nowMs);
+        targets.push({
+          file: "root_meta_info.json",
+          path: indexPath,
+          state: "present",
+          action: changed.length > 0 ? "update" : "none",
+          detail:
+            changed.length > 0
+              ? `entry fields (${changed.join(", ")}) will be rewritten for the new name and folder path; other fields and entries are preserved`
+              : "entry already consistent with the new name and folder path",
+          updated_fields: changed,
+        });
+        if (changed.length > 0) {
+          const updatedStore = [...store];
+          updatedStore[entryIndex] = fixed;
+          writes.push({
+            file: "root_meta_info.json",
+            readPath: indexPath,
+            writePath: indexPath,
+            content: JSON.stringify({ ...index, [storeKey]: updatedStore }, null, 0),
+            previous: indexRaw,
+          });
+        }
+      }
+    }
+  }
+
+  // Read-only scan: absolute media/asset references under the old folder path
+  // inside the timeline files go stale after the rename. Counted and reported
+  // (relink repairs them); never rewritten here — timeline files are not
+  // rename's to touch. The needle is JSON-escaped so Windows-style paths match.
+  let staleMediaRefs = 0;
+  const needle = JSON.stringify(projectDir).slice(1, -1);
+  for (const timeline of ["draft_content.json", "draft_info.json"]) {
+    const timelinePath = resolve(projectDir, timeline);
+    if (!existsSync(timelinePath)) continue;
+    staleMediaRefs += readFileSync(timelinePath, "utf-8").split(needle).length - 1;
+  }
+
+  return {
+    plan: {
+      old_name: oldName,
+      new_name: newName,
+      old_path: projectDir,
+      new_path: newDir,
+      store_root: storeRoot,
+      store_root_source: storeRootSource,
+      targets,
+      updates: writes.map((write) => write.writePath),
+      stale_media_refs: staleMediaRefs,
+    },
+    writes,
+  };
+}
+
+/**
+ * Perform a rename plan as one transaction: rename the draft folder, then
+ * rewrite the planned metadata files with the same temp+fsync+rename pattern
+ * register uses, a `.bak` beside every rewritten file. A failed step restores
+ * the already-rewritten files and puts the folder back under its old name
+ * before rethrowing. Unless forceWrite, refuses when a target changed on disk
+ * between the plan read and now (the sync-timelines optimistic-concurrency
+ * rule) — and re-checks that the target folder is still free.
+ */
+export function applyDraftRename(
+  result: RenameResult,
+  options: { forceWrite?: boolean } = {},
+): { renamed: boolean; applied: string[]; backups: string[] } {
+  const { plan, writes } = result;
+  if (!options.forceWrite) {
+    for (const write of writes) {
+      const current = existsSync(write.readPath) ? stripBom(readFileSync(write.readPath, "utf-8")) : null;
+      if (current !== write.previous) {
+        throw new Error(
+          `Draft changed on disk after it was planned: ${write.file}. ` +
+            "Re-run rename, or pass --force-write to overwrite intentionally.",
+        );
+      }
+    }
+  }
+  if (existsSync(plan.new_path)) {
+    throw new Error(`Refusing to rename: the target folder already exists: ${plan.new_path}`);
+  }
+  renameSync(plan.old_path, plan.new_path);
+  const applied: string[] = [];
+  const backups: string[] = [];
+  try {
+    for (const write of writes) {
+      writeAtomic(`${write.writePath}.bak`, write.previous);
+      backups.push(`${write.file}.bak`);
+      writeAtomic(write.writePath, write.content);
+      applied.push(write.file);
+    }
+  } catch (error) {
+    // Roll the transaction back: restore every file already rewritten, then
+    // rename the folder back. Best-effort — the .bak files written above
+    // survive as the manual recovery path if even this fails.
+    try {
+      for (const write of writes) {
+        if (applied.includes(write.file)) writeAtomic(write.writePath, write.previous);
+      }
+      renameSync(plan.new_path, plan.old_path);
+    } catch {
+      // Deliberate: the original error is the actionable one.
+    }
+    throw error;
+  }
+  return { renamed: true, applied, backups };
+}
+
 // --- Companion materials (CapCut 6.5+ creates these per-segment) ---
 
 interface CompanionRefs {
@@ -1022,6 +1386,10 @@ export interface AddAudioOptions {
   duration: number; // microseconds (0 = use file duration)
   volume?: number; // 0.0-1.0, default 1.0
   trackName?: string; // default "audio"
+  // Placeholder clip (import-timeline: MissingReference / media not on disk):
+  // skip the assets copy and reference `path` verbatim ("" or a broken path),
+  // with `name` as the display name — the replace-media workflow swaps it later.
+  placeholder?: { path: string; name: string };
 }
 
 export function addAudio(
@@ -1034,13 +1402,14 @@ export function addAudio(
   const trackName = opts.trackName ?? "audio";
   const volume = opts.volume ?? 1.0;
 
-  // Copy file into draft assets directory (collision-safe)
+  // Copy file into draft assets directory (collision-safe). Placeholder clips
+  // reference their (possibly empty/broken) path verbatim — nothing to copy.
   const draftDir = dirname(filePath);
   const assetsDir = resolve(draftDir, "assets", "audio");
-  const destPath = copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
+  const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
   // Use the local assets path — CapCut rewrites to placeholder on open
   const localPath = destPath;
-  const filename = basename(localPath);
+  const filename = opts.placeholder ? opts.placeholder.name : basename(localPath);
 
   // Find or create audio track
   let track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
@@ -1114,6 +1483,10 @@ export interface AddVideoOptions {
   width?: number; // default 1920
   height?: number; // default 1080
   trackName?: string; // default "video"
+  // Placeholder clip (import-timeline: MissingReference / media not on disk):
+  // skip the assets copy and reference `path` verbatim ("" or a broken path),
+  // with `name` as the display name — the replace-media workflow swaps it later.
+  placeholder?: { path: string; name: string };
 }
 
 export function addVideo(
@@ -1131,13 +1504,14 @@ export function addVideo(
   const ext = opts.path.split(".").pop()?.toLowerCase() || "";
   const materialType = opts.type ?? (["jpg", "jpeg", "png", "webp", "bmp", "tiff"].includes(ext) ? "photo" : "video");
 
-  // Copy file into draft assets directory (collision-safe)
+  // Copy file into draft assets directory (collision-safe). Placeholder clips
+  // reference their (possibly empty/broken) path verbatim — nothing to copy.
   const draftDir = dirname(filePath);
   const assetsDir = resolve(draftDir, "assets", "video");
-  const destPath = copyAssetDeduped(opts.path, assetsDir, "media");
+  const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "media");
   // Use the local assets path — CapCut rewrites to placeholder on open
   const localPath = destPath;
-  const filename = basename(localPath);
+  const filename = opts.placeholder ? opts.placeholder.name : basename(localPath);
 
   // Find or create video track
   let track = draft.tracks.find((t) => t.type === "video" && t.name === trackName);

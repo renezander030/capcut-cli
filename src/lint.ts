@@ -1,9 +1,10 @@
 import { existsSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { bubbleCatalogue, imageAnimCatalogue } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
 import { extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
-import { effectCatalogue, filterCatalogue } from "./factory.js";
+import { copyAssetDeduped, effectCatalogue, filterCatalogue } from "./factory.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
@@ -28,11 +29,12 @@ export interface LintIssue {
 }
 
 // Codes that lintDraft can mechanically repair via fixDraft. Membership here
-// is necessary but not sufficient for fixable:true — line-too-long and
-// caption-gap-too-small are additionally stamped per instance, so an issue is
-// only marked fixable when fixDraft can actually clear that exact instance.
-// dangling-companion-ref is always safely fixable: the repair drops a ref
-// that points at nothing — never a segment, never a material.
+// is necessary but not sufficient for fixable:true — line-too-long,
+// caption-gap-too-small, main-track-gap, and media-outside-draft are
+// additionally stamped per instance, so an issue is only marked fixable when
+// fixDraft can actually clear that exact instance. dangling-companion-ref is
+// always safely fixable: the repair drops a ref that points at nothing —
+// never a segment, never a material.
 //
 // Deliberately NOT here: missing-material and missing-file (the only safe
 // repair would delete user timeline content or guess a path — report-only,
@@ -45,6 +47,8 @@ const FIXABLE_CODES = new Set<string>([
   "caption-gap-too-small",
   "line-too-long",
   "dangling-companion-ref",
+  "main-track-gap",
+  "media-outside-draft",
 ]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
@@ -64,6 +68,17 @@ export interface LintOptions {
    * silently skipped when ffprobe is unavailable. Default true. */
   probeMedia?: boolean;
   ffprobeCmd?: string;
+  /** Absolute path of the draft's folder (the directory holding the timeline
+   * file). Enables the media-outside-draft check and its --fix stage-in;
+   * library callers that lint a Draft with no on-disk home simply omit it and
+   * the rule never runs. */
+  draftDir?: string;
+  /** Preview mode for fixDraft: staging external media copies a file into the
+   * draft folder — a side effect no draft write can roll back — so under
+   * dry-run the stage-in pass is skipped entirely and its issues stay
+   * reported. The pure-JSON repair passes run either way (the caller's
+   * dry-run save discards them). */
+  dryRun?: boolean;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -173,6 +188,47 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     }
   }
 
+  // CapCut's main video track is magnetic: on open, the app pulls segments
+  // left to close any gap between consecutive main-track segments
+  // (sun-guannan/VectCutAPI#54), so a tool-written draft with such gaps
+  // silently re-times itself the moment it is opened — and captions, overlays,
+  // and audio aligned to the post-gap content drift out of sync. The main
+  // track is the FIRST track of type "video" in array order (the bottom layer
+  // of the stack — same convention render.ts flattens). Warning severity: the
+  // draft opens fine, just not with the timing that was written. Fixable only
+  // when the close-up is mechanically safe per canCloseMainTrackGap; otherwise
+  // report-only, because re-timing the other tracks to follow the shift is a
+  // content decision the CLI must not make on its own.
+  const mainTrack = draft.tracks.find((t) => t.type === "video");
+  if (mainTrack) {
+    const segs = [...mainTrack.segments].sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+    for (let i = 0; i < segs.length - 1; i++) {
+      const s = segs[i];
+      const next = segs[i + 1];
+      const end = s.target_timerange.start + s.target_timerange.duration;
+      const gap = next.target_timerange.start - end;
+      if (gap <= 0) continue;
+      const safe = canCloseMainTrackGap(draft, mainTrack, end);
+      const issue: LintIssue = {
+        severity: "warning",
+        code: "main-track-gap",
+        message:
+          `Main video track has a ${Math.round(gap / 1000)}ms gap between segments ${shortId(s.id)} and ` +
+          `${shortId(next.id)} — CapCut's magnetic main track closes it on open, silently shifting every ` +
+          "later segment left (sun-guannan/VectCutAPI#54)",
+        fixable: FIXABLE_CODES.has("main-track-gap") && safe,
+        location: { track: mainTrack.name, segment_id: s.id },
+      };
+      if (!safe) {
+        // Deliberate repair that keeps cross-track sync: move the dependent
+        // segments left in lockstep with the main-track close-up — one shift
+        // per segment (any track) starting at or after the gap.
+        issue.suggested_command = `capcut shift <project> <each-segment-at-or-after-the-gap> -${gap / 1000}ms`;
+      }
+      issues.push(issue);
+    }
+  }
+
   if (opts.checkLocalPaths) {
     // Media probing (VFR / unreadable) is best-effort: only files that exist,
     // only when ffprobe runs — a host without ffprobe lints exactly as before.
@@ -217,6 +273,51 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
             suggested_command: `ffmpeg -i "${m.path}" -fps_mode cfr -r 30 -c:a copy <normalized>.mp4`,
             location: { material_id: m.id, path: m.path },
           });
+        }
+      }
+    }
+
+    // Media referenced outside the draft folder plays fine on the machine
+    // that authored the draft but breaks on any move: copy the draft to
+    // another machine, reorganize the media folder, or open it on a sandboxed
+    // macOS build that cannot read outside the draft, and the app shows the
+    // black-screen/missing-media class (sun-guannan/VectCutAPI#48, #65;
+    // luoluoluo22/jianying-editor-skill#16). Severity is info, not warning:
+    // app-authored drafts routinely reference local imports wherever they
+    // live on disk, so a warning would flip exit codes (0 -> 1) on a huge
+    // installed base of perfectly valid drafts — the unknown-effect-slug
+    // rationale. Fixable per instance: --fix stages the file into
+    // assets/<kind>/ only when the source exists; a missing source is
+    // report-only (there is nothing on disk to stage) with `relink` as the
+    // deliberate repair. Only absolute paths are judged — a relative or
+    // placeholder path resolves against the draft folder, and both
+    // separator styles count as inside (the store.ts/factory.ts tolerant
+    // prefix-compare convention).
+    if (opts.draftDir) {
+      for (const kind of ["videos", "audios"] as const) {
+        for (const mat of draft.materials[kind] ?? []) {
+          const m = mat as { id: string; path?: string };
+          if (typeof m.path !== "string" || m.path.length === 0) continue;
+          if (m.path.startsWith("http://") || m.path.startsWith("https://")) continue;
+          if (!isAbsoluteAnyOs(m.path) || isUnderDir(m.path, opts.draftDir)) continue;
+          const stageable = fileExists(m.path);
+          const issue: LintIssue = {
+            severity: "info",
+            code: "media-outside-draft",
+            message:
+              `Material ${shortId(m.id)} (${kind}) references media outside the draft folder: ${m.path} — ` +
+              "the draft breaks when that file moves or the folder is copied to another machine, and sandboxed " +
+              "macOS builds can lose read access entirely (black screen — sun-guannan/VectCutAPI#48, #65; " +
+              "luoluoluo22/jianying-editor-skill#16)",
+            fixable: FIXABLE_CODES.has("media-outside-draft") && stageable,
+            location: { material_id: m.id, path: m.path },
+          };
+          if (!stageable) {
+            // The source is gone as well, so there is nothing to stage —
+            // repoint the material first, then stage it in.
+            issue.suggested_command = `capcut relink <project> --dir <directory-containing-the-files>`;
+          }
+          issues.push(issue);
         }
       }
     }
@@ -449,6 +550,34 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
   const before = lintDraft(draft, opts);
   const fixed: LintIssue[] = [];
 
+  // Pass 0: close main-track gaps by pulling every later main-track segment
+  // left — the same motion CapCut's magnetic main track performs on open
+  // (sun-guannan/VectCutAPI#54), so the on-disk timing matches what the app
+  // will show. Runs BEFORE the caption passes so canCloseMainTrackGap reads
+  // the same cross-track state lintDraft stamped fixable from: passes 1-3
+  // pull caption ends earlier, which could otherwise flip an instance stamped
+  // fixable:false into a silently-applied repair. Each gap is closed only
+  // when no other track has content playing at or after the gap start; such
+  // content also sits after every EARLIER gap's start, so unsafe gaps are
+  // always a prefix — closing the safe suffix never moves a segment another
+  // track is aligned to. Gap widths and safety are read from the pre-pass
+  // positions, then the cumulative shift is applied.
+  const mainTrack = draft.tracks.find((t) => t.type === "video");
+  if (mainTrack) {
+    const segs = [...mainTrack.segments].sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+    const original = segs.map((seg) => ({
+      seg,
+      start: seg.target_timerange.start,
+      end: seg.target_timerange.start + seg.target_timerange.duration,
+    }));
+    let shift = 0;
+    for (let i = 1; i < original.length; i++) {
+      const gap = original[i].start - original[i - 1].end;
+      if (gap > 0 && canCloseMainTrackGap(draft, mainTrack, original[i - 1].end)) shift += gap;
+      if (shift > 0) original[i].seg.target_timerange.start = original[i].start - shift;
+    }
+  }
+
   // Pass 1: cap over-long cues. Shrinking these first can also close overlaps.
   for (const track of getTracksByType(draft, "text")) {
     for (const s of track.segments) {
@@ -541,6 +670,37 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
     }
   }
 
+  // Pass 5 (order-independent of the others): stage external media into the
+  // draft's assets/<kind>/ — the same copyAssetDeduped path add-video and
+  // add-audio go through, so collisions de-collide by content hash exactly
+  // like theirs and re-adding already-staged media stays a no-op. The
+  // rewritten path is regenerated with resolve() from the draft folder, which
+  // is the only path shape the factory ever writes — wrong-OS separators in
+  // the old value disappear by construction, never by string conversion. A
+  // missing source is skipped (report-only: nothing on disk to stage) and
+  // dry-run skips the whole pass, because a file copy is a side effect the
+  // caller's discarded draft write cannot roll back.
+  if (opts.draftDir && opts.checkLocalPaths && !opts.dryRun) {
+    for (const kind of ["videos", "audios"] as const) {
+      for (const mat of draft.materials[kind] ?? []) {
+        const m = mat as { id: string; path?: string; material_name?: unknown; name?: unknown };
+        if (typeof m.path !== "string" || m.path.length === 0) continue;
+        if (m.path.startsWith("http://") || m.path.startsWith("https://")) continue;
+        if (!isAbsoluteAnyOs(m.path) || isUnderDir(m.path, opts.draftDir)) continue;
+        if (!fileExists(m.path)) continue;
+        const assetKind = kind === "audios" ? "audio" : "video";
+        const assetsDir = resolve(opts.draftDir, "assets", assetKind);
+        const destPath = copyAssetDeduped(m.path, assetsDir, assetKind === "audio" ? "audio.mp3" : "media");
+        m.path = destPath;
+        // Keep the display-name fields tracking the staged file, the
+        // replace-media convention — only visible when de-collision renamed.
+        const filename = basename(destPath);
+        if ("material_name" in m) m.material_name = filename;
+        if ("name" in m) m.name = filename;
+      }
+    }
+  }
+
   const after = lintDraft(draft, opts);
   const remaining: LintIssue[] = [];
   const afterKeys = new Set(after.map(issueKey));
@@ -602,6 +762,23 @@ function wrapLine(line: string, maxChars: number): string {
   return out + rest;
 }
 
+// True when closing the main-track gap that opens at `gapStartUs` is
+// mechanically safe: no OTHER track has a segment still playing at or
+// starting after that point, so the later main-track segments can move left
+// without changing their timing relationship to any other track's content.
+// Strict `>`: a segment that ends exactly at the gap start touches nothing
+// that moves. Overlay video tracks count as other tracks — only the first
+// video track is magnetic.
+function canCloseMainTrackGap(draft: Draft, mainTrack: Track, gapStartUs: number): boolean {
+  for (const track of draft.tracks) {
+    if (track === mainTrack) continue;
+    for (const s of track.segments) {
+      if (s.target_timerange.start + s.target_timerange.duration > gapStartUs) return false;
+    }
+  }
+  return true;
+}
+
 function issueKey(i: LintIssue): string {
   return `${i.code}|${i.location?.segment_id ?? ""}|${i.location?.material_id ?? ""}|${i.location?.path ?? ""}`;
 }
@@ -632,6 +809,24 @@ function fileExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Absolute on either OS: POSIX /…, Windows drive X:\ or X:/, or UNC \\host.
+// Only these can be judged against the draft folder — a relative (or
+// placeholder) path resolves against the draft folder and is never flagged.
+function isAbsoluteAnyOs(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
+}
+
+// Prefix containment tolerant of wrong-OS separators, the same both-styles
+// compare store.ts (managed-path detection) and factory.ts
+// (renameEntryFields) already use. No case-folding: renameEntryFields — the
+// convention for comparing real path values, not a fixed marker — doesn't.
+function isUnderDir(p: string, dir: string): boolean {
+  const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "");
+  const target = norm(p);
+  const base = norm(dir);
+  return target === base || target.startsWith(`${base}/`);
 }
 
 function shortId(id: string): string {
