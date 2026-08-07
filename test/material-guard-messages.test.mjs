@@ -97,7 +97,7 @@ describe("text material guard wording", () => {
 
   it("text-ranges reports the missing text material", () => {
     const segId = stageMissingTextMaterial();
-    const r = spawnCli(["text-ranges", fix.path, segId, "--styles", '[{"range":[0,1],"size":10}]']);
+    const r = spawnCli(["text-ranges", fix.path, segId, "--styles", '[{"start":0,"end":1,"size":10}]']);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, new RegExp(`Text material not found for segment ${segId}`));
   });
