@@ -13,7 +13,7 @@ import { basename, dirname, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
-import { findMaterialGlobal, findSegment, writeAtomic } from "./draft.js";
+import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { isManagedDraftPath, parseCandidate } from "./store.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
@@ -1331,15 +1331,7 @@ export function addText(
   // Find or create text track
   let track = draft.tracks.find((t) => t.type === "text" && (t.name === trackName || !opts.trackName));
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "text",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("text", trackName, false);
     draft.tracks.push(track);
   }
 
@@ -1414,15 +1406,7 @@ export function addAudio(
   // Find or create audio track
   let track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "audio",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("audio", trackName, false);
     draft.tracks.push(track);
   }
 
@@ -1516,15 +1500,7 @@ export function addVideo(
   // Find or create video track
   let track = draft.tracks.find((t) => t.type === "video" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "video",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("video", trackName, false);
     draft.tracks.push(track);
   }
 
@@ -1911,15 +1887,7 @@ export function applyTemplate(
   // Find or create track
   let track = draft.tracks.find((t) => t.type === template.type);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: template.type,
-      name: template.name || template.type,
-      attribute: 0,
-      segments: [],
-      is_default_name: true,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack(template.type, template.name || template.type, true);
     draft.tracks.push(track);
   }
 
@@ -2033,15 +2001,7 @@ export function duplicateSegment(
     const names = new Set(draft.tracks.map((t) => t.name));
     let name = `${sourceTrack.name}-copy`;
     for (let n = 2; names.has(name); n++) name = `${sourceTrack.name}-copy-${n}`;
-    track = {
-      id: uuid(),
-      type: sourceTrack.type,
-      name,
-      attribute: 0,
-      segments: [],
-      is_default_name: false,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack(sourceTrack.type, name, false);
     draft.tracks.splice(draft.tracks.indexOf(sourceTrack) + 1, 0, track);
     createdTrack = true;
   }
@@ -2123,15 +2083,7 @@ export function addSticker(
 
   let track = draft.tracks.find((t) => t.type === "sticker" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "sticker",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("sticker", trackName, !opts.trackName);
     draft.tracks.push(track);
   }
 
@@ -2256,6 +2208,62 @@ export interface AddEffectOptions {
   bindSegmentId?: string;
 }
 
+// addEffect/addFilter share their track plumbing. The uuid() order is
+// load-bearing — segment, then material, then track — because drafts are
+// compared byte-for-byte.
+function effectTrackSlot(
+  draft: Draft,
+  type: "effect" | "filter",
+  trackNameOpt: string | undefined,
+): { segId: string; matId: string; track: Track } {
+  const segId = uuid();
+  const matId = uuid();
+  const trackName = trackNameOpt ?? type;
+
+  let track = draft.tracks.find((t) => t.type === type && t.name === trackName);
+  if (!track) {
+    track = makeTrack(type, trackName, !trackNameOpt);
+    draft.tracks.push(track);
+  }
+  return { segId, matId, track };
+}
+
+// Effect/filter track segments: no clip, no speed, no companions — just the
+// segment pointing at the material with a target_timerange. Registers the
+// material first, so both land in the same order addEffect always wrote them.
+function pushEffectSegment(
+  draft: Draft,
+  slot: { segId: string; matId: string; track: Track },
+  material: Record<string, unknown>,
+  range: { start: number; duration: number },
+  name: string,
+): { segmentId: string; materialId: string; trackId: string; name: string } {
+  if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
+  (draft.materials.video_effects as Array<Record<string, unknown>>).push(material);
+
+  const seg: Segment = {
+    id: slot.segId,
+    material_id: slot.matId,
+    raw_segment_id: slot.track.id,
+    target_timerange: { start: range.start, duration: range.duration },
+    source_timerange: { start: 0, duration: range.duration },
+    speed: 1,
+    volume: 1,
+    visible: true,
+    reverse: false,
+    clip: null,
+    render_index: 11000,
+    track_render_index: 0,
+    track_attribute: 0,
+    extra_material_refs: [],
+    common_keyframes: [],
+    keyframe_refs: [],
+  } as unknown as Segment;
+  slot.track.segments.push(seg);
+
+  return { segmentId: slot.segId, materialId: slot.matId, trackId: slot.track.id, name };
+}
+
 export function addEffect(
   draft: Draft,
   opts: AddEffectOptions,
@@ -2305,23 +2313,7 @@ export function addEffect(
     bindSegmentId = bound.segment.id;
   }
 
-  const segId = uuid();
-  const matId = uuid();
-  const trackName = opts.trackName ?? "effect";
-
-  let track = draft.tracks.find((t) => t.type === "effect" && t.name === trackName);
-  if (!track) {
-    track = {
-      id: uuid(),
-      type: "effect",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
-    draft.tracks.push(track);
-  }
+  const slot = effectTrackSlot(draft, "effect", opts.trackName);
 
   const effectMaterial = {
     adjust_params: (opts.params || []).map((v, i) => ({ name: `param_${i}`, value: v, default_value: v })),
@@ -2337,7 +2329,7 @@ export function addEffect(
     disable_effect_faces: [],
     effect_id: meta.effect_id,
     formula_id: "",
-    id: matId,
+    id: slot.matId,
     name: meta.name,
     platform: "all",
     render_index: 11000,
@@ -2351,32 +2343,7 @@ export function addEffect(
     value: opts.intensity ?? 1.0,
     version: "",
   };
-  if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
-  (draft.materials.video_effects as Array<Record<string, unknown>>).push(effectMaterial);
-
-  // Effect track segments: no clip, no speed, no companions — just the segment
-  // pointing at the effect material with a target_timerange.
-  const seg: Segment = {
-    id: segId,
-    material_id: matId,
-    raw_segment_id: track.id,
-    target_timerange: { start: opts.start, duration: opts.duration },
-    source_timerange: { start: 0, duration: opts.duration },
-    speed: 1,
-    volume: 1,
-    visible: true,
-    reverse: false,
-    clip: null,
-    render_index: 11000,
-    track_render_index: 0,
-    track_attribute: 0,
-    extra_material_refs: [],
-    common_keyframes: [],
-    keyframe_refs: [],
-  } as unknown as Segment;
-  track.segments.push(seg);
-
-  return { segmentId: segId, materialId: matId, trackId: track.id, name: meta.name };
+  return pushEffectSegment(draft, slot, effectMaterial, opts, meta.name);
 }
 
 // --- Mix mode (blend mode) on video segments ---
@@ -2411,18 +2378,9 @@ export function setMixMode(
   if (!(slug in MIX_MODES)) {
     throw new Error(`Unknown blend mode: ${mode}. Valid: ${mixModeSlugs().join(", ")}`);
   }
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  const seg = found.segment;
-  // Mix mode lives on the *video material*, not the segment. Look up by material_id.
-  const videos = (draft.materials.videos ?? []) as Array<Record<string, unknown> & { id: string; type?: string }>;
-  const mat = videos.find((v) => v.id === seg.material_id);
-  if (!mat) {
-    throw new Error(`mix-mode only applies to video/photo segments (no video material for ${segmentId})`);
-  }
-  if (mat.type !== "video" && mat.type !== "photo") {
-    throw new Error(`mix-mode only applies to video/photo materials (got type=${mat.type})`);
-  }
+  // Mix mode lives on the *video material*, not the segment — the same lookup
+  // crop needs, so it shares findCropMaterial.
+  const { seg, mat } = findCropMaterial(draft, segmentId, "mix-mode");
   const value = MIX_MODES[slug];
   mat.mix_mode = value;
   return { segmentId: seg.id, material_id: mat.id, mix_mode: value };
@@ -2469,10 +2427,12 @@ export function cropRectForRatio(width: number, height: number, preset: string):
   return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
 }
 
-// The crop lives on the *video material*, not the segment (same as mix-mode).
+// The crop lives on the *video material*, not the segment (same as mix-mode,
+// which shares this lookup). `label` names the caller in the thrown errors.
 function findCropMaterial(
   draft: Draft,
   segmentId: string,
+  label = "crop",
 ): { seg: Segment; mat: Record<string, unknown> & { id: string; type?: string } } {
   const found = findSegment(draft, segmentId);
   if (!found) throw new Error(`Segment not found: ${segmentId}`);
@@ -2480,10 +2440,10 @@ function findCropMaterial(
   const videos = (draft.materials.videos ?? []) as Array<Record<string, unknown> & { id: string; type?: string }>;
   const mat = videos.find((v) => v.id === seg.material_id);
   if (!mat) {
-    throw new Error(`crop only applies to video/photo segments (no video material for ${segmentId})`);
+    throw new Error(`${label} only applies to video/photo segments (no video material for ${segmentId})`);
   }
   if (mat.type !== "video" && mat.type !== "photo") {
-    throw new Error(`crop only applies to video/photo materials (got type=${mat.type})`);
+    throw new Error(`${label} only applies to video/photo materials (got type=${mat.type})`);
   }
   return { seg, mat };
 }
@@ -2717,23 +2677,7 @@ export function addFilter(
     meta = { name: hit.name, effect_id: hit.effect_id, resource_id: hit.resource_id };
   }
 
-  const segId = uuid();
-  const matId = uuid();
-  const trackName = opts.trackName ?? "filter";
-
-  let track = draft.tracks.find((t) => t.type === "filter" && t.name === trackName);
-  if (!track) {
-    track = {
-      id: uuid(),
-      type: "filter",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
-    draft.tracks.push(track);
-  }
+  const slot = effectTrackSlot(draft, "filter", opts.trackName);
 
   const value = opts.intensity ?? 1.0;
   const filterMaterial = {
@@ -2745,7 +2689,7 @@ export function addFilter(
     common_keyframes: [],
     effect_id: meta.effect_id,
     formula_id: "",
-    id: matId,
+    id: slot.matId,
     name: meta.name,
     platform: "all",
     render_index: 11000,
@@ -2759,28 +2703,5 @@ export function addFilter(
     value,
     version: "",
   };
-  if (!Array.isArray(draft.materials.video_effects)) draft.materials.video_effects = [];
-  (draft.materials.video_effects as Array<Record<string, unknown>>).push(filterMaterial);
-
-  const seg: Segment = {
-    id: segId,
-    material_id: matId,
-    raw_segment_id: track.id,
-    target_timerange: { start: opts.start, duration: opts.duration },
-    source_timerange: { start: 0, duration: opts.duration },
-    speed: 1,
-    volume: 1,
-    visible: true,
-    reverse: false,
-    clip: null,
-    render_index: 11000,
-    track_render_index: 0,
-    track_attribute: 0,
-    extra_material_refs: [],
-    common_keyframes: [],
-    keyframe_refs: [],
-  } as unknown as Segment;
-  track.segments.push(seg);
-
-  return { segmentId: segId, materialId: matId, trackId: track.id, name: meta.name };
+  return pushEffectSegment(draft, slot, filterMaterial, opts, meta.name);
 }

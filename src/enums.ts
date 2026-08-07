@@ -3,7 +3,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { userEntriesForCategory } from "./user-enums.js";
 
-// Reads enums.json next to this module. After `tsc && cp src/enums.json dist/enums.json`,
+// Reads enums.json next to this module. The build re-serializes src/enums.json into
+// dist/enums.json without indentation (same values, ~65 KB smaller in the tarball), so
 // the compiled module in dist/ sees dist/enums.json; in dev (tsx src/...), src/enums.json.
 
 export type Namespace = "capcut" | "jianying";

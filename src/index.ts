@@ -153,6 +153,7 @@ import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import { translateDraft } from "./translate.js";
 import { harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } from "./user-enums.js";
 import { assessWriteSafety, detectVersion } from "./version.js";
+import type { WikimediaAsset } from "./wikimedia.js";
 
 export const COMMANDS = [
   "info",
@@ -1409,6 +1410,22 @@ function requireArgs(args: string[], min: number, usage: string): void {
   if (args.length < min) die(`Missing arguments. Usage: ${usage}`);
 }
 
+/**
+ * Default template resolution shared by init / quickstart / compile / edit:
+ * user --template > ../CapCutAPI/template > the bundled _init template.
+ * Stays in this module because it resolves against `import.meta.url`.
+ */
+function resolveTemplateDir(flags: Flags): string {
+  const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
+  const bundledTemplate = path.join(cliDir, "templates", "_init");
+  let templateDir = flags.template ?? externalTemplate;
+  if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
+    templateDir = bundledTemplate;
+  }
+  return templateDir;
+}
+
 // --- Commands ---
 
 function cmdInfo(draft: Draft, flags: Flags): void {
@@ -1861,13 +1878,7 @@ function cmdImportTimeline(positional: string[], flags: Flags): void {
   if (flags.out) {
     // Fresh draft from the bundled template — the same resolution init/compile use.
     const outDir = path.resolve(flags.out);
-    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
-    const bundledTemplate = path.join(cliDir, "templates", "_init");
-    let templateDir = flags.template ?? externalTemplate;
-    if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
-      templateDir = bundledTemplate;
-    }
+    const templateDir = resolveTemplateDir(flags);
     const created = initDraft({ name: path.basename(outDir), templateDir, draftsDir: path.dirname(outDir) });
     ({ draft, filePath } = loadDraft(created.filePath));
     draftPath = created.draftPath;
@@ -2023,6 +2034,26 @@ function cmdMaterialDetail(draft: Draft, matId: string, flags: Flags): void {
 
 // --- Add commands ---
 
+// Licence provenance echoed after a Wikimedia fetch. add-video appends the
+// media triple; the key ORDER is the emitted JSON's order, so the shared keys
+// stay first exactly as both callers wrote them.
+function wikimediaPayload(asset: WikimediaAsset, withMedia = false): Record<string, unknown> {
+  const block: Record<string, unknown> = {
+    file_title: asset.fileTitle,
+    license: asset.license.raw,
+    license_class: asset.license.class,
+    artist: asset.license.artist,
+    credit: asset.license.credit,
+    description_url: asset.descriptionUrl,
+  };
+  if (withMedia) {
+    block.width = asset.width;
+    block.height = asset.height;
+    block.mime = asset.mime;
+  }
+  return block;
+}
+
 async function cmdAddAudio(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
   const audioPath = positional[2];
   const startStr = positional[3];
@@ -2060,16 +2091,7 @@ async function cmdAddAudio(draft: Draft, filePath: string, positional: string[],
     duration_source: durationStr ? "argument" : "ffprobe",
     media_probe: media,
   };
-  if (asset) {
-    payload.wikimedia = {
-      file_title: asset.fileTitle,
-      license: asset.license.raw,
-      license_class: asset.license.class,
-      artist: asset.license.artist,
-      credit: asset.license.credit,
-      description_url: asset.descriptionUrl,
-    };
-  }
+  if (asset) payload.wikimedia = wikimediaPayload(asset);
   if (warning) payload.warning = warning;
   out(payload, flags);
 }
@@ -2139,22 +2161,39 @@ async function cmdAddVideo(draft: Draft, filePath: string, positional: string[],
     dimension_source: dimensionSource,
     media_probe: media,
   };
-  if (asset) {
-    payload.wikimedia = {
-      file_title: asset.fileTitle,
-      license: asset.license.raw,
-      license_class: asset.license.class,
-      artist: asset.license.artist,
-      credit: asset.license.credit,
-      description_url: asset.descriptionUrl,
-      width: asset.width,
-      height: asset.height,
-      mime: asset.mime,
-    };
-  }
+  if (asset) payload.wikimedia = wikimediaPayload(asset, true);
   const warnings = [warning, dimensionWarning].filter(Boolean);
   if (warnings.length) payload.warning = warnings.join(" ");
   out(payload, flags);
+}
+
+// The text-styling flags, lifted verbatim into the options object setTextStyle
+// takes. add-text also counts the defined values here to decide whether any
+// styling was asked for, so the key set is load-bearing.
+function textStyleOptsFromFlags(flags: Flags): TextStyleOptions {
+  return {
+    alpha: flags.alpha,
+    vertical: flags.vertical,
+    fixedWidth: flags.fixedWidth,
+    fixedHeight: flags.fixedHeight,
+    shadow: flags.shadow,
+    shadowAlpha: flags.shadowAlpha,
+    shadowAngle: flags.shadowAngle,
+    shadowColor: flags.shadowColor,
+    shadowDistance: flags.shadowDistance,
+    shadowSmoothing: flags.shadowSmoothing,
+    borderWidth: flags.borderWidth,
+    borderColor: flags.borderColor,
+    borderAlpha: flags.borderAlpha,
+    bgColor: flags.bgColor,
+    bgAlpha: flags.bgAlpha,
+    bgStyle: flags.bgStyle,
+    bgRoundRadius: flags.bgRoundRadius,
+    bgWidth: flags.bgWidth,
+    bgHeight: flags.bgHeight,
+    bgHOffset: flags.bgHOffset,
+    bgVOffset: flags.bgVOffset,
+  };
 }
 
 // Explicit CLI flags beat preset values: stamp the flag values over a clone of
@@ -2343,29 +2382,7 @@ function cmdBgBlur(draft: Draft, filePath: string, positional: string[], flags: 
 function cmdTextStyle(draft: Draft, filePath: string, positional: string[], flags: Flags): void {
   const segId = positional[2];
   if (!segId) die(`Usage: capcut text-style <project> <id> [flags]`);
-  const opts: TextStyleOptions = {
-    alpha: flags.alpha,
-    vertical: flags.vertical,
-    fixedWidth: flags.fixedWidth,
-    fixedHeight: flags.fixedHeight,
-    shadow: flags.shadow,
-    shadowAlpha: flags.shadowAlpha,
-    shadowAngle: flags.shadowAngle,
-    shadowColor: flags.shadowColor,
-    shadowDistance: flags.shadowDistance,
-    shadowSmoothing: flags.shadowSmoothing,
-    borderWidth: flags.borderWidth,
-    borderColor: flags.borderColor,
-    borderAlpha: flags.borderAlpha,
-    bgColor: flags.bgColor,
-    bgAlpha: flags.bgAlpha,
-    bgStyle: flags.bgStyle,
-    bgRoundRadius: flags.bgRoundRadius,
-    bgWidth: flags.bgWidth,
-    bgHeight: flags.bgHeight,
-    bgHOffset: flags.bgHOffset,
-    bgVOffset: flags.bgVOffset,
-  };
+  const opts = textStyleOptsFromFlags(flags);
   const applied: string[] = [];
   let materialId = "";
   if (flags.preset) {
@@ -2870,29 +2887,7 @@ function importCuesToDraft(
     if (!ref) die(`Style-ref segment not found: ${flags.styleRef}`);
   }
 
-  const styleOpts: TextStyleOptions = {
-    alpha: flags.alpha,
-    vertical: flags.vertical,
-    fixedWidth: flags.fixedWidth,
-    fixedHeight: flags.fixedHeight,
-    shadow: flags.shadow,
-    shadowAlpha: flags.shadowAlpha,
-    shadowAngle: flags.shadowAngle,
-    shadowColor: flags.shadowColor,
-    shadowDistance: flags.shadowDistance,
-    shadowSmoothing: flags.shadowSmoothing,
-    borderWidth: flags.borderWidth,
-    borderColor: flags.borderColor,
-    borderAlpha: flags.borderAlpha,
-    bgColor: flags.bgColor,
-    bgAlpha: flags.bgAlpha,
-    bgStyle: flags.bgStyle,
-    bgRoundRadius: flags.bgRoundRadius,
-    bgWidth: flags.bgWidth,
-    bgHeight: flags.bgHeight,
-    bgHOffset: flags.bgHOffset,
-    bgVOffset: flags.bgVOffset,
-  };
+  const styleOpts = textStyleOptsFromFlags(flags);
   const hasStyleFlags = Object.values(styleOpts).some((v) => v !== undefined);
   const emphasis = keywordEmphasisFromFlags(flags);
 
@@ -4287,13 +4282,7 @@ function cmdCompile(positional: string[], flags: Flags): void {
     return;
   }
 
-  const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
-  const bundledTemplate = path.join(cliDir, "templates", "_init");
-  let templateDir = flags.template ?? externalTemplate;
-  if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
-    templateDir = bundledTemplate;
-  }
+  const templateDir = resolveTemplateDir(flags);
 
   // Target draft directory: --out wins; else <drafts>/<spec.name>; else cwd/<spec.name>.
   const name = spec.name ?? "compiled-draft";
@@ -4335,13 +4324,7 @@ function cmdCompileData(specPath: string, flags: Flags): void {
   const input = stripBom(readFileSync(flags.data === "-" ? 0 : (flags.data as string), "utf-8")).trim();
   if (!input) die(flags.data === "-" ? "No input on stdin for --data" : `No rows in ${flags.data}`);
 
-  const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
-  const bundledTemplate = path.join(cliDir, "templates", "_init");
-  let templateDir = flags.template ?? externalTemplate;
-  if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
-    templateDir = bundledTemplate;
-  }
+  const templateDir = resolveTemplateDir(flags);
   const draftsRoot = path.resolve(flags.drafts ?? requireDraftsDir());
   const specDir = path.dirname(path.resolve(specPath));
 
@@ -4653,14 +4636,7 @@ async function main(): Promise<void> {
   if (cmd === "init") {
     const name = projectPath; // positional[1] is the name for init
     if (!name) die("Missing name. Usage: capcut init <name> [--template <dir>] [--drafts <dir>]");
-    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    // Default template resolution: user --template > ../CapCutAPI/template > bundled _init template
-    const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
-    const bundledTemplate = path.join(cliDir, "templates", "_init");
-    let templateDir = flags.template ?? externalTemplate;
-    if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
-      templateDir = bundledTemplate;
-    }
+    const templateDir = resolveTemplateDir(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
     const result = initDraft({ name, templateDir, draftsDir });
     out(
@@ -4684,13 +4660,7 @@ async function main(): Promise<void> {
     if (!name) {
       die("Missing name. Usage: capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]");
     }
-    const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
-    const bundledTemplate = path.join(cliDir, "templates", "_init");
-    let templateDir = flags.template ?? externalTemplate;
-    if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
-      templateDir = bundledTemplate;
-    }
+    const templateDir = resolveTemplateDir(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
     const result = runQuickstart({
       name,

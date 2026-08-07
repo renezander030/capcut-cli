@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { stripBom } from "./bom.js";
-import { setBubble, setTextRanges, type TextRangeInput } from "./decorators.js";
+import { hexToRgb01, requireTextMaterial, setBubble, setTextRanges, type TextRangeInput } from "./decorators.js";
 import type { Draft, MaterialText } from "./draft.js";
-import { findMaterial, findSegment } from "./draft.js";
 import { STYLE_FIELDS } from "./factory.js";
 
 // --- Text style presets (make-preset / --preset) ---
@@ -23,11 +22,6 @@ export interface TextStylePreset {
   transform?: { x: number; y: number };
   bubble?: { effect_id: string; resource_id: string };
   text_ranges?: TextRangeInput[];
-}
-
-function hexToRgb01(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
 }
 
 function rgb01ToHex(rgb: [number, number, number]): string {
@@ -64,14 +58,7 @@ export function extractTextPreset(
   draft: Draft,
   segmentId: string,
 ): { preset: TextStylePreset; segmentId: string; materialId: string; captured: string[] } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  if (found.track.type !== "text") {
-    throw new Error(`make-preset only applies to text segments (track type: ${found.track.type})`);
-  }
-  const seg = found.segment;
-  const mat = findMaterial(draft.materials.texts, seg.material_id);
-  if (!mat) throw new Error(`Text material not found for segment ${segmentId}`);
+  const { seg, text: mat } = requireTextMaterial(draft, segmentId, "make-preset");
 
   const m = mat as unknown as Record<string, unknown>;
   const style: Record<string, unknown> = {};
@@ -291,14 +278,7 @@ export function applyTextPreset(
   segmentId: string,
   preset: TextStylePreset,
 ): { materialId: string; applied: string[] } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
-  if (found.track.type !== "text") {
-    throw new Error(`--preset only applies to text segments (track type: ${found.track.type})`);
-  }
-  const seg = found.segment;
-  const mat = findMaterial(draft.materials.texts, seg.material_id);
-  if (!mat) throw new Error(`Text material not found for segment ${segmentId}`);
+  const { seg, text: mat } = requireTextMaterial(draft, segmentId, "--preset");
 
   const m = mat as unknown as Record<string, unknown>;
   const applied: string[] = [];

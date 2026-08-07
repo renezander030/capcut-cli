@@ -1,5 +1,6 @@
 import { randomUUID as uuid } from "node:crypto";
-import type { Draft, Segment, Track } from "./draft.js";
+import type { Draft, Segment } from "./draft.js";
+import { makeTrack } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 
 export interface AddSfxOptions {
@@ -28,15 +29,7 @@ export function addSfx(
 
   let track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
   if (!track) {
-    track = {
-      id: uuid(),
-      type: "audio",
-      name: trackName,
-      attribute: 0,
-      segments: [],
-      is_default_name: !opts.trackName,
-      flag: 0,
-    } as unknown as Track;
+    track = makeTrack("audio", trackName, !opts.trackName);
     draft.tracks.push(track);
   }
 
