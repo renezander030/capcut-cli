@@ -166,12 +166,23 @@ export function parseCandidate(path: string): DraftCandidate {
         error: "JSON file does not contain a recognizable timeline",
       };
     }
+    // Lazy: hashing the timeline means a full JSON.stringify plus a sha256 of
+    // the whole draft, for EVERY readable sibling, on EVERY discovery — and
+    // only three things ever read it (the `diverged` flag, `sync-timelines`'
+    // plan, `diagnose`'s candidate table). Every read command and every write
+    // paid for a value it never looked at. Memoized on first access; a
+    // candidate is a discovery snapshot, so the timeline it hashes is the one
+    // discovery found.
+    let timelineHash: string | null = null;
     return {
       ...base,
       parseable: true,
       envelopePath: found.path,
       draft: found.draft,
-      timelineHash: hash(JSON.stringify(found.draft)),
+      get timelineHash(): string {
+        if (timelineHash === null) timelineHash = hash(JSON.stringify(found.draft));
+        return timelineHash;
+      },
     };
   } catch (error) {
     return {
@@ -291,7 +302,6 @@ export function discoverDraftStore(input: string): DraftStore {
     .find((candidate): candidate is DraftCandidate => Boolean(candidate));
   canonical ??= parseable[0];
 
-  const timelineHashes = new Set(parseable.map((candidate) => candidate.timelineHash).filter(Boolean));
   const contentReadable = parseable.some((candidate) => candidate.name === "draft_content.json");
   const infoReadable = parseable.some((candidate) => candidate.name === "draft_info.json");
   // Issue #50 detection only: the nested layout changes NOTHING about
@@ -307,7 +317,12 @@ export function discoverDraftStore(input: string): DraftStore {
     candidates,
     version,
     modernStorage,
-    diverged: timelineHashes.size > 1,
+    // Getter so the timeline hashes it compares stay unforced: only `diagnose`
+    // reads this, and forcing them here would put the cost straight back on
+    // every command discovery runs for.
+    get diverged(): boolean {
+      return new Set(parseable.map((candidate) => candidate.timelineHash).filter(Boolean)).size > 1;
+    },
     layout:
       nested.present && !modernStorage
         ? "timelines-nested"
