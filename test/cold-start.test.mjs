@@ -23,10 +23,6 @@ const HOT_PATH_MODULES = [
   "version",
   // Time formatting for the common read commands (info/tracks/segments/texts).
   "time",
-  // Shared by the mutating commands; still static (see CHANGELOG 0.17.1).
-  "decorators",
-  "factory",
-  "preset",
 ];
 
 // Commands that run in an early branch of main() that ends in process.exit().
@@ -57,8 +53,20 @@ describe("cold start", () => {
   it("loads the rarely-used command modules lazily", () => {
     const lazy = dynamicImports(CLI_SOURCE);
     // A representative slice: the heaviest module (caption pulls the whisper
-    // path) plus one per command family that was converted.
-    for (const expected of ["caption", "compile", "doctor", "lint", "quickstart", "render", "serve", "srt"]) {
+    // path), the two the mutating commands share, plus one per command family.
+    for (const expected of [
+      "caption",
+      "compile",
+      "decorators",
+      "doctor",
+      "factory",
+      "lint",
+      "preset",
+      "quickstart",
+      "render",
+      "serve",
+      "srt",
+    ]) {
       assert.ok(lazy.includes(expected), `expected ./${expected}.js to be imported lazily`);
     }
   });
