@@ -91,11 +91,19 @@ export const DEFAULT_LINT_OPTIONS: LintOptions = {
 
 export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS): LintIssue[] {
   const issues: LintIssue[] = [];
+  // Built on the first reference that needs it, not up front: a draft whose
+  // `materials` is missing entirely must still fail at the first lookup the
+  // way the per-reference scan did, and the first loop skips those segments.
+  let materialIds: Set<string> | null = null;
+  const materialExists = (id: string): boolean => {
+    if (materialIds === null) materialIds = materialIdSet(draft);
+    return materialIds.has(id);
+  };
 
   for (const seg of allSegments(draft)) {
     const s = seg.segment;
     if (!draft.materials || !s.material_id) continue;
-    if (!materialExistsAnywhere(draft, s.material_id)) {
+    if (!materialExists(s.material_id)) {
       issues.push({
         severity: "error",
         code: "missing-material",
@@ -115,7 +123,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     const s = seg.segment;
     for (const ref of s.extra_material_refs ?? []) {
       if (typeof ref !== "string" || ref === "") continue;
-      if (materialExistsAnywhere(draft, ref)) continue;
+      if (materialExists(ref)) continue;
       issues.push({
         severity: "warning",
         code: "dangling-companion-ref",
@@ -639,11 +647,19 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
   // Pass 4b (order-independent of the caption passes): drop dangling
   // companion refs — an extra_material_refs entry that resolves to no
   // material. Removes the REF only, never a segment or a material.
+  // No earlier pass adds or drops a material, so one id set answers the whole
+  // sweep. Lazy for the same reason lintDraft's is: the set is only reached
+  // once a ref has cleared the string check that always ran first.
+  let refIds: Set<string> | null = null;
+  const refResolves = (ref: string): boolean => {
+    if (refIds === null) refIds = materialIdSet(draft);
+    return refIds.has(ref);
+  };
   for (const track of draft.tracks) {
     for (const s of track.segments) {
       if (!Array.isArray(s.extra_material_refs)) continue;
       s.extra_material_refs = s.extra_material_refs.filter(
-        (ref) => typeof ref === "string" && ref !== "" && materialExistsAnywhere(draft, ref),
+        (ref) => typeof ref === "string" && ref !== "" && refResolves(ref),
       );
     }
   }
@@ -793,14 +809,23 @@ function allSegments(draft: Draft): Array<{ track: Track; segment: Segment }> {
   return result;
 }
 
-function materialExistsAnywhere(draft: Draft, id: string): boolean {
+// Every material id in the draft, collected in one pass over materials.*.
+// Resolving each segment's material_id (and each companion ref) by rescanning
+// every materials array is quadratic — a 4000-caption draft walked ~32M
+// entries per lint. Callers build this once and probe it instead. Only string
+// ids are collected: the scan it replaces compared against a string id, so a
+// material whose id is not a string could never match.
+function materialIdSet(draft: Draft): Set<string> {
+  const ids = new Set<string>();
   for (const arr of Object.values(draft.materials)) {
     if (!Array.isArray(arr)) continue;
     for (const m of arr) {
-      if (m && typeof m === "object" && (m as { id?: string }).id === id) return true;
+      if (m && typeof m === "object" && typeof (m as { id?: unknown }).id === "string") {
+        ids.add((m as { id: string }).id);
+      }
     }
   }
-  return false;
+  return ids;
 }
 
 function fileExists(path: string): boolean {
