@@ -147,9 +147,18 @@ const loadContexts = new Map<string, LoadContext>();
 export function loadDraft(path: string): { draft: Draft; filePath: string } {
   const store = discoverDraftStore(path);
   const filePath = store.canonical.path;
-  const draft = structuredClone(store.canonical.draft) as Draft;
+  // The caller gets the parsed timeline itself, not a copy of it. The store
+  // kept here never escapes this module — `loadContexts` is private and
+  // `saveDraft` is its only reader — and everything saveDraft takes from it is
+  // either fixed at discovery (`version`, `layout`, `projectDir`) or a string
+  // snapshot of the file on disk (`raw`, `path`, `envelopePath`), never
+  // anything re-derived from `canonical.draft`. So nothing observes the
+  // caller's edits through the store, and cloning the whole draft on every
+  // load — tens of milliseconds on a large project, on read commands too —
+  // bought nothing. Anything added to saveDraft that wants the draft as it was
+  // on disk must re-read it rather than reach for `store.canonical.draft`.
   loadContexts.set(resolve(filePath), { store });
-  return { draft, filePath };
+  return { draft: store.canonical.draft as Draft, filePath };
 }
 
 // Canonical bottom->top layer order CapCut expects in the tracks array.
