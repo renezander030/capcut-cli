@@ -18,6 +18,15 @@
   },
   "files": [
     "dist",
+    "!dist/*.d.ts",
+    "dist/lib.d.ts",
+    "dist/command-specs.d.ts",
+    "dist/doctor.d.ts",
+    "dist/draft.d.ts",
+    "dist/lint.d.ts",
+    "dist/runner.d.ts",
+    "dist/store.d.ts",
+    "dist/version.d.ts",
     "docs",
     "examples",
     "templates",
@@ -26,7 +35,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && node -e \"import('node:fs').then(fs=>fs.copyFileSync('src/enums.json','dist/enums.json'))\"",
+    "build": "tsc && node -e \"import('node:fs').then(fs=>fs.writeFileSync('dist/enums.json',JSON.stringify(JSON.parse(fs.readFileSync('src/enums.json','utf-8')))))\"",
     "prepublishOnly": "npm run build",
     "dev": "node --import tsx src/index.ts",
     "extract-enums": "python3 scripts/extract-enums.py",
