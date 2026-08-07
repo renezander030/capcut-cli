@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
-import { tmpDraft } from "./helpers/tmp-draft.mjs";
+import { tmpDir, tmpDraft } from "./helpers/tmp-draft.mjs";
 
 // Seed a dedicated text track (own materials, own segments) into a fixture
 // draft, so timing rules can't interact with the fixture's Subtitles track.
@@ -1352,6 +1353,259 @@ describe("capcut lint", () => {
 
         const afterTracks = JSON.parse(readFileSync(fix.path, "utf-8")).tracks.filter((t) => t.type !== "text");
         assert.deepEqual(afterTracks, beforeTracks, "non-text tracks must be untouched by a caption-only --fix");
+      });
+    });
+  });
+
+  describe("media-outside-draft detection + --fix stage-in", () => {
+    // Media referenced outside the draft folder breaks on any move — machine
+    // switch, media reorganization, or a sandboxed macOS build that cannot
+    // read outside the draft: the black-screen class (sun-guannan/
+    // VectCutAPI#48, #65; luoluoluo22/jianying-editor-skill#16). The rule
+    // needs path checks ON, so these tests never pass --no-check-paths;
+    // --no-probe keeps ffprobe noise off the dummy media files.
+
+    // Point the fixture's three media materials (videos[0], videos[1],
+    // audios[0]) at controlled locations; returns videos[0]'s material id.
+    function setMediaPaths(draftPath, [video0, video1, audio0]) {
+      const draft = JSON.parse(readFileSync(draftPath, "utf-8"));
+      draft.materials.videos[0].path = video0;
+      draft.materials.videos[1].path = video1;
+      draft.materials.audios[0].path = audio0;
+      writeFileSync(draftPath, JSON.stringify(draft));
+      return draft.materials.videos[0].id;
+    }
+
+    // Two existing files the shared setup keeps inside the draft folder —
+    // at its ROOT, deliberately: "inside" means anywhere under the folder,
+    // not only assets/, so a clean run must never create assets/ either.
+    function seedInsideMedia(dir) {
+      const video = join(dir, "inside-b.mp4");
+      const audio = join(dir, "inside-bed.mp3");
+      writeFileSync(video, "inside video bytes");
+      writeFileSync(audio, "inside audio bytes");
+      return [video, audio];
+    }
+
+    describe("detection", () => {
+      const fix = tmpDraft();
+      const ext = tmpDir();
+      after(() => {
+        fix.cleanup();
+        ext.cleanup();
+      });
+
+      it("flags external media as info (exit stays 0), fixable when the source exists, and copies nothing", () => {
+        const externalPath = join(ext.dir, "clip-a.mp4");
+        writeFileSync(externalPath, "external clip bytes");
+        const [insideVideo, insideAudio] = seedInsideMedia(fix.dir);
+        const video0Id = setMediaPaths(fix.path, [externalPath, insideVideo, insideAudio]);
+        const before = readFileSync(fix.path, "utf-8");
+
+        const r = spawnCli(["lint", fix.path, "--no-probe"]);
+        const found = r.json.issues.filter((i) => i.code === "media-outside-draft");
+        assert.equal(found.length, 1, `expected one media-outside-draft; got: ${JSON.stringify(r.json.issues)}`);
+        assert.equal(found[0].severity, "info", "external media is a deliberate choice on a huge installed base");
+        assert.equal(found[0].fixable, true, "the source exists, so --fix can stage it");
+        assert.equal(found[0].suggested_command, undefined, "fixable instances carry no suggested_command");
+        assert.equal(found[0].location.material_id, video0Id);
+        assert.equal(found[0].location.path, externalPath);
+        assert.equal(r.json.summary.info, 1);
+        assert.equal(r.status, 0, "info-severity findings never flip the exit code");
+
+        assert.equal(readFileSync(fix.path, "utf-8"), before, "detection must not write the draft");
+        assert.ok(!existsSync(join(fix.dir, "assets")), "detection without --fix must not stage anything");
+      });
+    });
+
+    describe("--fix stages the file in", () => {
+      const fix = tmpDraft();
+      const ext = tmpDir();
+      after(() => {
+        fix.cleanup();
+        ext.cleanup();
+      });
+
+      it("copies the file into assets/video/, rewrites the material path, and re-lints clean", () => {
+        const externalPath = join(ext.dir, "clip-a.mp4");
+        writeFileSync(externalPath, "external clip bytes");
+        const [insideVideo, insideAudio] = seedInsideMedia(fix.dir);
+        setMediaPaths(fix.path, [externalPath, insideVideo, insideAudio]);
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-probe"]);
+        assert.ok(
+          r.json.fixed.some((i) => i.code === "media-outside-draft"),
+          `the stage-in must be reported FIXED; got: ${JSON.stringify(r.json.fixed)}`,
+        );
+        assert.equal(r.status, 0);
+
+        const staged = join(fix.dir, "assets", "video", "clip-a.mp4");
+        assert.ok(existsSync(staged), "the file must actually be copied into assets/video/");
+        assert.equal(readFileSync(staged, "utf-8"), "external clip bytes");
+        assert.ok(existsSync(externalPath), "stage-in copies — the external original stays where it was");
+        assert.ok(existsSync(`${fix.path}.bak`), "the repair writes atomically with a .bak");
+
+        const repaired = JSON.parse(readFileSync(fix.path, "utf-8"));
+        assert.equal(repaired.materials.videos[0].path, staged, "the material path points at the staged copy");
+
+        const relint = spawnCli(["lint", fix.path, "--no-probe"]);
+        assert.ok(
+          !relint.json.issues.some((i) => i.code === "media-outside-draft"),
+          `re-lint should be clean; got: ${JSON.stringify(relint.json.issues)}`,
+        );
+        assert.equal(relint.status, 0);
+      });
+    });
+
+    describe("--fix de-collides a basename collision by content hash", () => {
+      const fix = tmpDraft();
+      const ext = tmpDir();
+      after(() => {
+        fix.cleanup();
+        ext.cleanup();
+      });
+
+      it("stages under <stem>.<sha1-8><ext> and leaves the existing asset untouched", () => {
+        const externalPath = join(ext.dir, "clip.mp4");
+        writeFileSync(externalPath, "external content A");
+        // A different file already sits at assets/video/clip.mp4 — silently
+        // skipping the copy would leave the draft on the wrong content.
+        mkdirSync(join(fix.dir, "assets", "video"), { recursive: true });
+        writeFileSync(join(fix.dir, "assets", "video", "clip.mp4"), "different content B");
+        const [insideVideo, insideAudio] = seedInsideMedia(fix.dir);
+        setMediaPaths(fix.path, [externalPath, insideVideo, insideAudio]);
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-probe"]);
+        assert.ok(
+          r.json.fixed.some((i) => i.code === "media-outside-draft"),
+          `the stage-in must be reported FIXED; got: ${JSON.stringify(r.json.fixed)}`,
+        );
+
+        const hash8 = createHash("sha1").update("external content A").digest("hex").slice(0, 8);
+        const staged = join(fix.dir, "assets", "video", `clip.${hash8}.mp4`);
+        assert.ok(existsSync(staged), `expected the de-collided copy at ${staged}`);
+        assert.equal(readFileSync(staged, "utf-8"), "external content A");
+        assert.equal(
+          readFileSync(join(fix.dir, "assets", "video", "clip.mp4"), "utf-8"),
+          "different content B",
+          "the colliding asset keeps its own content",
+        );
+        const repaired = JSON.parse(readFileSync(fix.path, "utf-8"));
+        assert.equal(repaired.materials.videos[0].path, staged, "the draft references the de-collided copy");
+      });
+    });
+
+    describe("missing source stays report-only", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("stamps fixable:false + relink suggested_command, and --fix leaves the file byte-identical", () => {
+        const [insideVideo] = seedInsideMedia(fix.dir);
+        // One gone POSIX path, one gone Windows path — wrong-OS absolute
+        // paths are judged (and flagged) like native ones.
+        setMediaPaths(fix.path, ["/nonexistent-external/clip-gone.mp4", insideVideo, "C:\\Users\\gone\\bed.mp3"]);
+
+        const detect = spawnCli(["lint", fix.path, "--no-probe"]);
+        const found = detect.json.issues.filter((i) => i.code === "media-outside-draft");
+        assert.equal(found.length, 2, `expected two media-outside-draft; got: ${JSON.stringify(detect.json.issues)}`);
+        for (const i of found) {
+          assert.equal(i.fixable, false, "nothing on disk to stage — must not be stamped fixable");
+          assert.match(i.suggested_command, /relink/, "report-only instances name the deliberate repair");
+        }
+        assert.equal(
+          detect.json.issues.filter((i) => i.code === "missing-file").length,
+          2,
+          "the missing-file error still fires independently",
+        );
+        assert.equal(detect.status, 2);
+
+        const before = readFileSync(fix.path, "utf-8");
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-probe"]);
+        assert.ok(
+          !r.json.fixed.some((i) => i.code === "media-outside-draft"),
+          `must not claim FIXED; got: ${JSON.stringify(r.json.fixed)}`,
+        );
+        assert.equal(readFileSync(fix.path, "utf-8"), before, "--fix must not rewrite a draft it didn't repair");
+        assert.ok(!existsSync(`${fix.path}.bak`), "no repair, no write, no .bak");
+        assert.ok(!existsSync(join(fix.dir, "assets")), "nothing may be staged for a missing source");
+      });
+    });
+
+    describe("wrong-OS separators count as inside", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("a rename-style mixed-separator path under the draft folder is never flagged as outside", () => {
+        const [insideVideo] = seedInsideMedia(fix.dir);
+        // The shape rename's tail-preserving prefix rewrite produces for a
+        // Windows-authored draft moved here: native folder + backslash tail.
+        // existsSync cannot see it on this OS, so missing-file still fires
+        // (unchanged behaviour) — but the tolerant prefix compare must keep
+        // media-outside-draft silent: the media IS inside the draft folder.
+        const mixed = `${fix.dir}\\inside-bed.mp3`;
+        setMediaPaths(fix.path, [insideVideo, insideVideo, mixed]);
+
+        const r = spawnCli(["lint", fix.path, "--no-probe"]);
+        assert.ok(
+          !r.json.issues.some((i) => i.code === "media-outside-draft"),
+          `inside media must not flag, whatever the separators; got: ${JSON.stringify(r.json.issues)}`,
+        );
+        assert.ok(
+          r.json.issues.some((i) => i.code === "missing-file" && i.location?.path === mixed),
+          "the unreadable mixed-separator path stays a missing-file error",
+        );
+        assert.equal(r.status, 2);
+      });
+    });
+
+    describe("--fix --dry-run previews without side effects", () => {
+      const fix = tmpDraft();
+      const ext = tmpDir();
+      after(() => {
+        fix.cleanup();
+        ext.cleanup();
+      });
+
+      it("copies nothing, writes nothing, and keeps the issue reported as fixable", () => {
+        const externalPath = join(ext.dir, "clip-a.mp4");
+        writeFileSync(externalPath, "external clip bytes");
+        const [insideVideo, insideAudio] = seedInsideMedia(fix.dir);
+        setMediaPaths(fix.path, [externalPath, insideVideo, insideAudio]);
+        const before = readFileSync(fix.path, "utf-8");
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--dry-run", "--no-probe"]);
+        assert.ok(
+          !r.json.fixed.some((i) => i.code === "media-outside-draft"),
+          "a file copy cannot be rolled back, so dry-run must not perform or claim it",
+        );
+        assert.ok(
+          r.json.issues.some((i) => i.code === "media-outside-draft" && i.fixable === true),
+          `the issue stays reported, still stamped fixable; got: ${JSON.stringify(r.json.issues)}`,
+        );
+        assert.equal(readFileSync(fix.path, "utf-8"), before, "dry-run writes nothing");
+        assert.ok(!existsSync(join(fix.dir, "assets")), "dry-run must not stage anything");
+      });
+    });
+
+    describe("untouched path: media already inside the draft stays byte-identical", () => {
+      const fix = tmpDraft();
+      after(() => fix.cleanup());
+
+      it("lint --fix on an all-inside draft writes nothing", () => {
+        const [insideVideo, insideAudio] = seedInsideMedia(fix.dir);
+        setMediaPaths(fix.path, [insideVideo, insideVideo, insideAudio]);
+        const before = readFileSync(fix.path, "utf-8");
+
+        const r = spawnCli(["lint", fix.path, "--fix", "--no-probe"]);
+        assert.equal(r.json.fixed.length, 0, `nothing to fix; got: ${JSON.stringify(r.json.fixed)}`);
+        assert.ok(!r.json.issues.some((i) => i.code === "media-outside-draft"));
+        assert.equal(r.status, 0);
+        assert.equal(
+          readFileSync(fix.path, "utf-8"),
+          before,
+          "with the rule not in play the written draft must stay byte-identical",
+        );
+        assert.ok(!existsSync(`${fix.path}.bak`), "no repair, no write, no .bak");
       });
     });
   });

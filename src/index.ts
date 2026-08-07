@@ -251,7 +251,7 @@ Overview (start here):
   materials  <project> --type <type>            List items of one material type
   version    <project>                          Detect CapCut/JianYing version + schema flags + support status
   lint       <project>                          Schema-aware checks (overlaps, line length, missing
-             files, main-track gaps)
+             files, main-track gaps, media outside the draft folder)
              Options:
                --max-chars <n>     Caption line cap (default 42)
                --max-cue-secs <n>  Caption duration cap (default 7)
@@ -260,12 +260,15 @@ Overview (start here):
                --fix               Auto-repair issues stamped fixable:true
                                    (cue-too-long, caption-overlap,
                                    caption-gap-too-small, line-too-long,
-                                   main-track-gap). Never shrinks a caption
-                                   below 100ms, never splits words, and only
-                                   closes a main-track gap when no other
-                                   track has content at or after it;
-                                   instances it cannot repair are reported
-                                   with fixable:false.
+                                   main-track-gap, media-outside-draft).
+                                   Never shrinks a caption below 100ms,
+                                   never splits words, only closes a
+                                   main-track gap when no other track has
+                                   content at or after it, and stages
+                                   external media into assets/ only when
+                                   the source file still exists; instances
+                                   it cannot repair are reported with
+                                   fixable:false.
                                    Combine with --dry-run to preview.
              Exit codes: 0 clean · 1 warnings · 2 errors. Info-level issues
              (e.g. unknown-effect-slug, which store-downloaded effects from
@@ -2835,6 +2838,8 @@ function cmdLint(draft: Draft, filePath: string, flags: Flags): { exitCode: numb
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
     probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
     ffprobeCmd: flags.ffprobeCmd,
+    draftDir: path.dirname(path.resolve(filePath)),
+    dryRun: isDryRun(),
   };
 
   if (flags.fix) {
@@ -3755,7 +3760,7 @@ const SUMMARIES: Record<string, string> = {
   "replace-media": "Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes.",
   info: "Project overview + material summary.",
   version: "Detect CapCut/JianYing version, schema flags, and support status.",
-  lint: "Schema-aware checks (overlaps, line length, missing files, main-track gaps); exit 0/1/2 for CI.",
+  lint: "Schema-aware checks (overlaps, line length, missing files, main-track gaps, external media); exit 0/1/2 for CI.",
   tracks: "List all tracks.",
   segments: "List segments with timing; filter by --track <type>.",
   texts: "List all text/subtitle content.",

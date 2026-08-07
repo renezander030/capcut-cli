@@ -1,9 +1,10 @@
 import { existsSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { bubbleCatalogue, imageAnimCatalogue } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
 import { extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
-import { effectCatalogue, filterCatalogue } from "./factory.js";
+import { copyAssetDeduped, effectCatalogue, filterCatalogue } from "./factory.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
@@ -29,11 +30,11 @@ export interface LintIssue {
 
 // Codes that lintDraft can mechanically repair via fixDraft. Membership here
 // is necessary but not sufficient for fixable:true — line-too-long,
-// caption-gap-too-small, and main-track-gap are additionally stamped per
-// instance, so an issue is only marked fixable when fixDraft can actually
-// clear that exact instance. dangling-companion-ref is always safely fixable:
-// the repair drops a ref that points at nothing — never a segment, never a
-// material.
+// caption-gap-too-small, main-track-gap, and media-outside-draft are
+// additionally stamped per instance, so an issue is only marked fixable when
+// fixDraft can actually clear that exact instance. dangling-companion-ref is
+// always safely fixable: the repair drops a ref that points at nothing —
+// never a segment, never a material.
 //
 // Deliberately NOT here: missing-material and missing-file (the only safe
 // repair would delete user timeline content or guess a path — report-only,
@@ -47,6 +48,7 @@ const FIXABLE_CODES = new Set<string>([
   "line-too-long",
   "dangling-companion-ref",
   "main-track-gap",
+  "media-outside-draft",
 ]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
@@ -66,6 +68,17 @@ export interface LintOptions {
    * silently skipped when ffprobe is unavailable. Default true. */
   probeMedia?: boolean;
   ffprobeCmd?: string;
+  /** Absolute path of the draft's folder (the directory holding the timeline
+   * file). Enables the media-outside-draft check and its --fix stage-in;
+   * library callers that lint a Draft with no on-disk home simply omit it and
+   * the rule never runs. */
+  draftDir?: string;
+  /** Preview mode for fixDraft: staging external media copies a file into the
+   * draft folder — a side effect no draft write can roll back — so under
+   * dry-run the stage-in pass is skipped entirely and its issues stay
+   * reported. The pure-JSON repair passes run either way (the caller's
+   * dry-run save discards them). */
+  dryRun?: boolean;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -260,6 +273,51 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
             suggested_command: `ffmpeg -i "${m.path}" -fps_mode cfr -r 30 -c:a copy <normalized>.mp4`,
             location: { material_id: m.id, path: m.path },
           });
+        }
+      }
+    }
+
+    // Media referenced outside the draft folder plays fine on the machine
+    // that authored the draft but breaks on any move: copy the draft to
+    // another machine, reorganize the media folder, or open it on a sandboxed
+    // macOS build that cannot read outside the draft, and the app shows the
+    // black-screen/missing-media class (sun-guannan/VectCutAPI#48, #65;
+    // luoluoluo22/jianying-editor-skill#16). Severity is info, not warning:
+    // app-authored drafts routinely reference local imports wherever they
+    // live on disk, so a warning would flip exit codes (0 -> 1) on a huge
+    // installed base of perfectly valid drafts — the unknown-effect-slug
+    // rationale. Fixable per instance: --fix stages the file into
+    // assets/<kind>/ only when the source exists; a missing source is
+    // report-only (there is nothing on disk to stage) with `relink` as the
+    // deliberate repair. Only absolute paths are judged — a relative or
+    // placeholder path resolves against the draft folder, and both
+    // separator styles count as inside (the store.ts/factory.ts tolerant
+    // prefix-compare convention).
+    if (opts.draftDir) {
+      for (const kind of ["videos", "audios"] as const) {
+        for (const mat of draft.materials[kind] ?? []) {
+          const m = mat as { id: string; path?: string };
+          if (typeof m.path !== "string" || m.path.length === 0) continue;
+          if (m.path.startsWith("http://") || m.path.startsWith("https://")) continue;
+          if (!isAbsoluteAnyOs(m.path) || isUnderDir(m.path, opts.draftDir)) continue;
+          const stageable = fileExists(m.path);
+          const issue: LintIssue = {
+            severity: "info",
+            code: "media-outside-draft",
+            message:
+              `Material ${shortId(m.id)} (${kind}) references media outside the draft folder: ${m.path} — ` +
+              "the draft breaks when that file moves or the folder is copied to another machine, and sandboxed " +
+              "macOS builds can lose read access entirely (black screen — sun-guannan/VectCutAPI#48, #65; " +
+              "luoluoluo22/jianying-editor-skill#16)",
+            fixable: FIXABLE_CODES.has("media-outside-draft") && stageable,
+            location: { material_id: m.id, path: m.path },
+          };
+          if (!stageable) {
+            // The source is gone as well, so there is nothing to stage —
+            // repoint the material first, then stage it in.
+            issue.suggested_command = `capcut relink <project> --dir <directory-containing-the-files>`;
+          }
+          issues.push(issue);
         }
       }
     }
@@ -612,6 +670,37 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
     }
   }
 
+  // Pass 5 (order-independent of the others): stage external media into the
+  // draft's assets/<kind>/ — the same copyAssetDeduped path add-video and
+  // add-audio go through, so collisions de-collide by content hash exactly
+  // like theirs and re-adding already-staged media stays a no-op. The
+  // rewritten path is regenerated with resolve() from the draft folder, which
+  // is the only path shape the factory ever writes — wrong-OS separators in
+  // the old value disappear by construction, never by string conversion. A
+  // missing source is skipped (report-only: nothing on disk to stage) and
+  // dry-run skips the whole pass, because a file copy is a side effect the
+  // caller's discarded draft write cannot roll back.
+  if (opts.draftDir && opts.checkLocalPaths && !opts.dryRun) {
+    for (const kind of ["videos", "audios"] as const) {
+      for (const mat of draft.materials[kind] ?? []) {
+        const m = mat as { id: string; path?: string; material_name?: unknown; name?: unknown };
+        if (typeof m.path !== "string" || m.path.length === 0) continue;
+        if (m.path.startsWith("http://") || m.path.startsWith("https://")) continue;
+        if (!isAbsoluteAnyOs(m.path) || isUnderDir(m.path, opts.draftDir)) continue;
+        if (!fileExists(m.path)) continue;
+        const assetKind = kind === "audios" ? "audio" : "video";
+        const assetsDir = resolve(opts.draftDir, "assets", assetKind);
+        const destPath = copyAssetDeduped(m.path, assetsDir, assetKind === "audio" ? "audio.mp3" : "media");
+        m.path = destPath;
+        // Keep the display-name fields tracking the staged file, the
+        // replace-media convention — only visible when de-collision renamed.
+        const filename = basename(destPath);
+        if ("material_name" in m) m.material_name = filename;
+        if ("name" in m) m.name = filename;
+      }
+    }
+  }
+
   const after = lintDraft(draft, opts);
   const remaining: LintIssue[] = [];
   const afterKeys = new Set(after.map(issueKey));
@@ -720,6 +809,24 @@ function fileExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Absolute on either OS: POSIX /…, Windows drive X:\ or X:/, or UNC \\host.
+// Only these can be judged against the draft folder — a relative (or
+// placeholder) path resolves against the draft folder and is never flagged.
+function isAbsoluteAnyOs(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
+}
+
+// Prefix containment tolerant of wrong-OS separators, the same both-styles
+// compare store.ts (managed-path detection) and factory.ts
+// (renameEntryFields) already use. No case-folding: renameEntryFields — the
+// convention for comparing real path values, not a fixed marker — doesn't.
+function isUnderDir(p: string, dir: string): boolean {
+  const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "");
+  const target = norm(p);
+  const base = norm(dir);
+  return target === base || target.startsWith(`${base}/`);
 }
 
 function shortId(id: string): string {

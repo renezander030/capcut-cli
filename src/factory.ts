@@ -77,7 +77,7 @@ function sameContent(a: string, b: string): boolean {
  *
  * Returns the destination path the draft should reference.
  */
-function copyAssetDeduped(srcPath: string, assetsDir: string, fallbackName: string): string {
+export function copyAssetDeduped(srcPath: string, assetsDir: string, fallbackName: string): string {
   mkdirSync(assetsDir, { recursive: true });
   const filename = basename(srcPath) || fallbackName;
   const destPath = resolve(assetsDir, filename);
