@@ -80,6 +80,7 @@ import {
   addText,
   addVideo,
   applyDraftRegistration,
+  applyDraftRename,
   applyTemplate,
   type CropRect,
   copyTextStyle,
@@ -93,6 +94,7 @@ import {
   initDraft,
   mixModeSlugs,
   planDraftRegistration,
+  planDraftRename,
   pruneOrphanMaterials,
   removeSegment,
   resolveAssetPath,
@@ -191,6 +193,7 @@ export const COMMANDS = [
   "chroma",
   "prune",
   "register",
+  "rename",
   "relink",
   "replace-media",
   "timeline",
@@ -415,6 +418,20 @@ Maintenance & inspection:
              and nothing is written. Refuses to write while the editor is
              running unless --force-write. Exits 2 on --apply when a target
              stays blocked (unknown store root, unreadable root_meta_info.json).
+  rename     <project> <new-name> [--drafts <dir>]  Rename a draft after
+             creation: the draft folder on disk, plus draft_name and every
+             self-referential path field in draft_meta_info.json and in the
+             draft's entry in the store's root_meta_info.json — one
+             transaction (a failed step restores the rewritten files and puts
+             the folder back), same atomic writes as register with a .bak per
+             rewritten file. Refuses when the target folder already exists,
+             when a metadata file exists but does not parse (repair with
+             register --apply first), and while the editor is running unless
+             --force-write. A missing sidecar/index entry is reported and the
+             folder is renamed anyway (register --apply recreates them).
+             Timeline files are never touched; media references under the old
+             folder path are counted (stale_media_refs) with the exact relink
+             repair command printed. --dry-run previews.
   relink     <project> --dir <d> | --from <p> --to <q>  Repair broken media paths
   replace-media <project> <segment-id> <new-file> [--retime]
              Swap a segment's source clip (placeholder > final render) while
@@ -3210,6 +3227,66 @@ function cmdRegister(projectPath: string | undefined, flags: Flags): number {
   return ok ? 0 : 2;
 }
 
+// `rename` gives a draft a new display name + folder name after creation —
+// no tool in the ecosystem has this (VectCutAPI#45): users recreate whole
+// drafts to fix a name. register's thin sibling: same store discovery, same
+// temp+fsync+rename writes with a .bak per rewritten file, but here the
+// folder rename and both metadata rewrites are one transaction — a failed
+// step restores the rewritten files and puts the folder back. Timeline files
+// (draft_content.json / draft_info.json) are never touched; absolute media
+// references under the old folder path are counted and reported for relink.
+function cmdRename(positional: string[], flags: Flags): number {
+  const projectPath = positional[1];
+  const newName = positional[2];
+  if (!projectPath || newName === undefined) die("Usage: capcut rename <project> <new-name> [--drafts <dir>]");
+  const result = planDraftRename(projectPath, newName, { draftsDir: flags.drafts });
+  const { plan } = result;
+
+  if (!flags.forceWrite) {
+    const running = editorProcesses();
+    if (running.length > 0) {
+      die(
+        `${running.join(" / ")} is running. Close the editor before renaming this draft, ` +
+          "or pass --force-write if you accept that the app may overwrite the change.",
+      );
+    }
+  }
+
+  const report = {
+    old_name: plan.old_name,
+    new_name: plan.new_name,
+    old_path: plan.old_path,
+    new_path: plan.new_path,
+    updated: plan.updates,
+    targets: plan.targets,
+    stale_media_refs: plan.stale_media_refs,
+  };
+
+  if (isDryRun()) {
+    const message = `Dry run — would rename ${plan.old_path} -> ${plan.new_path} and rewrite ${plan.updates.length} file(s); nothing was written.`;
+    out({ ok: true, renamed: false, ...report, backups: [], message }, flags);
+    if (!flags.quiet) process.stderr.write(`${message}\n`);
+    return 0;
+  }
+
+  const { backups } = applyDraftRename(result, { forceWrite: flags.forceWrite === true });
+
+  out({ ok: true, renamed: true, ...report, backups }, flags);
+  if (!flags.quiet) {
+    process.stderr.write(`Renamed "${plan.old_name}" -> "${plan.new_name}": ${plan.new_path}\n`);
+    for (const target of plan.targets) {
+      if (target.action === "none") process.stderr.write(`note: ${target.file}: ${target.detail}\n`);
+    }
+    if (plan.stale_media_refs > 0) {
+      process.stderr.write(
+        `WARNING: ${plan.stale_media_refs} media reference(s) inside the timeline still point at the old folder path. ` +
+          `Repair them: capcut relink "${plan.new_path}" --from "${plan.old_path}" --to "${plan.new_path}"\n`,
+      );
+    }
+  }
+  return 0;
+}
+
 // `sync-timelines` repairs a draft whose mirror files (template-2.tmp /
 // draft_info.json — including the pre-open mirror's stale GUID) drifted from
 // draft_content.json, the CapCut >= 8.7 "CLI edit silently ignored" failure
@@ -3703,6 +3780,8 @@ const SUMMARIES: Record<string, string> = {
   prune: "Remove materials no segment references.",
   register:
     "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak).",
+  rename:
+    "Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists).",
   relink: "Repair broken media paths (--dir or --from/--to).",
   timeline: "Show the track/segment layout (JSON, or -H ASCII bars).",
   projects: "List CapCut/JianYing draft folders on disk.",
@@ -4142,6 +4221,12 @@ async function main(): Promise<void> {
   // be missing exactly the sidecar files sibling discovery would look at.
   if (cmd === "register") {
     process.exit(cmdRegister(projectPath, flags));
+  }
+
+  // `rename` moves the draft folder and rewrites its registration metadata —
+  // no loadDraft: the timeline files are exactly what rename must never touch.
+  if (cmd === "rename") {
+    process.exit(cmdRename(positional, flags));
   }
 
   // `sync-timelines` must see drifted/unreadable siblings itself — loadDraft would

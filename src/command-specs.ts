@@ -203,6 +203,7 @@ const usages = {
   chroma: "capcut chroma <project> <id> (--color <hex> | --off) [options]",
   prune: "capcut prune <project>",
   register: "capcut register <project-dir> [--apply] [--drafts <dir>]",
+  rename: "capcut rename <project> <new-name> [--drafts <dir>]",
   relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
@@ -458,6 +459,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
+  rename: [option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one.")],
   "harvest-enums": [
     option("apply", ["--apply"], "boolean", "Write the new entries into the user catalogue (default: plan only)."),
     option(
@@ -648,6 +650,7 @@ const mutating = new Set([
   "chroma",
   "prune",
   "register",
+  "rename",
   "relink",
   "replace-media",
   "sync-timelines",

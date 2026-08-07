@@ -16,7 +16,10 @@ Planned scope, in rank order:
 6. zh-CN command reference + JianYing-first quickstart
 7. Keyframeable mask geometry (#44; contingent on harvested ground truth)
 8. `lint`: `main-track-gap` + `--fix`
-9. `rename` — draft folder + `draft_meta_info.json` + store entry, transactionally
+
+### Added
+
+- **`rename <project> <new-name>`** — give a draft a new name after creation, which no tool in the ecosystem offers (sun-guannan/VectCutAPI#45 asked; the working answer to date is recreating the whole draft under the new name). Renames the draft folder on disk and rewrites the name and every self-referential path recorded about it — `draft_name` plus any field pointing at or under the old folder (`draft_fold_path`, `draft_json_file`, and any other absolute path an app build stores, e.g. an absolute `draft_cover`) — in `draft_meta_info.json` and in the draft's entry in the store's `root_meta_info.json`, with `tm_draft_modified` bumped, as one transaction: the same temp+fsync+rename writes `register` uses, a `.bak` per rewritten file, and a failed step restores the already-rewritten files and puts the folder back under its old name. Refuses when the target folder already exists, when the name is empty or contains a path separator, when either metadata file exists but does not parse (rename never renames around a file it cannot update — repair the sidecar with `register --apply`, restore the index from a backup), and while the editor is running unless `--force-write`. A missing sidecar or index entry is only reported in `targets` and the folder is renamed anyway — `register --apply` recreates them afterwards; store-root discovery matches `register` (parent `root_meta_info.json`, managed `com.lveditor.draft` path, or `--drafts <dir>`). Timeline files (`draft_content.json` / `draft_info.json`) are never touched, so absolute media references under the old folder path go stale: they are counted (`stale_media_refs`) and the exact `relink` repair command is printed. The JSON result carries the old/new names, the old/new folder paths, and `updated` — every file path rewritten; `--dry-run` previews the same plan without moving anything.
 
 ## [0.16.1] — 2026-08-03
 

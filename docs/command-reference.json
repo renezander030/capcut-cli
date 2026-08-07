@@ -3771,6 +3771,49 @@
       }
     },
     {
+      "name": "rename",
+      "summary": "Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists).",
+      "usage": "capcut rename <project> <new-name> [--drafts <dir>]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "new-name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "dir",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "drafts",
+          "flags": [
+            "--drafts"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Draft store root when the draft does not live inside a known one."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "relink",
       "summary": "Repair broken media paths (--dir or --from/--to).",
       "usage": "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",

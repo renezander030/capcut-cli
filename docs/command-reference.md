@@ -58,6 +58,7 @@
 | `chroma` | `capcut chroma <project> <id> (--color <hex> \| --off) [options]` | yes | Green-screen / chroma key a video segment, or --off. |
 | `prune` | `capcut prune <project>` | yes | Remove materials no segment references. |
 | `register` | `capcut register <project-dir> [--apply] [--drafts <dir>]` | yes | Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak). |
+| `rename` | `capcut rename <project> <new-name> [--drafts <dir>]` | yes | Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists). |
 | `relink` | `capcut relink <project> (--dir <path> \| --from <prefix> --to <prefix>)` | yes | Repair broken media paths (--dir or --from/--to). |
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | yes | Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes. |
 | `timeline` | `capcut timeline <project> [--cols <number>]` | no | Show the track/segment layout (JSON, or -H ASCII bars). |
