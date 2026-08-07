@@ -145,6 +145,8 @@ import {
   diagnoseDraftStore,
   discoverDraftStore,
   editorProcesses,
+  NESTED_TIMELINES_ACTION,
+  NESTED_TIMELINES_WRITE_WARNING,
   planTimelineSync,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
@@ -2980,6 +2982,10 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   const store = discoverDraftStore(filePath);
   const { drift, error } = assessAppVersionDrift(store.projectDir, appVersionEvidence(draft, store.version));
   if (error && !flags.quiet) process.stderr.write(`WARNING: ${error}\n`);
+  // CapCut 7.x nested Timelines/ layout (issue #50): `version` answers "will a
+  // write be honored?", and on this layout a root-mirror write may be
+  // discarded by the app — name the layout alongside the write-guard notes.
+  if (store.layout === "timelines-nested") v.support.notes.push(NESTED_TIMELINES_ACTION);
   if (flags.human) {
     console.log(`App:          ${v.app}${v.app_source !== "unknown" ? ` (${v.app_source})` : ""}`);
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
@@ -3591,6 +3597,15 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   // dry-run path behaves the same; see docs/version-support.md).
   const safety = assessWriteSafety(canonicalDraft, plan.version);
 
+  // CapCut 7.x nested Timelines/ layout (issue #50): --apply rewrites root
+  // mirrors outside saveDraft, so it repeats saveDraft's warn-only layout
+  // guard — the app may regenerate those mirrors from the nested document and
+  // discard this repair. Warn on the dry-run preview too, like the version
+  // boundary above.
+  const warnNestedTimelines = (): void => {
+    if (plan.layout === "timelines-nested") process.stderr.write(`WARNING: ${NESTED_TIMELINES_WRITE_WARNING}\n`);
+  };
+
   if (isDryRun()) {
     const message = `Dry run — plan only. Would rewrite ${plan.drifted.join(", ")} from ${plan.canonical}; nothing was written.`;
     out(
@@ -3611,6 +3626,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       flags,
     );
     if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+    warnNestedTimelines();
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     warnUnreconcilable();
     return 0;
@@ -3620,6 +3636,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   if (safety.action === "warn" || (safety.action === "refuse" && flags.forceWrite)) {
     process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
   }
+  warnNestedTimelines();
 
   // Optimistic concurrency: neither the canonical source nor a mirror we are
   // about to rewrite may have changed on disk between the plan read and now.

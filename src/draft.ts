@@ -21,6 +21,7 @@ import {
   discoverDraftStore,
   editorProcesses,
   isManagedDraftPath,
+  NESTED_TIMELINES_WRITE_WARNING,
   serializeDraftCandidate,
 } from "./store.js";
 import { assessWriteSafety } from "./version.js";
@@ -328,6 +329,18 @@ export function saveDraft(
     if (safety.action === "warn" || (safety.action === "refuse" && forceWrite)) {
       process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
     }
+  }
+
+  // CapCut 7.x nested Timelines/ layout (issue #50): the live document is
+  // reported to be Timelines/<id>/draft_info.json, with the root file a
+  // regenerated mirror the app rebuilds on open. Detection-only guard — the
+  // write below still targets the root candidates byte-identically (PR #51's
+  // canonical flip was rejected pending a field artifact) — but the edit is
+  // no longer silent: warn, never refuse. Shares skipVersionGuard with the
+  // version guard: restore's mirror re-sync is the escape hatch, not a new
+  // sighting of the hazard.
+  if (options.skipVersionGuard !== true && store.layout === "timelines-nested") {
+    process.stderr.write(`WARNING: ${NESTED_TIMELINES_WRITE_WARNING}\n`);
   }
 
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);

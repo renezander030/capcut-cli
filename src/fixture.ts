@@ -9,7 +9,7 @@
 // CapCut 8.7 desktop) can only happen on Windows.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { diagnoseDraftStore, discoverDraftStore } from "./store.js";
 
@@ -67,7 +67,11 @@ function redact(raw: string, tally: Record<string, number>): { text: string; cou
   return { text, count };
 }
 
-function reporterReadme(version: string | null, modernStorage: boolean): string {
+function reporterReadme(version: string | null, modernStorage: boolean, nestedTimelines: string[]): string {
+  const nestedLine =
+    nestedTimelines.length > 0
+      ? `\n- Nested Timelines/ layout captured (issue #50): ${nestedTimelines.join(", ")}`
+      : "";
   return `# Sanitized CapCut draft bundle
 
 This folder was produced by \`capcut fixture\`. It contains **only** the timeline
@@ -75,7 +79,7 @@ JSON files from a real project, with user home paths and email addresses
 redacted. No media from \`assets/\` was copied.
 
 - Detected app version: ${version ?? "unknown"}
-- Modern storage layout (CapCut >= 8.7): ${modernStorage ? "yes" : "no"}
+- Modern storage layout (CapCut >= 8.7): ${modernStorage ? "yes" : "no"}${nestedLine}
 
 ## What to do with it
 
@@ -115,6 +119,22 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
     files.push({ file: name, bytes_in: Buffer.byteLength(raw), bytes_out: Buffer.byteLength(text), redactions: count });
   }
 
+  // Nested Timelines/ layout (issue #50): the structural artifact that issue
+  // is blocked on is exactly Timelines/project.json plus the nested timeline
+  // documents, so bundle them (redacted, relative paths preserved) whenever
+  // discovery reported them. Still JSON only — nothing else under Timelines/
+  // is copied.
+  for (const rel of store.nestedTimelines) {
+    const src = join(store.projectDir, ...rel.split("/"));
+    if (!existsSync(src)) continue;
+    const raw = stripBom(readFileSync(src, "utf-8"));
+    const { text, count } = redact(raw, tally);
+    const dest = join(out, ...rel.split("/"));
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, text, "utf-8");
+    files.push({ file: rel, bytes_in: Buffer.byteLength(raw), bytes_out: Buffer.byteLength(text), redactions: count });
+  }
+
   if (files.length === 0) {
     throw new Error(`No timeline files found to bundle in: ${store.projectDir}`);
   }
@@ -122,7 +142,11 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
   // Diagnose report (paths inside are already <project>-relative placeholders).
   const report = diagnoseDraftStore(input);
   writeFileSync(join(out, "diagnose.json"), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
-  writeFileSync(join(out, "README.md"), reporterReadme(store.version, store.modernStorage), "utf-8");
+  writeFileSync(
+    join(out, "README.md"),
+    reporterReadme(store.version, store.modernStorage, store.nestedTimelines),
+    "utf-8",
+  );
 
   const sanitize: SanitizeReport = {
     ok: true,
@@ -137,6 +161,12 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
       "Binary media under assets/ was intentionally excluded — only timeline JSON files are bundled.",
       "User home paths and email addresses were redacted; review the files before sharing.",
       "Attach this folder to issue #35 (or a new issue) to move the version toward fixture-tested.",
+      ...(store.nestedTimelines.length > 0
+        ? [
+            "The nested Timelines/ layout was captured (Timelines/project.json + nested timeline documents) — " +
+              "attach this bundle to issue #50, which is blocked on exactly this artifact.",
+          ]
+        : []),
     ],
   };
   writeFileSync(join(out, "SANITIZE_REPORT.json"), `${JSON.stringify(sanitize, null, 2)}\n`, "utf-8");
