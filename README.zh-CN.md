@@ -12,6 +12,8 @@
 
 [English](./README.md) | 中文
 
+> **安全提示 —— 请升级到 0.17.1 或更高版本。** 0.17.0 及更早版本在 `export --batch` 中把草稿文件夹名直接拼进要执行的自动化脚本，因此一个精心命名的文件夹可以在 macOS 与 Windows 上执行自己的命令。0.17.1 已修复，同时修复的还有：草稿的字幕颜色可注入 ffmpeg 滤镜参数（`render --burn-captions`）、`compile` 规格的 `name` 可写到草稿存储之外、每次草稿写入使用的临时文件名可被预测，以及 `serve` 把凭据值回显到自己的输出中。两处注入都需要一个并非你本人创建的草稿文件夹或草稿文件，因此影响范围是本地而非远程。升级：`npm install -g capcut-cli@latest`。详见 [更新日志](./CHANGELOG.md)。
+
 > **免责声明：** 本项目为独立的、社区维护的项目，与 CapCut、剪映或字节跳动有限公司（ByteDance Ltd.）**无任何隶属、赞助或背书关系**。"CapCut" 与 "剪映" 为字节跳动有限公司的商标，所有产品名称、徽标与品牌均归各自所有者所有，此处仅用于标识（指称性使用）目的。
 
 **任何大模型 Agent 都能驱动的剪映 / CapCut 命令行 —— 零依赖、无服务、CapCut + 剪映共用一个二进制。**
@@ -24,9 +26,9 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **v0.17.0 新增：** 导入 OpenTimelineIO 时间线为新草稿或向现有草稿追加轨道（`import-timeline`，`export-timeline` 的逆操作）、一份规格加 N 行 JSONL 批量生成 N 个已注册草稿（`compile --data`）、事务式重命名草稿（`rename`）、`lint` 新增主轨道空隙与草稿外媒体检查（`--fix` 可在安全时闭合空隙、把媒体收进草稿）、应用自动升级绊线（升级后的首次写入即以 旧 -> 新 提示版本变化）、检测 CapCut 7.x 嵌套 `Timelines/` 布局并在写入时警告、每个 `fixture` 包新增蒙版关键帧证据报告（#44），以及简体中文命令参考与面向剪映用户的快速上手指南。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.17.1 新增：** 七项安全修复（以上述两处 `export --batch` 命令注入为首）；性能优化：大型项目下 `lint --fix` 与 `lint` 约提速 4 倍，命令模块改为按需加载后每次启动快 22-27%；以及一轮"做减法"：删除无用代码、把十处重复代码合并为共用函数、发布包少了 28 个文件。命令与参数没有任何变化，写出的草稿与 v0.17.0 逐字节一致。完整说明见 [更新日志](./CHANGELOG.md)。
 
-> **v0.16.0 新增：** 完整支持较新 Mac 版本的草稿布局（以 `draft_info.json` 为主文件，覆盖编辑命令、`sync-timelines`、`register` 与 `diagnose`）、按版本证据选择蒙版数组并新增 `--mask-field` 与 lint 不匹配检查、把时间线导出为 OpenTimelineIO（`export-timeline`，DaVinci Resolve 可直接导入）、从应用生成的草稿学习商店特效 ID（`harvest-enums`）、`lint` 新增可变帧率与不可读媒体检查并给出具体的 ffmpeg 修复命令，以及安全自动修复悬空素材引用（`lint --fix`）。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.17.0 新增：** 导入 OpenTimelineIO 时间线为新草稿或向现有草稿追加轨道（`import-timeline`，`export-timeline` 的逆操作）、一份规格加 N 行 JSONL 批量生成 N 个已注册草稿（`compile --data`）、事务式重命名草稿（`rename`）、`lint` 新增主轨道空隙与草稿外媒体检查（`--fix` 可在安全时闭合空隙、把媒体收进草稿）、应用自动升级绊线（升级后的首次写入即以 旧 -> 新 提示版本变化）、检测 CapCut 7.x 嵌套 `Timelines/` 布局并在写入时警告、每个 `fixture` 包新增蒙版关键帧证据报告（#44），以及简体中文命令参考与面向剪映用户的快速上手指南。完整说明见 [更新日志](./CHANGELOG.md)。
 
 ## 安装
 
