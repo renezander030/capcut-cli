@@ -2,6 +2,14 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] — 2026-08-08
+
+Documentation only. No source changed, so the shipped `dist/` is identical to 0.17.1 and there is nothing to gain by upgrading from it — this release exists so the npm page carries the security notice, because npm renders the README from the published tarball rather than from the repository.
+
+### Changed
+
+- **The README leads with the 0.17.1 security notice, in both languages** — anyone arriving from npm now sees, above everything else, that versions up to and including 0.17.0 build the `export --batch` automation script by pasting the draft folder's name into it, what else 0.17.1 closed alongside it (the `drawtext` colour injection, the `compile` spec name escaping the draft store, predictable temp files, credential values in `serve`'s echoed args), that both injection paths need a draft folder or file the user did not author and are therefore local rather than remote, and the one command that fixes it. Versions below 0.17.1 are deprecated on npm with the same pointer, so an install of an affected version warns on the way past. The release-highlight blockquotes are trimmed to the two most recent versions as usual; a documentation release adds no highlight line of its own.
+
 ## [0.17.1] — 2026-08-07
 
 A maintenance release: nothing was added to the command surface, which is identical to 0.17.0 flag for flag. What changed is what the same commands cost and what they let a hostile draft do.
