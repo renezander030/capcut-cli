@@ -61,8 +61,8 @@ import {
   diagnoseDraftStore,
   discoverDraftStore,
   editorProcesses,
-  NESTED_TIMELINES_ACTION,
-  NESTED_TIMELINES_WRITE_WARNING,
+  nestedTimelinesAction,
+  nestedTimelinesWriteWarning,
   planTimelineSync,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
@@ -2939,7 +2939,7 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   // CapCut 7.x nested Timelines/ layout (issue #50): `version` answers "will a
   // write be honored?", and on this layout a root-mirror write may be
   // discarded by the app — name the layout alongside the write-guard notes.
-  if (store.layout === "timelines-nested") v.support.notes.push(NESTED_TIMELINES_ACTION);
+  if (store.layout === "timelines-nested") v.support.notes.push(nestedTimelinesAction(store.version));
   if (flags.human) {
     console.log(`App:          ${v.app}${v.app_source !== "unknown" ? ` (${v.app_source})` : ""}`);
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
@@ -3570,7 +3570,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   // discard this repair. Warn on the dry-run preview too, like the version
   // boundary above.
   const warnNestedTimelines = (): void => {
-    if (plan.layout === "timelines-nested") process.stderr.write(`WARNING: ${NESTED_TIMELINES_WRITE_WARNING}\n`);
+    if (plan.layout === "timelines-nested")
+      process.stderr.write(`WARNING: ${nestedTimelinesWriteWarning(plan.version)}\n`);
   };
 
   if (isDryRun()) {
