@@ -4,6 +4,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   statSync,
@@ -16,6 +17,7 @@ import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { isManagedDraftPath, parseCandidate } from "./store.js";
+import { atLeast, versionTuple } from "./version.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
 
 /**
@@ -114,11 +116,67 @@ export interface InitOptions {
   now?: number; // epoch ms — injectable clock for tests; defaults to Date.now()
 }
 
+/**
+ * Newest `platform.app_version` across the drafts already in a drafts ROOT, or
+ * null when the folder holds no readable draft. store.ts's highestVersion does
+ * the same job across one project's siblings; `init` has no project to discover
+ * yet, so it scans the store instead.
+ */
+export function detectStoreAppVersion(draftsDir: string): string | null {
+  let dirs: string[];
+  try {
+    dirs = readdirSync(draftsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return null; // fresh or unreadable store — nothing to compare against
+  }
+
+  let best: string | null = null;
+  for (const dir of dirs) {
+    for (const name of ["draft_info.json", "draft_content.json"]) {
+      const version = parseCandidate(resolve(draftsDir, dir, name)).draft?.platform?.app_version;
+      if (typeof version !== "string" || version.length === 0) continue;
+      if (best === null || atLeast(version, best)) best = version;
+      break; // one reading per project folder
+    }
+  }
+  return best;
+}
+
+/**
+ * #67: the bundled template declares app_version 6.5.0 and carries none of the
+ * schema markers a modern draft has (`version`, `new_version`, `color_space`).
+ * Dropped into a materially newer store, CapCut lists the draft at 00:00 and
+ * then refuses to open it, blaming the path — which is not the cause, and which
+ * costs the user a long hunt. Name the real reason instead.
+ *
+ * Warn, never refuse: the evidence is a single 8.5.0 report with no committed
+ * fixture, and `--template` is a working escape hatch. Gated on the major
+ * version so a 6.5.0 template stays quiet on a 6.x store.
+ */
+export function templateVersionWarning(templateVersion: string | null, storeVersion: string | null): string | null {
+  if (!templateVersion || !storeVersion) return null;
+  const [templateMajor = 0] = versionTuple(templateVersion);
+  const [storeMajor = 0] = versionTuple(storeVersion);
+  if (storeMajor <= templateMajor) return null;
+  return (
+    `Template declares CapCut ${templateVersion}, but this drafts folder holds projects from ${storeVersion} ` +
+    `(issue #67). CapCut ${storeVersion} may list the new draft with a 00:00 duration and then refuse to open it, ` +
+    `reporting "Current project is from an unusual path and cannot be used currently" — the path is not the cause; ` +
+    `the bundled template predates the schema markers that build writes. Workaround: create an empty project in ` +
+    `CapCut ${storeVersion} and pass its folder with --template <dir>.`
+  );
+}
+
 export function initDraft(opts: InitOptions): { draftPath: string; filePath: string; registered: boolean } {
   const draftPath = resolve(opts.draftsDir, opts.name);
   if (existsSync(draftPath)) {
     throw new Error(`Draft already exists: ${draftPath}. Delete it first or use a different name.`);
   }
+  // Read the store before copying, so the draft being created is not itself
+  // one of the projects the version is derived from.
+  const storeAppVersion = detectStoreAppVersion(opts.draftsDir);
   cpSync(opts.templateDir, draftPath, { recursive: true });
 
   // Find the draft file
@@ -129,6 +187,10 @@ export function initDraft(opts: InitOptions): { draftPath: string; filePath: str
       // Update the draft name + id
       const raw = stripBom(readFileSync(fp, "utf-8"));
       const draft = JSON.parse(raw) as Draft;
+
+      const versionWarning = templateVersionWarning(draft.platform?.app_version ?? null, storeAppVersion);
+      if (versionWarning) process.stderr.write(`WARNING: ${versionWarning}\n`);
+
       draft.name = opts.name;
       const draftId = uuid();
       draft.id = draftId;
