@@ -32,6 +32,19 @@ const REDACTORS: Redactor[] = [
   { kind: "macos_user", pattern: /(\/Users\/)[^/"]+/g, replace: "$1USER" },
   { kind: "linux_user", pattern: /(\/home\/)[^/"]+/g, replace: "$1USER" },
   { kind: "email", pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, replace: "redacted@example.com" },
+  // Device identifiers (#59). CapCut stamps these into the `platform` and
+  // `last_modified_platform` blocks, so they ride along in draft_info.json,
+  // template-2.tmp and every nested timeline copy. Keyed on the field NAME and
+  // never on the value shape: device_id and mac_address are plain 32-hex, and a
+  // bare /[0-9a-f]{32}/ would also blank legitimate material and segment UUIDs.
+  // The optional backslashes match the escaped-quote form that template-2.tmp
+  // uses for its string-JSON. Only a non-empty value matches, so an already
+  // blank hard_disk_id is not counted as something this removed.
+  {
+    kind: "device_ids",
+    pattern: /(\\?"(?:device_id|mac_address|hard_disk_id)\\?"\s*:\s*\\?")[^"\\]+(\\?")/g,
+    replace: "$1$2",
+  },
 ];
 
 export interface SanitizeFileResult {
@@ -323,8 +336,9 @@ mask in the desktop app (two position keyframes are enough), save, and re-run
   return `# Sanitized CapCut draft bundle
 
 This folder was produced by \`capcut fixture\`. It contains **only** the timeline
-JSON files from a real project, with user home paths and email addresses
-redacted. No media from \`assets/\` was copied.
+JSON files from a real project, with user home paths, email addresses and the
+device identifiers CapCut stamps into every draft (\`device_id\`,
+\`mac_address\`, \`hard_disk_id\`) redacted. No media from \`assets/\` was copied.
 
 - Detected app version: ${version ?? "unknown"}
 - Modern storage layout (CapCut >= 8.7): ${modernStorage ? "yes" : "no"}${nestedLine}
@@ -413,10 +427,16 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
     "utf-8",
   );
 
+  // The report ships inside the bundle, so its own path fields go through the
+  // redactor too (#59). Written raw, they reintroduce the username that every
+  // bundled timeline file just had scrubbed.
+  const { text: safeSourceDir } = redact(store.projectDir, tally);
+  const { text: safeOutDir } = redact(out, tally);
+
   const sanitize: SanitizeReport = {
     ok: true,
-    source_dir: store.projectDir,
-    out_dir: out,
+    source_dir: safeSourceDir,
+    out_dir: safeOutDir,
     version: store.version,
     modern_storage: store.modernStorage,
     files,
@@ -425,7 +445,8 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
     mask_keyframe_evidence: maskReport.summary,
     notes: [
       "Binary media under assets/ was intentionally excluded — only timeline JSON files are bundled.",
-      "User home paths and email addresses were redacted; review the files before sharing.",
+      "User home paths, email addresses and device identifiers (device_id, mac_address, hard_disk_id) " +
+        "were redacted; review the files before sharing.",
       "Attach this folder to issue #35 (or a new issue) to move the version toward fixture-tested.",
       "mask-keyframe-report.json maps the draft's mask + keyframe structures — the #44 harvest " +
         "(the mask-geometry keyframe encoding has no public ground truth).",
