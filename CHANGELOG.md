@@ -2,6 +2,27 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-08-09
+
+Upgrade if you have ever run `capcut fixture`. Bundles produced by earlier versions carry your device identifiers, and the command's documented flow is to attach one to a public issue.
+
+### Security
+
+- **`capcut fixture` no longer leaks device identifiers** ([#59](https://github.com/renezander030/capcut-cli/issues/59), reported by @scornik). The redactor handled home paths and email addresses only, so the `device_id`, `mac_address` and `hard_disk_id` CapCut stamps into every `platform` and `last_modified_platform` block were copied verbatim into `draft_info.json`, `template-2.tmp` and every nested timeline document. `SANITIZE_REPORT.json` compounded it by writing `source_dir` and `out_dir` raw, reintroducing the username the timeline files had just had scrubbed. Anyone following the documented "run `capcut fixture` and attach the bundle" flow published a stable device ID and MAC address while the filename and the report both said the bundle was sanitised. The new redactor keys on the field name rather than the value shape — `device_id` and `mac_address` are plain 32-hex, and a bare hex pattern would also blank legitimate material and segment UUIDs — handles the escaped-quote form `template-2.tmp` uses for its string-JSON, and matches only non-empty values so an already-blank `hard_disk_id` is not reported as removed. Keys are kept with empty values, because the on-disk shape is the point of a fixture. `app_id` is left alone: it identifies the app, not the machine. **Bundles generated before this release should be treated as unsanitised.**
+
+### Added
+
+- **`init` warns when the bundled template predates the target store's CapCut** ([#67](https://github.com/renezander030/capcut-cli/issues/67), reported by @scornik). The template declares `app_version 6.5.0` and carries none of the schema markers a modern draft has; dropped into a materially newer store, CapCut lists the draft at 00:00 and then refuses to open it, reporting "Current project is from an unusual path and cannot be used currently" — which is wrong about the cause and sends people hunting the path. `init` now reads the newest `platform.app_version` across the projects already in the drafts folder, before copying the template, and warns when the store is a major version ahead, naming the real reason and pointing at `--template`. Warn, never refuse: the evidence is a single 8.5.0 report and `--template` is a working escape hatch.
+
+### Changed
+
+- **The nested-`Timelines/` guidance is gated on detected app version** ([#68](https://github.com/renezander030/capcut-cli/issues/68), reported by @scornik). It fired on layout alone while its text is explicitly about CapCut 7.x and cites [#50](https://github.com/renezander030/capcut-cli/issues/50). On 8.5.0 the reported behaviour is the opposite: after a CLI-written draft was opened and closed, the nested document and the project-root file were byte-identical, so the app regenerated the mirror from the tool's content. 8.5.0+ now gets that wording; 7.x and unknown versions keep the cautious text, since the 8.5.0 reporter did not test 7.x. Three call sites carried a copy of this guidance — the write guard, the `version` command's support notes, and `sync-timelines`, which rewrites mirrors outside `saveDraft`.
+- Builds against TypeScript 7, which no longer implicitly includes packages under `node_modules/@types`; `compilerOptions.types` now names `node` explicitly. No source change was needed and no runtime behaviour differs.
+
+### Documentation
+
+- **Frame quantisation is documented** ([#69](https://github.com/renezander030/capcut-cli/issues/69), reported by @scornik). CapCut snaps every duration to the project's frame grid the first time it opens a draft, so what you read back is not what you wrote. `docs/draft-schema/01-tracks-and-segments.md` now records the measured 30fps behaviour, that drift stays sub-frame and the timeline contiguous, that sub-frame distinctions are lost (866ms and 867ms both land on 26 frames) while sub-frame segments survive, and the pre-quantisation formula for callers who need what they write to equal what the app stores.
+
 ## [0.17.2] — 2026-08-08
 
 Documentation only. No source changed, so the shipped `dist/` is identical to 0.17.1 and there is nothing to gain by upgrading from it — this release exists so the npm page carries the security notice, because npm renders the README from the published tarball rather than from the repository.
