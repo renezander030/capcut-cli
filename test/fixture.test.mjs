@@ -172,11 +172,27 @@ describe("capcut fixture — mask-keyframe harvest (#44)", () => {
 const DEVICE_ID = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
 const MAC_ADDRESS = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 
-// Built under a fake /home/<user>/ prefix so the report's own source_dir has
-// something for the path redactor to catch — a bare tmpdir() path would not.
+// The report's source_dir needs a home-shaped prefix for the path redactor to
+// catch, and the two platforms get there differently.
+//
+// On POSIX we synthesise /home/<user>/ inside the temp dir. On Windows we
+// cannot: the windows_user pattern anchors on the drive letter (`C:\Users\`),
+// so a nested ...\Temp\xxx\Users\someone segment would never match. But
+// tmpdir() there already lives under C:\Users\<real user>\AppData\..., which is
+// exactly the shape the redactor is built for — so Windows asserts against the
+// real account name and ends up testing the production path rather than a
+// synthetic one.
+const WINDOWS = process.platform === "win32";
+
+function homeIdentity(dir) {
+  if (!WINDOWS) return { user: "secretuser", marker: "/home/USER/" };
+  const match = /^[A-Za-z]:[\\/]Users[\\/]([^\\/]+)/.exec(dir);
+  return { user: match ? match[1] : null, marker: "\\Users\\USER" };
+}
+
 function projectWithDeviceIds() {
   const dir = mkdtempSync(join(tmpdir(), "capcut-fixture-dev-"));
-  const projDir = join(dir, "home", "secretuser", "proj");
+  const projDir = WINDOWS ? join(dir, "proj") : join(dir, "home", "secretuser", "proj");
   mkdirSync(projDir, { recursive: true });
   const dst = join(projDir, "draft_content.json");
   copyFileSync(CANONICAL, dst);
@@ -199,7 +215,12 @@ function projectWithDeviceIds() {
     JSON.stringify(JSON.stringify({ platform: { device_id: DEVICE_ID, mac_address: MAC_ADDRESS } })),
     "utf-8",
   );
-  return { projDir, outDir: join(dir, "out"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return {
+    projDir,
+    outDir: join(dir, "out"),
+    ...homeIdentity(dir),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 // Walked by hand rather than with recursive readdir: Dirent.parentPath only
@@ -234,7 +255,7 @@ describe("capcut fixture — device identifiers (#59)", () => {
   });
 
   it("leaves no identifier in ANY emitted file, report and README included", (t) => {
-    const { projDir, outDir, cleanup } = projectWithDeviceIds();
+    const { projDir, outDir, user, cleanup } = projectWithDeviceIds();
     t.after(cleanup);
 
     const r = spawnCli(["fixture", projDir, "--out", outDir]);
@@ -242,19 +263,21 @@ describe("capcut fixture — device identifiers (#59)", () => {
     for (const { file, text } of allBundledText(outDir)) {
       assert.ok(!text.includes(DEVICE_ID), `${file} leaks device_id`);
       assert.ok(!text.includes(MAC_ADDRESS), `${file} leaks mac_address`);
-      assert.ok(!text.includes("secretuser"), `${file} leaks the username`);
+      if (user) assert.ok(!text.includes(user), `${file} leaks the username`);
     }
   });
 
   it("redacts the report's own source_dir and out_dir", (t) => {
-    const { projDir, outDir, cleanup } = projectWithDeviceIds();
+    const { projDir, outDir, user, marker, cleanup } = projectWithDeviceIds();
     t.after(cleanup);
 
     const r = spawnCli(["fixture", projDir, "--out", outDir]);
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(!r.json.source_dir.includes("secretuser"), "source_dir must be redacted");
-    assert.ok(r.json.source_dir.includes("/home/USER/"), "source_dir should keep its shape");
-    assert.ok(!r.json.out_dir.includes("secretuser"), "out_dir must be redacted");
+    assert.ok(r.json.source_dir.includes(marker), `source_dir should keep its shape: ${r.json.source_dir}`);
+    if (user) {
+      assert.ok(!r.json.source_dir.includes(user), "source_dir must be redacted");
+      assert.ok(!r.json.out_dir.includes(user), "out_dir must be redacted");
+    }
   });
 
   it("counts what it removed and ignores an already-empty hard_disk_id", (t) => {
