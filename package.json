@@ -90,11 +90,11 @@
     "node": ">=18"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
-    "@types/node": "^18.19.130",
+    "@biomejs/biome": "2.5.7",
+    "@types/node": "^26.1.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.4",
     "tsx": "^4.23.10",
-    "typescript": "^5.5.0"
+    "typescript": "^7.0.2"
   }
 }
