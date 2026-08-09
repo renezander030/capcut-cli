@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { loadDraft, segmentCount } from "./helpers/load-fixture.mjs";
@@ -111,6 +111,87 @@ describe("capcut add-audio", () => {
     const r = spawnCli(["add-audio", fix.path, "/tmp/does-not-exist.mp3", "0s", "5s"]);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /not exist|missing|ENOENT/i);
+  });
+});
+
+// #67: the bundled template declares 6.5.0 and omits the schema markers a
+// modern draft carries, so a draft it produces is refused by a much newer
+// CapCut with a misleading "unusual path" error. `init` should name the real
+// cause. Warn, never refuse — --template is a working escape hatch.
+function seedStoreProject(dir, name, appVersion) {
+  const projDir = join(dir, name);
+  mkdirSync(projDir, { recursive: true });
+  // tracks[] + materials{} are what store.ts recognises as a timeline.
+  writeFileSync(
+    join(projDir, "draft_info.json"),
+    JSON.stringify({
+      id: name,
+      name,
+      duration: 0,
+      tracks: [],
+      materials: { videos: [], audios: [], texts: [] },
+      platform: { app_source: "cc", app_version: appVersion },
+    }),
+    "utf-8",
+  );
+}
+
+describe("capcut init — template/store version skew (#67)", () => {
+  it("warns when the store is a major version ahead of the template", () => {
+    const t = tmpDir();
+    try {
+      seedStoreProject(t.dir, "real-8-5-project", "8.5.0");
+      const r = spawnCli(["init", "skewed", "--drafts", t.dir]);
+
+      assert.equal(r.status, 0, "must warn, not refuse");
+      assert.equal(r.json.ok, true);
+      assert.match(r.stderr, /WARNING/);
+      assert.match(r.stderr, /issue #67/);
+      assert.match(r.stderr, /8\.5\.0/, "should name the version actually found in the store");
+      assert.match(r.stderr, /--template/, "should point at the workaround");
+      assert.ok(existsSync(join(t.dir, "skewed", "draft_info.json")), "the draft is still created");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("stays quiet when the store matches the template's major version", () => {
+    const t = tmpDir();
+    try {
+      seedStoreProject(t.dir, "old-project", "6.9.0");
+      const r = spawnCli(["init", "same-major", "--drafts", t.dir]);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.doesNotMatch(r.stderr, /issue #67/);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("stays quiet on an empty store, where there is no version to compare", () => {
+    const t = tmpDir();
+    try {
+      const r = spawnCli(["init", "fresh", "--drafts", t.dir]);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.doesNotMatch(r.stderr, /issue #67/);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("ignores unreadable projects rather than failing the init", () => {
+    const t = tmpDir();
+    try {
+      const junk = join(t.dir, "corrupt-project");
+      mkdirSync(junk, { recursive: true });
+      writeFileSync(join(junk, "draft_info.json"), "{ not json", "utf-8");
+      seedStoreProject(t.dir, "real-9-project", "9.1.0");
+
+      const r = spawnCli(["init", "mixed", "--drafts", t.dir]);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.match(r.stderr, /9\.1\.0/, "the readable sibling still sets the store version");
+    } finally {
+      t.cleanup();
+    }
   });
 });
 
