@@ -105,6 +105,35 @@ source_timerange.duration = target_timerange.duration × speed
 
 `capcut-cli`'s `speed` command rebalances this for you. Hand-editing the JSON for speed is the most common way to corrupt a draft.
 
+### Durations are quantised to the frame grid on first open
+
+Timeranges are microseconds, but CapCut does not keep the exact microsecond values you write. The first time the app opens a draft it snaps every duration to the project's frame grid and rewrites the file. What you read back afterwards is not what you wrote.
+
+Measured on CapCut 8.5.0 at 30 fps ([issue #69](https://github.com/renezander030/capcut-cli/issues/69)):
+
+| written (µs) | after open (µs) | frames |
+| --- | --- | --- |
+| 2767000 | 2766666 | 83 |
+| 3133000 | 3133334 | 94 |
+| 334000 | 333333 | 10 |
+| 866000 | 866667 | 26 |
+| 867000 | 866667 | 26 |
+
+Three things follow:
+
+- **Drift is sub-frame, and the timeline stays contiguous.** In that sample the maximum change was 667 µs and no segment ended up off-grid, so a rounded draft is not a corrupted one.
+- **Sub-frame distinctions are not preserved.** 866000 and 867000 both land on 26 frames. If your code depends on two segments differing by less than one frame, that difference disappears on first open.
+- **Sub-frame *segments* do survive.** Three 33 ms segments each became exactly one frame (33333 / 33334 µs) and kept their positions — a segment shorter than a frame is not dropped.
+
+This is app behaviour, not something `capcut-cli` can prevent. If you need what you write to equal what the app stores, pre-quantise to the frame grid yourself:
+
+```
+frame      = 1_000_000 / fps          // 33333.33… µs at 30 fps
+quantised  = Math.round(us / frame) * frame
+```
+
+Round durations rather than truncating them — CapCut rounds to nearest, so truncating drifts a frame short over a long timeline.
+
 ## Special segments
 
 ### Audio segments
