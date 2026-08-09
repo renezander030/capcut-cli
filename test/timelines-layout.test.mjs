@@ -258,3 +258,52 @@ describe("CapCut 7.x nested Timelines/ layout (issue #50, detection-only guard)"
     );
   });
 });
+
+// #68: the guidance above fired on layout alone, so an 8.5.0 user was shown 7.x
+// text their own evidence contradicts — on that build the nested document was
+// byte-identical to the root file after an open/close round trip. The 7.x
+// caution itself is NOT softened: #50 covers 7.x and the 8.5.0 reporter did not
+// test it. What changes is that the message now depends on detected version.
+describe("nested Timelines/ guidance is version-gated (issue #68)", () => {
+  it("tells an 8.5.0 project the mirror is regenerated from the root file", () => {
+    const f = nestedProject({ appVersion: "8.5.0" });
+    after(f.cleanup);
+
+    const action = diagnoseDraftStore(f.dir).next_actions.find((a) => /Timelines\//.test(a));
+    assert.ok(action, "the layout must still produce a next_action");
+    assert.match(action, /issue #68/);
+    assert.match(action, /regenerate the nested document from the project-root file/);
+    assert.doesNotMatch(action, /may discard those edits/, "the 7.x risk must not be asserted for 8.5.0");
+  });
+
+  it("keeps the cautious #50 wording for 7.x", () => {
+    const f = nestedProject({ appVersion: "7.9.0" });
+    after(f.cleanup);
+
+    const action = diagnoseDraftStore(f.dir).next_actions.find((a) => /Timelines\//.test(a));
+    assert.ok(action, "the layout must still produce a next_action");
+    assert.match(action, /issue #50/);
+    assert.match(action, /may discard those edits/);
+  });
+
+  it("keeps the cautious wording when no version marker is present", () => {
+    const f = nestedProject();
+    after(f.cleanup);
+
+    const action = diagnoseDraftStore(f.dir).next_actions.find((a) => /Timelines\//.test(a));
+    assert.ok(action, "the layout must still produce a next_action");
+    assert.match(action, /issue #50/, "an unknown version stays cautious");
+  });
+
+  it("gates the write-time stderr warning the same way", () => {
+    const f = nestedProject({ appVersion: "8.5.0" });
+    after(f.cleanup);
+    writeFileSync(join(f.dir, "draft_content.json"), JSON.stringify(draftDoc("ROOT CANONICAL", "8.5.0"), null, 2));
+
+    const r = spawnCli(["sync-timelines", f.dir, "--apply", "--force-write"]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stderr, /WARNING: Nested Timelines\/ layout detected on CapCut 8\.5\.0/);
+    assert.match(r.stderr, /issue #68/);
+    assert.doesNotMatch(r.stderr, /may\s+be discarded the next time/, "8.5.0 must not get the 7.x risk claim");
+  });
+});

@@ -261,6 +261,48 @@ export const NESTED_TIMELINES_ACTION =
   "Evidence for this layout is report-only — if you have such a project, contribute a bundle: " +
   "`capcut fixture <project> --out <dir>`.";
 
+/**
+ * First app version reported to regenerate the nested mirror FROM the root file
+ * rather than the other way round (issue #68).
+ *
+ * #50 reports CapCut 7.x keeping the live document at Timelines/<id>/draft_info.json
+ * and rebuilding the project-root files from it, so a root-mirror edit may be lost.
+ * #68 reports the opposite on 8.5.0: a CLI-written draft with 14 segments was opened
+ * and closed, and afterwards the nested file and the root file were byte-identical
+ * (SHA compared) with every segment intact.
+ *
+ * Both reports stand. The 7.x caution is deliberately NOT softened — the 8.5.0
+ * reporter states they did not test 7.x, which is what #50 actually covers. What was
+ * wrong is that the warning fired on layout alone, so 8.5.0 users saw 7.x text their
+ * own evidence contradicts. An unknown version keeps the cautious wording.
+ */
+const NESTED_MIRROR_FROM_ROOT_SINCE = "8.5.0";
+
+function nestedMirrorIsSafe(appVersion: string | null): boolean {
+  return appVersion !== null && atLeast(appVersion, NESTED_MIRROR_FROM_ROOT_SINCE);
+}
+
+/** Version-gated form of NESTED_TIMELINES_WRITE_WARNING (issue #68). */
+export function nestedTimelinesWriteWarning(appVersion: string | null): string {
+  if (!nestedMirrorIsSafe(appVersion)) return NESTED_TIMELINES_WRITE_WARNING;
+  return (
+    `Nested Timelines/ layout detected on CapCut ${appVersion} (issue #68): on this version the app is reported ` +
+    "to regenerate Timelines/<id>/draft_info.json from the project-root file, so this root-mirror edit should " +
+    "survive the next open. The CLI writes the root files only."
+  );
+}
+
+/** Version-gated form of NESTED_TIMELINES_ACTION (issue #68). */
+export function nestedTimelinesAction(appVersion: string | null): string {
+  if (!nestedMirrorIsSafe(appVersion)) return NESTED_TIMELINES_ACTION;
+  return (
+    `Timelines/ directory with a nested timeline document, on CapCut ${appVersion}: this version is reported to ` +
+    "regenerate the nested document from the project-root file (issue #68 — byte-identical after an open/close " +
+    "round trip), so the root-file writes the edit commands perform are the ones the app keeps. The 7.x caution " +
+    "in issue #50 still applies to older builds."
+  );
+}
+
 function candidatePaths(input: string): { projectDir: string; requested: string | null; paths: string[] } {
   const resolved = resolve(input);
   const isFile = existsSync(resolved) && statSync(resolved).isFile();
@@ -733,7 +775,7 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
         "your app, contribute a bundle: `capcut fixture <project> --out <dir>`.",
     );
   }
-  if (store.layout === "timelines-nested") actions.push(NESTED_TIMELINES_ACTION);
+  if (store.layout === "timelines-nested") actions.push(nestedTimelinesAction(store.version));
   if (running.length > 0) actions.push(`Close ${running.join(" / ")} before editing this managed draft.`);
   if (actions.length === 0)
     actions.push("Storage targets are readable and agree. A normal CLI write will synchronize them.");

@@ -23,7 +23,7 @@ import {
   discoverDraftStore,
   editorProcesses,
   isManagedDraftPath,
-  NESTED_TIMELINES_WRITE_WARNING,
+  nestedTimelinesWriteWarning,
   serializeDraftCandidate,
   storeAfterWrite,
 } from "./store.js";
@@ -397,7 +397,7 @@ export function saveDraft(
   // version guard: restore's mirror re-sync is the escape hatch, not a new
   // sighting of the hazard.
   if (options.skipVersionGuard !== true && store.layout === "timelines-nested") {
-    process.stderr.write(`WARNING: ${NESTED_TIMELINES_WRITE_WARNING}\n`);
+    process.stderr.write(`WARNING: ${nestedTimelinesWriteWarning(store.version)}\n`);
   }
 
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);
