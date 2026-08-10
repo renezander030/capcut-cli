@@ -26,6 +26,7 @@
     "dist/lint.d.ts",
     "dist/runner.d.ts",
     "dist/store.d.ts",
+    "dist/time.d.ts",
     "dist/version.d.ts",
     "docs",
     "examples",

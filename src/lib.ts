@@ -47,5 +47,6 @@ export {
 } from "./lint.js";
 export type { RunCommandRequest, RunCommandResult } from "./runner.js";
 export { runCommand } from "./runner.js";
+export { framesFor, quantizeToFrame } from "./time.js";
 export type { AppSource, VersionInfo } from "./version.js";
 export { detectVersion } from "./version.js";

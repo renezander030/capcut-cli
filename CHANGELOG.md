@@ -4,6 +4,15 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **Frame-grid helpers let library callers match CapCut's duration rounding**
+  ([#76](https://github.com/renezander030/capcut-cli/issues/76)).
+  `quantizeToFrame(us, fps)` returns the nearest on-grid microsecond duration,
+  while `framesFor(us, fps)` exposes the frame count. Both fall back to 30 fps
+  for missing or invalid rates; existing commands remain unchanged and callers
+  opt in through the public library API.
+
 ### Documentation
 
 - **The mask-keyframe section records what the encoding search has already ruled out** ([#44](https://github.com/renezander030/capcut-cli/issues/44)). `docs/draft-schema/03-keyframes-and-animations.md` said no capture exists in the neighbouring ecosystem tools without naming what had been checked, so anyone picking the issue up starts that search from zero. It now names the negative result: `pyJianYingDraft`'s `KeyframeProperty` enum — the upstream `src/enums.json` is extracted from — carries the same eleven properties this CLI exposes and nothing for mask geometry, so there is no encoding to borrow and the ground truth has to come from an app-authored capture. No behaviour change; the CLI still declines to write mask keyframes.

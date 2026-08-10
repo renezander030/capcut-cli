@@ -1,5 +1,19 @@
 const US_PER_SEC = 1_000_000;
 const US_PER_MS = 1_000;
+const DEFAULT_FPS = 30;
+
+function frameRate(fps?: number): number {
+  return typeof fps === "number" && Number.isFinite(fps) && fps > 0 ? fps : DEFAULT_FPS;
+}
+
+export function framesFor(us: number, fps?: number): number {
+  return Math.round((us / US_PER_SEC) * frameRate(fps));
+}
+
+export function quantizeToFrame(us: number, fps?: number): number {
+  const rate = frameRate(fps);
+  return Math.round((framesFor(us, rate) * US_PER_SEC) / rate);
+}
 
 export function secondsToUs(s: number): number {
   return Math.round(s * US_PER_SEC);
