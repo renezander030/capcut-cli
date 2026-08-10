@@ -22,6 +22,13 @@ npm run dev -- info ./some-project   # run from source via tsx
 - `npm run lint` / `npm run lint:fix` — Biome (pinned version; no autofix debt).
 - `npm run test:fast` — runs the suite **without** rebuilding; only use it when `dist/` is already current.
 
+## Claiming an issue
+
+Comment on the issue before you start, and wait to be assigned. Maintainers will not
+pick up an issue that someone has asked for without answering here first, and issues
+labelled `good first issue` are held for first-time contributors. If nobody replies
+within three days, treat it as free and go ahead.
+
 ## Pull requests
 
 1. **Branch** off `master` (`feat/…`, `fix/…`, `docs/…`).
