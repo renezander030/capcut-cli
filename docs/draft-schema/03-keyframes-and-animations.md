@@ -164,4 +164,6 @@ The desktop app CAN keyframe mask position/size/rotation/feather in the UI, so a
 
 `capcut-cli` deliberately does not write mask keyframes: an invented encoding would save without error and silently no-op in the app — the pyJianYingDraft#160 failure class, where structures the app ignores produce no diagnostic at all.
 
+**Already ruled out**, so the next person to pick this up does not repeat the search: `pyJianYingDraft`'s `KeyframeProperty` enum — the upstream `src/enums.json` is extracted from — defines eleven properties (position x/y, rotation, scale x/y, uniform scale, alpha, saturation, contrast, brightness, volume) and none that targets mask geometry. That is the same set the table above exposes, so there is no ecosystem encoding to borrow: the ground truth has to come from an app-authored capture.
+
 **How to supply the ground truth:** animate a mask in the desktop app (two position keyframes are enough), save the draft, and run `capcut fixture <project> --out <dir>`. The bundle's `mask-keyframe-report.json` maps every mask material and keyframe structure it finds — unknown `property_type` values, keys on mask entries beyond what the CLI writes, and keyframe-shaped nodes inside mask materials. Attach the bundle to [issue #44](https://github.com/renezander030/capcut-cli/issues/44); it is blocked on exactly this artifact.

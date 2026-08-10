@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **The mask-keyframe section records what the encoding search has already ruled out** ([#44](https://github.com/renezander030/capcut-cli/issues/44)). `docs/draft-schema/03-keyframes-and-animations.md` said no capture exists in the neighbouring ecosystem tools without naming what had been checked, so anyone picking the issue up starts that search from zero. It now names the negative result: `pyJianYingDraft`'s `KeyframeProperty` enum — the upstream `src/enums.json` is extracted from — carries the same eleven properties this CLI exposes and nothing for mask geometry, so there is no encoding to borrow and the ground truth has to come from an app-authored capture. No behaviour change; the CLI still declines to write mask keyframes.
+
 ## [0.18.0] — 2026-08-09
 
 Upgrade if you have ever run `capcut fixture`. Bundles produced by earlier versions carry your device identifiers, and the command's documented flow is to attach one to a public issue.
