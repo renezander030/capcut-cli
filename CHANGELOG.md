@@ -10,8 +10,9 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
   ([#76](https://github.com/renezander030/capcut-cli/issues/76)).
   `quantizeToFrame(us, fps)` returns the nearest on-grid microsecond duration,
   while `framesFor(us, fps)` exposes the frame count. Both fall back to 30 fps
-  for missing or invalid rates; existing commands remain unchanged and callers
-  opt in through the public library API.
+  for missing or invalid rates, floor positive durations at one frame, and keep
+  negative durations signed; existing commands remain unchanged and callers opt
+  in through the public library API.
 
 ### Documentation
 

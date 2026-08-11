@@ -30,6 +30,24 @@ describe("frame-grid helpers", () => {
     assert.equal(quantizeToFrame(33_000, 30), 33_333);
   });
 
+  it("floors positive sub-half-frame durations to one frame", async () => {
+    const { framesFor, quantizeToFrame } = await import(LIB);
+
+    for (const durationUs of [1_000, 16_000]) {
+      assert.equal(framesFor(durationUs, 30), 1);
+      assert.equal(quantizeToFrame(durationUs, 30), 33_333);
+    }
+    assert.equal(framesFor(0, 30), 0);
+    assert.equal(quantizeToFrame(0, 30), 0);
+  });
+
+  it("keeps negative durations on their signed nearest frame", async () => {
+    const { framesFor, quantizeToFrame } = await import(LIB);
+
+    assert.equal(framesFor(-100_000, 30), -3);
+    assert.equal(quantizeToFrame(-100_000, 30), -100_000);
+  });
+
   it("handles fractional frame rates with finite non-negative results", async () => {
     const { framesFor, quantizeToFrame } = await import(LIB);
 
