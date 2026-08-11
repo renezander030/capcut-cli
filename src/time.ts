@@ -8,7 +8,10 @@ function frameRate(fps?: number): number {
 
 function framesAtRate(us: number, rate: number): number {
   const frames = Math.round((us / US_PER_SEC) * rate);
-  return us > 0 && frames === 0 ? 1 : frames;
+  // Math.round returns -0 for small negative inputs; return a plain 0 so callers
+  // comparing with Object.is semantics (node:assert/strict) do not trip over it.
+  if (frames === 0) return us > 0 ? 1 : 0;
+  return frames;
 }
 
 /** Positive durations use at least one frame; negative durations keep their signed rounding. */

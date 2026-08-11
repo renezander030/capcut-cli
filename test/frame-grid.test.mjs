@@ -48,6 +48,16 @@ describe("frame-grid helpers", () => {
     assert.equal(quantizeToFrame(-100_000, 30), -100_000);
   });
 
+  it("returns a plain zero, never -0, for sub-half-frame negative durations", async () => {
+    const { framesFor, quantizeToFrame } = await import(LIB);
+
+    // assert.equal is Object.is under node:assert/strict, so -0 fails these.
+    for (const durationUs of [-1_000, -16_000]) {
+      assert.equal(framesFor(durationUs, 30), 0);
+      assert.equal(quantizeToFrame(durationUs, 30), 0);
+    }
+  });
+
   it("handles fractional frame rates with finite non-negative results", async () => {
     const { framesFor, quantizeToFrame } = await import(LIB);
 
