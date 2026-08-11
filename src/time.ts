@@ -1,5 +1,26 @@
 const US_PER_SEC = 1_000_000;
 const US_PER_MS = 1_000;
+const DEFAULT_FPS = 30;
+
+function frameRate(fps?: number): number {
+  return typeof fps === "number" && Number.isFinite(fps) && fps > 0 ? fps : DEFAULT_FPS;
+}
+
+function framesAtRate(us: number, rate: number): number {
+  const frames = Math.round((us / US_PER_SEC) * rate);
+  return us > 0 && frames === 0 ? 1 : frames;
+}
+
+/** Positive durations use at least one frame; negative durations keep their signed rounding. */
+export function framesFor(us: number, fps?: number): number {
+  return framesAtRate(us, frameRate(fps));
+}
+
+/** Quantize to the nearest frame without collapsing a positive duration to zero. */
+export function quantizeToFrame(us: number, fps?: number): number {
+  const rate = frameRate(fps);
+  return Math.round((framesAtRate(us, rate) * US_PER_SEC) / rate);
+}
 
 export function secondsToUs(s: number): number {
   return Math.round(s * US_PER_SEC);

@@ -134,6 +134,22 @@ quantised  = Math.round(us / frame) * frame
 
 Round durations rather than truncating them — CapCut rounds to nearest, so truncating drifts a frame short over a long timeline.
 
+The public library exports the same calculation so callers do not have to
+reimplement it:
+
+```js
+import { framesFor, quantizeToFrame } from "capcut-cli";
+
+const frames = framesFor(durationUs, draft.fps);
+const onGridDurationUs = quantizeToFrame(durationUs, draft.fps);
+```
+
+Both helpers fall back to 30 fps when the supplied rate is missing, non-numeric,
+zero, or negative. A positive duration that would round to zero is floored to one
+frame, while zero stays zero. Negative durations keep their signed nearest-frame
+result; the helpers do not clamp or reject them. They are opt-in and do not change
+what any CLI command writes.
+
 ## Special segments
 
 ### Audio segments
