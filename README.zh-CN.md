@@ -28,9 +28,9 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **v0.18.0 新增：** `capcut fixture` 现在会脱敏 CapCut 写入每个草稿的设备标识符，分享包终于可以安全地附到公开 issue 上（#59）；当内置模板早于目标草稿目录所属的 CapCut 版本时，`init` 会给出警告，而不是让应用以误导性的“路径异常”错误拒绝打开草稿（#67）；嵌套 `Timelines/` 提示改为按检测到的应用版本区分，8.5.0 用户不再看到与自身证据相悖的 7.x 警告（#68）；schema 文档记录了 CapCut 首次打开草稿时对时长的帧对齐量化（#69）。详见[更新日志](./CHANGELOG.md)。
+> **v0.19.0 新增：** 长时间的 `render` 不再在本身正常的草稿上以 `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` 失败；渲染确实失败时，现在会直接指出缺失的解码器、编码器或滤镜，而不是抛出一整段 ffmpeg 输出；`render --progress` 会实时输出进度，十分钟的任务不再看起来像卡死。`lint` 新增三项检查——字幕阅读速度（`--max-cps`）、竖屏安全区（`--safe-area`）与变速一致性；`lint --fix` 终于可以在不破坏逐字样式的前提下为中日韩字幕换行。此外，`export-timeline` 不再把不足半帧的片段导出为零长度的 OTIO 片段（[#82](https://github.com/renezander030/capcut-cli/issues/82)），关键帧文档也改为标注代码实际写入的 `property_type`（[#80](https://github.com/renezander030/capcut-cli/issues/80)）。没有删除任何命令，现有参数含义均未改变。详见[更新日志](./CHANGELOG.md)。
 
-> **v0.17.1 新增：** 七项安全修复（以上述两处 `export --batch` 命令注入为首）；性能优化：大型项目下 `lint --fix` 与 `lint` 约提速 4 倍，命令模块改为按需加载后每次启动快 22-27%；以及一轮"做减法"：删除无用代码、把十处重复代码合并为共用函数、发布包少了 28 个文件。命令与参数没有任何变化，写出的草稿与 v0.17.0 逐字节一致。完整说明见 [更新日志](./CHANGELOG.md)。
+> **v0.18.0 新增：** `capcut fixture` 现在会脱敏 CapCut 写入每个草稿的设备标识符，分享包终于可以安全地附到公开 issue 上（#59）；当内置模板早于目标草稿目录所属的 CapCut 版本时，`init` 会给出警告，而不是让应用以误导性的“路径异常”错误拒绝打开草稿（#67）；嵌套 `Timelines/` 提示改为按检测到的应用版本区分，8.5.0 用户不再看到与自身证据相悖的 7.x 警告（#68）；schema 文档记录了 CapCut 首次打开草稿时对时长的帧对齐量化（#69）。详见[更新日志](./CHANGELOG.md)。
 
 ## 安装
 
