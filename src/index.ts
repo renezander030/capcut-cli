@@ -865,6 +865,9 @@ interface Flags {
   ffmpegCmd?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
+  progress?: boolean;
+  maxCps?: number;
+  safeArea?: number;
   forceWrite?: boolean;
   bundle?: string;
   continueOnError?: boolean;
@@ -1128,6 +1131,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.maxCueSecs = parseFloat(args[++i]);
     } else if (a === "--min-gap-ms" && i + 1 < args.length) {
       flags.minGapMs = parseFloat(args[++i]);
+    } else if (a === "--max-cps" && i + 1 < args.length) {
+      flags.maxCps = parseFloat(args[++i]);
+    } else if (a === "--safe-area" && i + 1 < args.length) {
+      flags.safeArea = parseFloat(args[++i]);
+    } else if (a === "--progress") {
+      flags.progress = true;
     } else if (a === "--no-check-paths") {
       flags.noCheckPaths = true;
     } else if (a === "--fix") {
@@ -2972,6 +2981,8 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
       flags.maxCueSecs !== undefined ? flags.maxCueSecs * 1_000_000 : DEFAULT_LINT_OPTIONS.maxCueDurationUs,
     minGapBetweenCaptionsUs:
       flags.minGapMs !== undefined ? flags.minGapMs * 1000 : DEFAULT_LINT_OPTIONS.minGapBetweenCaptionsUs,
+    maxCharsPerSecond: flags.maxCps ?? DEFAULT_LINT_OPTIONS.maxCharsPerSecond,
+    safeAreaFraction: flags.safeArea ?? DEFAULT_LINT_OPTIONS.safeAreaFraction,
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
     probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
     ffprobeCmd: flags.ffprobeCmd,
@@ -4397,6 +4408,7 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     burnCaptions: flags.burnCaptions,
     allVideoTracks: flags.allVideoTracks,
     dryRun: isDryRun(),
+    progress: flags.progress,
   };
   if (opts.dryRun) {
     // Build-only: surface the plan; no ffmpeg needed.

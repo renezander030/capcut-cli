@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.17.0",
+  "version": "0.19.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -156,6 +156,26 @@
           "required": false,
           "description": "Minimum caption gap in milliseconds.",
           "default": 0
+        },
+        {
+          "name": "max_cps",
+          "flags": [
+            "--max-cps"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Maximum caption reading speed in characters per second (0 disables).",
+          "default": 20
+        },
+        {
+          "name": "safe_area",
+          "flags": [
+            "--safe-area"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Vertical safe-area fraction for captions (0 disables).",
+          "default": 0.85
         },
         {
           "name": "no_check_paths",
@@ -4880,6 +4900,15 @@
           "type": "boolean",
           "required": false,
           "description": "Composite every video track."
+        },
+        {
+          "name": "progress",
+          "flags": [
+            "--progress"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Stream ffmpeg's progress to stderr instead of buffering it."
         }
       ],
       "mutates": false,

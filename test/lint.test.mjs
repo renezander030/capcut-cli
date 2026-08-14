@@ -1058,12 +1058,15 @@ describe("capcut lint", () => {
     const fix = tmpDraft();
     after(() => fix.cleanup());
 
-    it("stamps fixable:false on raw-JSON fallback, space-less CJK, and over-cap single words", () => {
-      // Three shapes the re-wrapper provably cannot clear (v0.13 review):
+    it("stamps fixable:false on raw-JSON fallback and over-cap single words, true on CJK", () => {
+      // Two shapes the re-wrapper provably cannot clear (v0.13 review):
       // 1) content JSON without a text field — the checker measures the raw
       //    content fallback, which the fixer never touches;
-      // 2) space-less CJK text — no space to swap for a newline;
-      // 3) a single word longer than the cap — words are never split.
+      // 2) a single word longer than the cap — words are never split.
+      // Space-less CJK used to be a third: there is no space to swap for a
+      // newline. It is now repaired by inserting one between two characters
+      // and shifting the styles[] byte ranges across the insertion, so it is
+      // stamped fixable and cleared below.
       const noTextContent = JSON.stringify({ styles: [{ range: [0, 10] }], noText: "x".repeat(160) });
       seedTextTrack(
         fix.path,
@@ -1077,7 +1080,20 @@ describe("capcut lint", () => {
             text_color: "#FFFFFF",
             alignment: 1,
           },
-          textMat("stamp-cjk-mat", "字".repeat(60)),
+          // A real styles[] range spanning the whole text, so the repair's
+          // UTF-16LE byte-offset shift is actually exercised rather than
+          // skipped over an empty styles array.
+          {
+            id: "stamp-cjk-mat",
+            type: "text",
+            content: JSON.stringify({
+              text: "字".repeat(60),
+              styles: [{ range: [0, Buffer.from("字".repeat(60), "utf16le").length] }],
+            }),
+            font_size: 15,
+            text_color: "#FFFFFF",
+            alignment: 1,
+          },
           textMat("stamp-word-mat", "x".repeat(60)),
         ],
         [
@@ -1092,25 +1108,38 @@ describe("capcut lint", () => {
         (i) => i.code === "line-too-long" && i.location?.segment_id?.startsWith("stamp-"),
       );
       assert.equal(mine.length, 3, `expected three line-too-long issues; got: ${JSON.stringify(detect.json.issues)}`);
-      for (const i of mine) {
-        assert.equal(
-          i.fixable,
-          false,
-          `--fix cannot clear this instance, so it must not be stamped: ${JSON.stringify(i)}`,
-        );
-      }
+      const byId = (suffix) => mine.find((i) => i.location.segment_id.startsWith(suffix));
+      assert.equal(byId("stamp-1").fixable, false, "raw-JSON fallback is not repairable");
+      assert.equal(byId("stamp-3").fixable, false, "an over-cap single word is never split");
+      assert.equal(byId("stamp-2").fixable, true, "space-less CJK is repairable by character break");
 
-      const before = readFileSync(fix.path, "utf-8");
       const r = spawnCli(["lint", fix.path, "--fix", "--no-check-paths"]);
-      assert.ok(
-        !r.json.fixed.some((i) => i.code === "line-too-long"),
-        `nothing here is repairable; got: ${JSON.stringify(r.json.fixed)}`,
+      const fixedCjk = r.json.fixed.filter(
+        (i) => i.code === "line-too-long" && i.location?.segment_id?.startsWith("stamp-2"),
       );
+      assert.equal(fixedCjk.length, 1, `the CJK caption must be repaired; got: ${JSON.stringify(r.json.fixed)}`);
       const remaining = r.json.issues.filter(
         (i) => i.code === "line-too-long" && i.location?.segment_id?.startsWith("stamp-"),
       );
-      assert.equal(remaining.length, 3, "all three stay reported");
-      assert.equal(readFileSync(fix.path, "utf-8"), before, "--fix must not rewrite a draft it didn't change");
+      assert.equal(remaining.length, 2, "the two unrepairable shapes stay reported");
+
+      // The repair must leave every line within the cap and keep styles[]
+      // pointing at the same characters: ranges are UTF-16LE BYTE offsets, so
+      // each inserted newline shifts a later boundary by exactly 2.
+      const after = JSON.parse(readFileSync(fix.path, "utf-8"));
+      const cjkMat = after.materials.texts.find((m) => m.id === "stamp-cjk-mat");
+      const content = JSON.parse(cjkMat.content);
+      assert.ok(content.text.includes("\n"), "a break was inserted");
+      assert.equal(content.text.replace(/\n/g, ""), "字".repeat(60), "no character was lost or added");
+      for (const line of content.text.split("\n")) {
+        assert.ok(line.length <= 42, `line still over cap: ${line.length}`);
+      }
+      const breaks = content.text.split("\n").length - 1;
+      assert.equal(
+        content.styles[0].range[1],
+        Buffer.from(content.text, "utf16le").length,
+        `the style range must span the rewrapped text (${breaks} insertion(s) => +${breaks * 2} bytes)`,
+      );
     });
   });
 
@@ -1128,11 +1157,17 @@ describe("capcut lint", () => {
       it("flags nothing on back-to-back main segments, even with a gap on an overlay video track", () => {
         const draft = JSON.parse(readFileSync(fix.path, "utf-8"));
         const main = draft.tracks.find((t) => t.type === "video");
+        // The fixture's segment 0 is a 1.5x clip (7.5s of source over 5s of
+        // timeline) sharing a 1.5 speed material. Keep that ratio when cloning:
+        // 1s of timeline consumes 1.5s of source. Overriding both ranges to 1s
+        // would leave a segment whose declared speed contradicts its own
+        // timeranges and trip speed-timerange-mismatch, which has nothing to do
+        // with the magnetic-main-track behaviour under test here.
         const overlaySeg = (id, startUs) => ({
           ...structuredClone(main.segments[0]),
           id,
           target_timerange: { start: startUs, duration: 1_000_000 },
-          source_timerange: { start: 0, duration: 1_000_000 },
+          source_timerange: { start: 0, duration: 1_500_000 },
         });
         // Overlay (PiP) tracks are not magnetic — a gap here is normal layout,
         // so only the first video track may ever produce this code.

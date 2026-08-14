@@ -242,6 +242,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("max_chars", ["--max-chars"], "number", "Maximum caption characters per line.", { default: 42 }),
     option("max_cue_secs", ["--max-cue-secs"], "number", "Maximum caption duration in seconds.", { default: 7 }),
     option("min_gap_ms", ["--min-gap-ms"], "number", "Minimum caption gap in milliseconds.", { default: 0 }),
+    option("max_cps", ["--max-cps"], "number", "Maximum caption reading speed in characters per second (0 disables).", {
+      default: 20,
+    }),
+    option("safe_area", ["--safe-area"], "number", "Vertical safe-area fraction for captions (0 disables).", {
+      default: 0.85,
+    }),
     option("no_check_paths", ["--no-check-paths"], "boolean", "Skip local media path checks."),
     option("fix", ["--fix"], "boolean", "Mechanically repair fixable issues and write the draft."),
     option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
@@ -560,6 +566,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary."),
     option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
+    option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
   ],
   "detect-scenes": [
     option("threshold", ["--threshold"], "number", "Scene-change score a cut must exceed (0..1).", { default: 0.4 }),

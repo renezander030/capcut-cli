@@ -32,6 +32,66 @@ export interface RenderOptions {
   burnCaptions?: boolean; // draw text-track segments onto the video
   allVideoTracks?: boolean; // composite overlay video tracks
   dryRun?: boolean; // build the plan, do not execute ffmpeg
+  progress?: boolean; // stream ffmpeg's own stderr instead of buffering it
+}
+
+const RENDER_TIMEOUT_MS = 600_000;
+
+/**
+ * ffmpeg writes one stats line per frame to stderr, so a ten-minute 30fps
+ * render emits ~18k of them. Node's spawnSync default is 1 MiB, which a long
+ * render overruns — and spawnSync reports that through `r.error` with code
+ * ENOBUFS rather than by throwing, so the old code fell into the generic
+ * failure branch and told the user to install ffmpeg. That advice was wrong
+ * twice over: ffmpeg was installed, and it had already rendered most of the
+ * file. probe.ts, scenes.ts and probeFfmpegCapabilities all set a cap; this
+ * was the one media spawn that did not.
+ */
+const RENDER_MAX_BUFFER = 64 * 1024 * 1024;
+
+const FFMPEG_FAILURE_HINTS: Array<{ pattern: RegExp; explain: (match: RegExpMatchArray) => string }> = [
+  {
+    pattern: /Unknown decoder '([^']+)'|Decoder \(codec ([^)]+)\) not found/,
+    explain: (m) =>
+      `This ffmpeg build has no decoder for '${m[1] ?? m[2]}'. Install a fuller build (the "free" or "full" ffmpeg packages carry AV1/HEVC), or transcode the source first.`,
+  },
+  {
+    pattern: /Unknown encoder '([^']+)'/,
+    explain: (m) =>
+      `This ffmpeg build has no '${m[1]}' encoder. \`capcut doctor\` reports which encoders were detected; install a build that includes it.`,
+  },
+  {
+    pattern: /No such filter: '([^']+)'|Unknown filter '([^']+)'/,
+    explain: (m) =>
+      `This ffmpeg build lacks the '${m[1] ?? m[2]}' filter. Rendering without --burn-captions or --all-video-tracks avoids the filters that need it.`,
+  },
+  {
+    pattern: /moov atom not found|Invalid data found when processing input/,
+    explain: () =>
+      "An input file is truncated or not the container its extension claims. `capcut lint` flags unreadable media before a render reaches ffmpeg.",
+  },
+  {
+    pattern: /No such file or directory/,
+    explain: () =>
+      "An input path does not exist on this machine. `capcut relink` repairs a draft whose media moved; `capcut lint` lists the missing files.",
+  },
+  {
+    pattern: /Permission denied/,
+    explain: () => "ffmpeg could not read an input or write the output. Check permissions on the draft folder.",
+  },
+];
+
+/**
+ * Turn an ffmpeg stderr tail into one actionable line, or "" when nothing in it
+ * is recognised. Pure and exported so the mapping is testable without ffmpeg —
+ * same reason `buildRenderPlan` is pure.
+ */
+export function explainFfmpegFailure(stderr: string): string {
+  for (const { pattern, explain } of FFMPEG_FAILURE_HINTS) {
+    const match = stderr.match(pattern);
+    if (match) return explain(match);
+  }
+  return "";
 }
 
 export interface RenderInput {
@@ -456,12 +516,56 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   }
 
   const cmd = opts.ffmpegCmd ?? "ffmpeg";
-  const r = spawnSync(cmd, plan.args, { encoding: "utf-8", timeout: 600_000 });
-  if (r.error || r.status !== 0) {
-    const stderr = r.stderr?.slice(-600) || r.error?.message || `ffmpeg exited ${r.status}`;
+  // --progress hands ffmpeg's stderr straight to the terminal. That is both the
+  // live progress surface (a 600s render otherwise prints nothing at all, so a
+  // working job and a hung one look identical) and the escape hatch for a
+  // render whose output would outgrow RENDER_MAX_BUFFER, since inherited output
+  // is never buffered by this process.
+  const streamProgress = opts.progress === true;
+  let r: ReturnType<typeof spawnSync>;
+  try {
+    r = spawnSync(cmd, plan.args, {
+      encoding: "utf-8",
+      timeout: RENDER_TIMEOUT_MS,
+      maxBuffer: RENDER_MAX_BUFFER,
+      ...(streamProgress ? { stdio: ["ignore", "pipe", "inherit"] } : {}),
+    });
+  } catch (e) {
     throw new Error(
-      `render: ffmpeg failed.\n${stderr}\n` +
-        "Install ffmpeg (`brew install ffmpeg` / `apt install ffmpeg`) or pass --ffmpeg-cmd <path>. " +
+      `render: ffmpeg is unavailable at '${cmd}'. Install ffmpeg (\`brew install ffmpeg\` / \`apt install ffmpeg\`) ` +
+        `or pass --ffmpeg-cmd <path>. (${e instanceof Error ? e.message : String(e)})`,
+    );
+  }
+  if (r.error) {
+    // spawnSync reports its own limits via r.error, not by throwing — a tripped
+    // timeout/buffer means ffmpeg RAN, so "install ffmpeg" would be a lie.
+    const code = (r.error as NodeJS.ErrnoException).code;
+    if (code === "ETIMEDOUT") {
+      throw new Error(
+        `render: ffmpeg timed out after ${RENDER_TIMEOUT_MS / 1000}s writing ${plan.output}. ` +
+          "Lower --scale, shorten the timeline, or drop --all-video-tracks.",
+      );
+    }
+    if (code === "ENOBUFS") {
+      throw new Error(
+        `render: ffmpeg produced more output than the ${Math.round(RENDER_MAX_BUFFER / (1024 * 1024))} MiB buffer ` +
+          `while writing ${plan.output}. The render itself was fine — only this process's capture overflowed. ` +
+          "Re-run with --progress, which streams ffmpeg's output instead of buffering it.",
+      );
+    }
+    throw new Error(
+      `render: ffmpeg is unavailable at '${cmd}'. Install ffmpeg (\`brew install ffmpeg\` / \`apt install ffmpeg\`) ` +
+        `or pass --ffmpeg-cmd <path>. (${code ?? r.error.message})`,
+    );
+  }
+  if (r.status !== 0) {
+    const stderr = typeof r.stderr === "string" ? r.stderr : "";
+    const tail =
+      stderr.slice(-600) || (streamProgress ? "(ffmpeg output was streamed above)" : `ffmpeg exited ${r.status}`);
+    const hint = explainFfmpegFailure(stderr);
+    throw new Error(
+      `render: ffmpeg failed.\n${tail}\n` +
+        (hint ? `${hint}\n` : "") +
         "Re-run with --dry-run to inspect the filter graph without executing.",
     );
   }

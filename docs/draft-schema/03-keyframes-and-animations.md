@@ -24,7 +24,7 @@ For per-frame interpolation of a single property (position, scale, alpha, etc.):
         { "id": "...", "time_offset": 2000000,  "values": [-0.3], "curveType": "Line" }
       ]
     },
-    { "property_type": "KFTypeUniformScale", "keyframe_list": [ ... ] }
+    { "property_type": "UNIFORM_SCALE", "keyframe_list": [ ... ] }
   ]
 }
 ```
@@ -40,12 +40,21 @@ One entry per property. Within an entry, `keyframe_list` is sorted by `time_offs
 | `rotation` | `KFTypeRotation` | degrees clockwise | accepts `"45deg"` syntax |
 | `scale_x` | `KFTypeScaleX` | 0 .. ∞ | 1 = source size |
 | `scale_y` | `KFTypeScaleY` | 0 .. ∞ | |
-| `uniform_scale` | `KFTypeUniformScale` | 0 .. ∞ | locks scale_x = scale_y |
+| `uniform_scale` | `UNIFORM_SCALE` | 0 .. ∞ | locks scale_x = scale_y; the one property with no `KFType` prefix — see below |
 | `alpha` | `KFTypeAlpha` | 0 .. 1 | accepts `"50%"` syntax |
 | `saturation` | `KFTypeSaturation` | -1 .. 1 | accepts `"+0.5"` syntax |
 | `contrast` | `KFTypeContrast` | -1 .. 1 | |
 | `brightness` | `KFTypeBrightness` | -1 .. 1 | |
 | `volume` | `KFTypeVolume` | 0 .. 1 | audio segments only |
+
+> **`uniform_scale` breaks the naming pattern.** Every other property writes a
+> `KFType…` identifier; this one writes the bare `UNIFORM_SCALE`. That asymmetry
+> is CapCut's, not ours — `src/decorators.ts`'s `PROPERTY_MAP` is the authority,
+> and a keyframe written as `KFTypeUniformScale` is silently ignored by the app.
+> These docs previously showed the `KFType` form, so a hand-built keyframe
+> copied from them did nothing ([#80](https://github.com/renezander030/capcut-cli/issues/80)).
+> A test now fails if this table and `PROPERTY_MAP` disagree again, so the two
+> cannot drift apart silently a second time.
 
 The `keyframe` CLI command appends to existing per-property lists on re-invocation and sorts by `time_offset`, so you can build up complex motion incrementally.
 
