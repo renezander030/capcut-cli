@@ -4,18 +4,104 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-08-14
+
+Nine items from an opportunity-mining pass over this repo's own issues and the
+surrounding ecosystem (pyJianYingDraft, capcut-mate, auto-subs, ffsubsync,
+moviepy, video-subtitle-extractor and the vertical-video tools). Two clusters
+carried the signal: ffmpeg robustness, where this CLI had one unguarded spawn
+left, and caption quality, where the lint rules measured length but never
+readability. No command was removed and no existing flag changed meaning.
+
+### Fixed
+
+- **A long `render` could fail on a draft that was perfectly fine.** The ffmpeg
+  spawn in `render` was the only media spawn in the codebase with no
+  `maxBuffer`, so it kept Node's 1 MiB default. ffmpeg writes one stats line per
+  frame to stderr — roughly 18k lines for a ten-minute 30fps render — and once
+  that overran the cap, `spawnSync` reported it through `r.error` with code
+  `ENOBUFS` rather than by throwing. The old code folded that into its generic
+  failure branch and told the user to install ffmpeg: advice that was wrong
+  twice over, since ffmpeg was installed and had already rendered most of the
+  file. The cap is now 64 MiB, and `ENOBUFS` and `ETIMEDOUT` each get their own
+  message that says ffmpeg ran. `probe.ts`, `scenes.ts` and
+  `probeFfmpegCapabilities` already did this; `render` now matches them.
+- **`export-timeline` could emit a zero-length OTIO clip**
+  ([#82](https://github.com/renezander030/capcut-cli/issues/82)). `draftToOtio`
+  carried its own `Math.round((us / 1e6) * rate)` alongside the one in
+  `time.ts`, and the two disagreed in exactly the cases that reach the file: a
+  clip shorter than half a frame rounded to zero frames, which an NLE either
+  drops or refuses, and a small negative gap rounded to `-0`, which serialises
+  into the JSON as `-0`. It now calls `framesFor`, so there is a single frame
+  grid. A sub-half-frame clip exports as one frame instead of none.
+
 ### Added
 
+- **`lint` now measures reading speed, not just length** (`caption-too-fast`).
+  `cue-too-long` caps how long a caption may stay up; nothing capped how fast it
+  goes by, so 45 characters in 1.2s — 37.5 chars/s, roughly double what anyone
+  can read — passed every rule. The ceiling is 20 chars/s by default
+  (`--max-cps`, `0` disables), counted on visible characters so whitespace does
+  not inflate the rate. Report-only: the repair is either more screen time,
+  which moves every later caption, or fewer words, which is an authoring
+  decision. The suggested command names the segment and the duration that would
+  clear it.
+- **`lint --fix` can finally re-wrap CJK captions.** The re-wrapper only ever
+  swapped a space for a newline, because `styles[]` ranges are UTF-16LE *byte*
+  offsets and a length-neutral edit keeps them valid. Space-less scripts have no
+  space to swap, so a Chinese or Japanese caption tripped `line-too-long`
+  forever with no way to clear it — on a tool whose other namespace is JianYing.
+  Breaks are now inserted between characters, with every later style boundary
+  shifted by exactly 2 bytes per insertion, so per-range styling (karaoke
+  highlights above all) stays on its characters. Line-start punctuation is
+  respected: a break never strands `。`, `、` or a closing bracket at the head of
+  a line. Over-long Latin words are still never split and stay reported.
+- **`lint` flags captions that land under the platform UI**
+  (`caption-outside-safe-area`). On a vertical canvas, a caption parked near
+  either edge sits where TikTok, Reels and Shorts draw their own controls. The
+  rule only runs when the canvas is taller than it is wide and is deliberately
+  direction-agnostic — both bands are unsafe — so it needs no assumption about
+  which way CapCut's `transform.y` points. `--safe-area` tunes the fraction
+  (default `0.85`).
+- **`lint` catches segments whose speed contradicts itself**
+  (`speed-timerange-mismatch`, `speed-material-mismatch`). `capcut speed`
+  maintains two things at once: the segment's `speed`, and the source span it
+  consumes. A draft that has been through another tool can carry a `speed` that
+  disagrees with its own timeranges, or with the linked speed material the app
+  actually reads. The app then plays the clip at one rate while every UI surface
+  reports another, and anything aligned to it — captions above all — drifts with
+  no visible cause. A 1% tolerance keeps ordinary sub-frame rounding quiet.
+- **`render --progress`** streams ffmpeg's own output to stderr instead of
+  capturing it. A 600s render otherwise prints nothing at all, so a working job
+  and a hung one look identical. It doubles as the escape hatch for a render
+  whose output would outgrow the buffer, since inherited output is never
+  buffered by this process — which is what the `ENOBUFS` message now points at.
+- **A failed `render` explains itself.** `explainFfmpegFailure` maps ffmpeg's
+  stderr onto one actionable line: a missing decoder is named (the AV1/HEVC
+  case), a missing encoder points at `capcut doctor`, a missing filter names the
+  flag that needs it, a truncated container points at `lint`, and a missing
+  input points at `relink`. It returns nothing rather than inventing a hint for
+  a diagnostic it does not recognise, and is pure and exported so the mapping is
+  tested without ffmpeg.
 - **Frame-grid helpers let library callers match CapCut's duration rounding**
   ([#76](https://github.com/renezander030/capcut-cli/issues/76)).
   `quantizeToFrame(us, fps)` returns the nearest on-grid microsecond duration,
   while `framesFor(us, fps)` exposes the frame count. Both fall back to 30 fps
   for missing or invalid rates, floor positive durations at one frame, and keep
   negative durations signed; existing commands remain unchanged and callers opt
-  in through the public library API.
+  in through the public library API. `draftToOtio` is now the first in-tree
+  caller, which is what closed #82 above.
 
 ### Documentation
 
+- **The keyframe schema documented a `property_type` the code never writes**
+  ([#80](https://github.com/renezander030/capcut-cli/issues/80)).
+  `docs/draft-schema/03-keyframes-and-animations.md` listed
+  `KFTypeUniformScale`; `PROPERTY_MAP` writes the bare `UNIFORM_SCALE`, the one
+  property that breaks the `KFType` pattern. A keyframe hand-built from the
+  table was silently ignored by the app. The table and the example now match the
+  code, the asymmetry is called out as CapCut's rather than a typo, and a test
+  fails if the two drift apart again.
 - **The mask-keyframe section records what the encoding search has already ruled out** ([#44](https://github.com/renezander030/capcut-cli/issues/44)). `docs/draft-schema/03-keyframes-and-animations.md` said no capture exists in the neighbouring ecosystem tools without naming what had been checked, so anyone picking the issue up starts that search from zero. It now names the negative result: `pyJianYingDraft`'s `KeyframeProperty` enum — the upstream `src/enums.json` is extracted from — carries the same eleven properties this CLI exposes and nothing for mask geometry, so there is no encoding to borrow and the ground truth has to come from an app-authored capture. No behaviour change; the CLI still declines to write mask keyframes.
 
 ## [0.18.0] — 2026-08-09

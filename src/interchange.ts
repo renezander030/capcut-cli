@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import type { Draft, Segment } from "./draft.js";
+import { framesFor } from "./time.js";
 
 /**
  * OpenTimelineIO export (`export-timeline`).
@@ -381,7 +382,13 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
 
 export function draftToOtio(draft: Draft): { doc: OtioObject; stats: OtioStats } {
   const rate = typeof draft.fps === "number" && draft.fps > 0 ? draft.fps : 30;
-  const toFrames = (us: number) => Math.round((us / 1_000_000) * rate);
+  // Issue #82: this used to be a local `Math.round((us / 1e6) * rate)`, a second
+  // frame grid alongside time.ts. It differed in two ways that both reached the
+  // exported file: a clip shorter than half a frame rounded to a zero-length OTIO
+  // clip (an NLE either drops it or refuses the timeline), and small negative
+  // gaps rounded to -0, which serialises as `-0` in JSON. framesFor keeps a
+  // positive duration at one frame and returns a plain 0 for the zero case.
+  const toFrames = (us: number) => framesFor(us, rate);
 
   const children: OtioObject[] = [];
   const stats: OtioStats = { tracks: 0, clips: 0, gaps: 0, skipped: [] };

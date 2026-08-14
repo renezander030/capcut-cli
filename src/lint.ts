@@ -64,6 +64,16 @@ export interface LintOptions {
   maxCueDurationUs: number;
   minGapBetweenCaptionsUs: number;
   checkLocalPaths: boolean;
+  /** Reading-speed ceiling in characters per second. maxCueDurationUs caps how
+   * LONG a caption may stay up; this caps how FAST it goes by, which is the
+   * limit a viewer actually feels — 45 characters in 1.2s breaks no absolute
+   * duration rule and is still unreadable. 20 is the common subtitling ceiling
+   * (BBC/Netflix sit at 17-20 for Latin scripts). */
+  maxCharsPerSecond?: number;
+  /** Fraction of a vertical canvas's height treated as safe for captions,
+   * measured from the centre outward in CapCut's normalized transform space.
+   * A caption past it sits where TikTok/Reels/Shorts draw their own UI. */
+  safeAreaFraction?: number;
   /** ffprobe local media that exists (VFR/unreadable checks). Best-effort:
    * silently skipped when ffprobe is unavailable. Default true. */
   probeMedia?: boolean;
@@ -87,6 +97,8 @@ export const DEFAULT_LINT_OPTIONS: LintOptions = {
   minGapBetweenCaptionsUs: 0, // overlap = error; gap = no rule by default
   checkLocalPaths: true,
   probeMedia: true,
+  maxCharsPerSecond: 20, // upper end of the BBC/Netflix reading-speed range
+  safeAreaFraction: 0.85, // |transform.y| past this is under the platform UI
 };
 
 export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS): LintIssue[] {
@@ -151,6 +163,58 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
         });
       }
 
+      // Reading speed. cue-too-long above catches a caption that lingers; this
+      // catches the opposite failure, a caption that is gone before it can be
+      // read. Only meaningful with both text and a real duration, and counted
+      // on visible characters (whitespace is not read).
+      const cps = opts.maxCharsPerSecond;
+      if (cps !== undefined && cps > 0 && text.length > 0 && s.target_timerange.duration > 0) {
+        const visible = text.replace(/\s+/g, "").length;
+        const seconds = s.target_timerange.duration / 1_000_000;
+        const rate = visible / seconds;
+        if (visible > 0 && rate > cps) {
+          const needed = Math.ceil((visible / cps) * 1000);
+          issues.push({
+            severity: "warning",
+            code: "caption-too-fast",
+            message: `Caption ${shortId(s.id)} runs at ${rate.toFixed(1)} chars/s (>${cps}) — ${visible} characters in ${Math.round(seconds * 1000)}ms`,
+            // Report-only: the repair is either more screen time (which moves
+            // every later caption) or fewer words (an authoring decision).
+            fixable: false,
+            suggested_command: `capcut trim <project> ${s.id} <start> ${needed}ms  # or shorten the text`,
+            location: { track: track.name, segment_id: s.id },
+          });
+        }
+      }
+
+      // Safe area. On a vertical canvas the platform draws its own UI over the
+      // top and bottom bands, so a caption parked near either edge is covered
+      // on the very platforms a 9:16 draft targets. Direction-agnostic on
+      // purpose: both edges are unsafe, so this needs no assumption about
+      // which way CapCut's transform.y points.
+      const safe = opts.safeAreaFraction;
+      const canvas = draft.canvas_config;
+      if (
+        safe !== undefined &&
+        safe > 0 &&
+        canvas &&
+        typeof canvas.width === "number" &&
+        typeof canvas.height === "number" &&
+        canvas.height > canvas.width
+      ) {
+        const y = s.clip?.transform?.y;
+        if (typeof y === "number" && Math.abs(y) > safe) {
+          issues.push({
+            severity: "warning",
+            code: "caption-outside-safe-area",
+            message: `Caption ${shortId(s.id)} sits at y=${y.toFixed(2)} on a ${canvas.width}x${canvas.height} vertical canvas (|y|>${safe}) — inside the band TikTok/Reels/Shorts overlay with their own UI`,
+            fixable: false,
+            suggested_command: `capcut text-style <project> ${s.id} --y ${(Math.sign(y) * safe).toFixed(2)}`,
+            location: { track: track.name, segment_id: s.id },
+          });
+        }
+      }
+
       for (const line of text.split(/\r?\n/)) {
         if (line.length > opts.maxCharsPerLine) {
           issues.push({
@@ -190,6 +254,53 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
             message: `Captions ${shortId(s.id)} and ${shortId(next.id)} are ${Math.round(gap / 1000)}ms apart (<${opts.minGapBetweenCaptionsUs / 1000}ms)`,
             fixable: FIXABLE_CODES.has("caption-gap-too-small") && shrunkDuration >= MIN_CAPTION_DURATION_US,
             location: { track: track.name, segment_id: s.id },
+          });
+        }
+      }
+    }
+  }
+
+  // Speed consistency. `capcut speed` maintains two things at once: the
+  // segment's own `speed`, and the source span it consumes
+  // (source.duration = target.duration * speed). A draft that has been through
+  // another tool — or hand-edited — can carry a `speed` that disagrees with
+  // its own timeranges, or with the linked speed material the app actually
+  // reads. The app then plays the clip at one rate while every UI surface
+  // reports another, and anything aligned to that clip (captions above all)
+  // drifts with no visible cause. Both halves are mechanically checkable.
+  for (const track of draft.tracks) {
+    if (track.type !== "video" && track.type !== "audio") continue;
+    for (const s of track.segments) {
+      const speed = s.speed;
+      if (typeof speed !== "number" || !Number.isFinite(speed) || speed <= 0) continue;
+      const target = s.target_timerange?.duration;
+      const source = s.source_timerange?.duration;
+      if (typeof target === "number" && typeof source === "number" && target > 0 && source > 0) {
+        const implied = source / target;
+        // One frame at 30fps over a one-second clip is ~3%; 1% is comfortably
+        // below that and still well above JSON rounding noise.
+        if (Math.abs(implied - speed) / speed > 0.01) {
+          issues.push({
+            severity: "warning",
+            code: "speed-timerange-mismatch",
+            message: `Segment ${shortId(s.id)} declares speed ${speed} but its timeranges imply ${implied.toFixed(3)} (${source}us of source over ${target}us of timeline)`,
+            fixable: false,
+            suggested_command: `capcut speed <project> ${s.id} ${speed}  # rewrites source_timerange to match`,
+            location: { track: track.name, segment_id: s.id },
+          });
+        }
+      }
+      for (const refId of s.extra_material_refs ?? []) {
+        const speedMat = findMaterial(draft.materials.speeds, refId);
+        if (!speedMat) continue;
+        if (typeof speedMat.speed === "number" && Math.abs(speedMat.speed - speed) > 1e-6) {
+          issues.push({
+            severity: "warning",
+            code: "speed-material-mismatch",
+            message: `Segment ${shortId(s.id)} declares speed ${speed} but its speed material ${shortId(refId)} carries ${speedMat.speed} — the app reads the material`,
+            fixable: false,
+            suggested_command: `capcut speed <project> ${s.id} ${speed}  # re-syncs both`,
+            location: { track: track.name, segment_id: s.id, material_id: refId },
           });
         }
       }
@@ -673,25 +784,18 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
     }
   }
 
-  // Pass 4: re-wrap over-long caption lines at word boundaries. Each break
-  // swaps one space for one newline — string length never changes, so the
-  // UTF-16LE byte offsets in the content's styles[] ranges stay valid. Words
-  // longer than the limit are never split and stay reported.
+  // Pass 4: re-wrap over-long caption lines. A break at a space swaps one
+  // space for one newline and leaves length alone; a break inside a space-less
+  // script (CJK) inserts one. rewrapContent handles both and re-points the
+  // content's styles[] UTF-16LE byte ranges across any insertion, so per-range
+  // styling stays on its characters. Over-long Latin words are still never
+  // split and stay reported.
   for (const track of getTracksByType(draft, "text")) {
     for (const s of track.segments) {
       const mat = findMaterial(draft.materials.texts, s.material_id);
       if (!mat) continue;
-      let parsed: { text?: unknown };
-      try {
-        parsed = JSON.parse(mat.content);
-      } catch {
-        continue;
-      }
-      if (typeof parsed.text !== "string") continue;
-      const wrapped = rewrapText(parsed.text, opts.maxCharsPerLine);
-      if (wrapped === parsed.text) continue;
-      parsed.text = wrapped;
-      mat.content = JSON.stringify(parsed);
+      const rewrapped = rewrapContent(mat.content, opts.maxCharsPerLine);
+      if (rewrapped !== null) mat.content = rewrapped;
     }
   }
 
@@ -764,27 +868,135 @@ function rewrapText(text: string, maxChars: number): string {
     .join("");
 }
 
-// Greedy word wrap that only swaps spaces for newlines (1:1, length-neutral).
-// Each break replaces one space with '\n', picked so the emitted line never
-// exceeds maxChars — inside a multi-space run the surplus spaces land after
-// the break instead of overflowing the broken line. A segment with no space
-// at or before the cap (an over-long word, space-less CJK text) is emitted
-// unchanged, so re-running the wrap is always a no-op and --fix converges.
+// Scripts written without spaces, where a break between two characters is
+// ordinary typography rather than a word split: CJK ideographs, kana, hangul,
+// and the full-width punctuation that travels with them.
+const CJK_CHAR = /[぀-ヿ㐀-䶿一-鿿豈-﫿＀-￯가-힯]/;
+// Characters that may not open a line: a break before one of these strands the
+// punctuation at the start of the next line, which no CJK typesetter allows.
+const CJK_NO_LINE_START = /[。、，．！？：；）】》」』〉…—ー～%,.!?:;)\]}]/;
+
+// True when a break between line[i-1] and line[i] is typographically legal.
+function cjkBreakOk(line: string, i: number): boolean {
+  if (i <= 0 || i >= line.length) return false;
+  const prev = line[i - 1];
+  const next = line[i];
+  if (!CJK_CHAR.test(prev) && !CJK_CHAR.test(next)) return false;
+  if (CJK_NO_LINE_START.test(next)) return false;
+  // Never strand an opening bracket at the end of a line.
+  if (/[（【《「『〈]/.test(prev)) return false;
+  return true;
+}
+
+// Greedy word wrap. A space break swaps one space for one newline (1:1,
+// length-neutral); a CJK break INSERTS a newline between two characters and so
+// grows the string by one code unit, which is why callers that carry styles[]
+// offsets must go through rewrapContent rather than calling this directly.
+// A run that is neither breakable at a space nor CJK (an over-long Latin word)
+// is still emitted unchanged, so re-running the wrap stays a no-op and --fix
+// converges.
 function wrapLine(line: string, maxChars: number): string {
   let out = "";
   let rest = line;
   while (rest.length > maxChars) {
     // Break at the last space that keeps the emitted line within maxChars…
     let brk = rest.lastIndexOf(" ", maxChars);
-    if (brk === -1) {
-      // …or after an unbreakable over-long head, at the first space past it.
-      brk = rest.indexOf(" ", maxChars);
-      if (brk === -1) break;
+    if (brk !== -1) {
+      out += `${rest.slice(0, brk)}\n`;
+      rest = rest.slice(brk + 1);
+      continue;
     }
+    // …or, in a space-less script, between two characters at the cap, walking
+    // back to the first legal break so closing punctuation never opens a line.
+    let cut = -1;
+    for (let i = Math.min(maxChars, rest.length - 1); i > 0; i--) {
+      if (cjkBreakOk(rest, i)) {
+        cut = i;
+        break;
+      }
+    }
+    if (cut !== -1) {
+      out += `${rest.slice(0, cut)}\n`;
+      rest = rest.slice(cut);
+      continue;
+    }
+    // …or after an unbreakable over-long head, at the first space past it.
+    brk = rest.indexOf(" ", maxChars);
+    if (brk === -1) break;
     out += `${rest.slice(0, brk)}\n`;
     rest = rest.slice(brk + 1);
   }
   return out + rest;
+}
+
+/**
+ * Re-wrap a text material's `content`, keeping its styles[] ranges pointing at
+ * the same characters. Returns the new content JSON, or null when nothing
+ * changed or the content is not the shape we can safely rewrite.
+ *
+ * The subtlety this exists for: a space break is length-neutral, but a CJK
+ * break inserts a newline, and styles[].range holds UTF-16LE BYTE offsets
+ * (`Buffer.from(text, "utf16le").length` — two bytes per BMP code unit, see
+ * updateTextContent). Every inserted newline therefore shifts each later
+ * boundary by exactly 2 bytes. Without that correction a Chinese caption's
+ * per-range styling — karaoke highlights above all — would slide off its
+ * characters, which is why the wrap refused to touch space-less text at all
+ * until now.
+ */
+function rewrapContent(content: string, maxChars: number): string | null {
+  let parsed: { text?: unknown; styles?: unknown };
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (typeof parsed.text !== "string" || parsed.text === "") return null;
+  const original = parsed.text;
+  const wrapped = rewrapText(original, maxChars);
+  if (wrapped === original) return null;
+
+  // Insertion points in ORIGINAL coordinates. Walk both strings together: the
+  // wrap only ever swaps a space for a newline or inserts one, so a newline in
+  // `wrapped` with no counterpart in `original` is an insertion at that index.
+  const insertions: number[] = [];
+  let o = 0;
+  for (let w = 0; w < wrapped.length; w++) {
+    if (o < original.length && wrapped[w] === original[o]) {
+      o++;
+      continue;
+    }
+    if (wrapped[w] === "\n") {
+      if (o < original.length && original[o] === " ") {
+        o++; // swapped, not inserted — length unchanged
+      } else {
+        insertions.push(o); // inserted before original index o
+      }
+      continue;
+    }
+    // Shapes we did not produce; leave the material alone rather than guess.
+    return null;
+  }
+  if (o !== original.length) return null;
+
+  parsed.text = wrapped;
+  if (Array.isArray(parsed.styles) && insertions.length > 0) {
+    const shiftBytes = (offset: number): number => {
+      // offset is a UTF-16LE byte offset; /2 puts it in code units.
+      const codeUnit = offset / 2;
+      let shift = 0;
+      for (const at of insertions) {
+        if (at <= codeUnit) shift += 2;
+      }
+      return offset + shift;
+    };
+    for (const style of parsed.styles as Array<{ range?: unknown }>) {
+      const r = style.range;
+      if (Array.isArray(r) && r.length === 2 && typeof r[0] === "number" && typeof r[1] === "number") {
+        style.range = [shiftBytes(r[0]), shiftBytes(r[1])];
+      }
+    }
+  }
+  return JSON.stringify(parsed);
 }
 
 // True when closing the main-track gap that opens at `gapStartUs` is
