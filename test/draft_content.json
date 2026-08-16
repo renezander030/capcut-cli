@@ -317,7 +317,7 @@
       {
         "id": "mat-text-01",
         "type": "text",
-        "content": "{\"styles\":[{\"range\":[0,28],\"size\":15,\"bold\":false,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1,\"color\":[1,1,1]}}}}],\"text\":\"Hello everyone\"}",
+        "content": "{\"styles\":[{\"range\":[0,14],\"size\":15,\"bold\":false,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1,\"color\":[1,1,1]}}}}],\"text\":\"Hello everyone\"}",
         "alignment": 1,
         "font_size": 15,
         "text_color": "#FFFFFF"
@@ -325,7 +325,7 @@
       {
         "id": "mat-text-02",
         "type": "text",
-        "content": "{\"styles\":[{\"range\":[0,62],\"size\":15.0,\"bold\":false,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1.0,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[1.0,1.0,1.0]}}}}],\"text\":\"Let me show you how this works\"}",
+        "content": "{\"styles\":[{\"range\":[0,30],\"size\":15.0,\"bold\":false,\"italic\":false,\"underline\":false,\"fill\":{\"alpha\":1.0,\"content\":{\"render_type\":\"solid\",\"solid\":{\"alpha\":1.0,\"color\":[1.0,1.0,1.0]}}}}],\"text\":\"Let me show you how this works\"}",
         "alignment": 1,
         "font_size": 15,
         "text_color": "#FFFFFF"

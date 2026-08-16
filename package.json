@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "Independent, unofficial CLI to create and edit CapCut projects — build drafts from scratch, add video/audio/text, subtitles, timing, speed, volume, templates, cut long-form to shorts. No API needed. Not affiliated with ByteDance.",
   "type": "module",
   "bin": {
@@ -26,6 +26,7 @@
     "dist/lint.d.ts",
     "dist/runner.d.ts",
     "dist/store.d.ts",
+    "dist/text-offsets.d.ts",
     "dist/time.d.ts",
     "dist/version.d.ts",
     "docs",

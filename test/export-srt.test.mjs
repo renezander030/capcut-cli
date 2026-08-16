@@ -173,8 +173,8 @@ describe("export-srt — repeated karaoke phrase collapses per repetition", () =
     // still export as ONE word at its own time, never the whole phrase
     // interpolated into a single word's timeslot.
     const entries = [
-      { startUs: 1_000_000, endUs: 1_500_000, text: "hi yo", styleRanges: [[0, 4]] },
-      { startUs: 0, endUs: 500_000, text: "hi yo", styleRanges: [[6, 10]] },
+      { startUs: 1_000_000, endUs: 1_500_000, text: "hi yo", styleRanges: [[0, 2]] },
+      { startUs: 0, endUs: 500_000, text: "hi yo", styleRanges: [[3, 5]] },
     ];
     const cues = collapseKaraokeRuns(entries);
     assert.equal(cues.length, 2);
@@ -183,7 +183,7 @@ describe("export-srt — repeated karaoke phrase collapses per repetition", () =
   });
 
   it("still interpolates a lone caption that merely emphasizes one word", () => {
-    const entries = [{ startUs: 0, endUs: 1_000_000, text: "hi yo", styleRanges: [[0, 4]] }];
+    const entries = [{ startUs: 0, endUs: 1_000_000, text: "hi yo", styleRanges: [[0, 2]] }];
     const cues = collapseKaraokeRuns(entries);
     assert.equal(cues.length, 1);
     assert.equal(cues[0].words, undefined);
@@ -226,8 +226,8 @@ describe("renderVtt — inline timestamps and cue-text escaping", () => {
     // Whisper can emit coincident word starts; a duplicate timestamp is
     // invalid per the WebVTT spec, so the word joins the previous group.
     const entries = [
-      { startUs: 0, endUs: 400_000, text: "a b", styleRanges: [[0, 2]] },
-      { startUs: 0, endUs: 800_000, text: "a b", styleRanges: [[4, 6]] },
+      { startUs: 0, endUs: 400_000, text: "a b", styleRanges: [[0, 1]] },
+      { startUs: 0, endUs: 800_000, text: "a b", styleRanges: [[2, 3]] },
     ];
     const vtt = renderVtt(collapseKaraokeRuns(entries), true);
     assert.match(vtt, /00:00:00\.000 --> 00:00:00\.800\na b\n/);
@@ -236,9 +236,9 @@ describe("renderVtt — inline timestamps and cue-text escaping", () => {
 
   it("keeps strictly later timestamps after a skipped duplicate", () => {
     const entries = [
-      { startUs: 0, endUs: 300_000, text: "a b c", styleRanges: [[0, 2]] },
-      { startUs: 0, endUs: 600_000, text: "a b c", styleRanges: [[4, 6]] },
-      { startUs: 600_000, endUs: 900_000, text: "a b c", styleRanges: [[8, 10]] },
+      { startUs: 0, endUs: 300_000, text: "a b c", styleRanges: [[0, 1]] },
+      { startUs: 0, endUs: 600_000, text: "a b c", styleRanges: [[2, 3]] },
+      { startUs: 600_000, endUs: 900_000, text: "a b c", styleRanges: [[4, 5]] },
     ];
     const vtt = renderVtt(collapseKaraokeRuns(entries), true);
     assert.match(vtt, /a b <00:00:00\.600>c/);

@@ -2,10 +2,11 @@ import { existsSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { bubbleCatalogue, imageAnimCatalogue } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
-import { extractText, findMaterial, getTracksByType } from "./draft.js";
+import { extractStyleRanges, extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { copyAssetDeduped, effectCatalogue, filterCatalogue } from "./factory.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
+import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
 
@@ -49,6 +50,7 @@ const FIXABLE_CODES = new Set<string>([
   "dangling-companion-ref",
   "main-track-gap",
   "media-outside-draft",
+  "text-range-doubled",
 ]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
@@ -152,6 +154,26 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
       const s = segs[i];
       const mat = findMaterial(draft.materials.texts, s.material_id);
       const text = mat ? extractText(mat.content) : "";
+
+      // Style ranges this CLI wrote before 0.19.1 are UTF-16LE byte offsets —
+      // twice the code-unit offsets CapCut stores (#85). A lone full-span
+      // block survives that, because the app clamps [0,2n] back to the end of
+      // the text, but every karaoke or keyword highlight lands past the end
+      // and paints nothing. The doubled form is identifiable with certainty
+      // (text-offsets.ts), which is what makes halving it a safe --fix rather
+      // than a guess.
+      if (mat) {
+        const stored = extractStyleRanges(mat.content);
+        if (rangesLookDoubled(text, stored)) {
+          issues.push({
+            severity: "warning",
+            code: "text-range-doubled",
+            message: `Caption ${shortId(s.id)} stores style ranges as UTF-16LE bytes — ${stored.length} range(s) ending at ${text.length * 2} on a ${text.length}-character text, so per-range styling points past the end`,
+            fixable: FIXABLE_CODES.has("text-range-doubled"),
+            location: { track: track.name, segment_id: s.id, material_id: mat.id },
+          });
+        }
+      }
 
       if (s.target_timerange.duration > opts.maxCueDurationUs) {
         issues.push({
@@ -784,16 +806,21 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
     }
   }
 
-  // Pass 4: re-wrap over-long caption lines. A break at a space swaps one
-  // space for one newline and leaves length alone; a break inside a space-less
-  // script (CJK) inserts one. rewrapContent handles both and re-points the
-  // content's styles[] UTF-16LE byte ranges across any insertion, so per-range
-  // styling stays on its characters. Over-long Latin words are still never
-  // split and stay reported.
+  // Pass 4: repair pre-0.19.1 doubled style ranges, then re-wrap over-long
+  // caption lines. The repair runs first because the re-wrap shifts each later
+  // range boundary across an inserted newline, and it can only do that in the
+  // coordinates CapCut actually stores. A break at a space swaps one space for
+  // one newline and leaves length alone; a break inside a space-less script
+  // (CJK) inserts one. rewrapContent handles both and re-points the content's
+  // styles[] code-unit ranges across any insertion, so per-range styling stays
+  // on its characters. Over-long Latin words are still never split and stay
+  // reported.
   for (const track of getTracksByType(draft, "text")) {
     for (const s of track.segments) {
       const mat = findMaterial(draft.materials.texts, s.material_id);
       if (!mat) continue;
+      const undoubled = undoubleContent(mat.content);
+      if (undoubled !== null) mat.content = undoubled;
       const rewrapped = rewrapContent(mat.content, opts.maxCharsPerLine);
       if (rewrapped !== null) mat.content = rewrapped;
     }
@@ -935,13 +962,12 @@ function wrapLine(line: string, maxChars: number): string {
  * changed or the content is not the shape we can safely rewrite.
  *
  * The subtlety this exists for: a space break is length-neutral, but a CJK
- * break inserts a newline, and styles[].range holds UTF-16LE BYTE offsets
- * (`Buffer.from(text, "utf16le").length` — two bytes per BMP code unit, see
- * updateTextContent). Every inserted newline therefore shifts each later
- * boundary by exactly 2 bytes. Without that correction a Chinese caption's
- * per-range styling — karaoke highlights above all — would slide off its
- * characters, which is why the wrap refused to touch space-less text at all
- * until now.
+ * break inserts a newline, and styles[].range holds code-unit offsets (see
+ * text-offsets.ts). Every inserted newline therefore shifts each later
+ * boundary by exactly one code unit. Without that correction a Chinese
+ * caption's per-range styling — karaoke highlights above all — would slide off
+ * its characters, which is why the wrap refused to touch space-less text at
+ * all until now.
  */
 function rewrapContent(content: string, maxChars: number): string | null {
   let parsed: { text?: unknown; styles?: unknown };
@@ -980,20 +1006,52 @@ function rewrapContent(content: string, maxChars: number): string | null {
 
   parsed.text = wrapped;
   if (Array.isArray(parsed.styles) && insertions.length > 0) {
-    const shiftBytes = (offset: number): number => {
-      // offset is a UTF-16LE byte offset; /2 puts it in code units.
-      const codeUnit = offset / 2;
+    const shiftOffset = (offset: number): number => {
       let shift = 0;
       for (const at of insertions) {
-        if (at <= codeUnit) shift += 2;
+        if (at <= offset) shift += 1;
       }
       return offset + shift;
     };
     for (const style of parsed.styles as Array<{ range?: unknown }>) {
       const r = style.range;
       if (Array.isArray(r) && r.length === 2 && typeof r[0] === "number" && typeof r[1] === "number") {
-        style.range = [shiftBytes(r[0]), shiftBytes(r[1])];
+        style.range = [shiftOffset(r[0]), shiftOffset(r[1])];
       }
+    }
+  }
+  return JSON.stringify(parsed);
+}
+
+/**
+ * Halve a text material's pre-0.19.1 doubled style ranges. Returns the new
+ * content JSON, or null when the ranges are already code units — which is
+ * every app-authored draft, every draft written from 0.19.1 on, and every
+ * draft this has already repaired.
+ */
+function undoubleContent(content: string): string | null {
+  let parsed: { text?: unknown; styles?: unknown };
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (typeof parsed.text !== "string" || !Array.isArray(parsed.styles)) return null;
+  const styles = parsed.styles as Array<{ range?: unknown }>;
+  const stored: Array<[number, number]> = [];
+  for (const style of styles) {
+    const r = style.range;
+    if (Array.isArray(r) && r.length === 2 && typeof r[0] === "number" && typeof r[1] === "number") {
+      stored.push([r[0], r[1]]);
+    }
+  }
+  const repaired = repairDoubledRanges(parsed.text, stored);
+  if (repaired === null) return null;
+  let at = 0;
+  for (const style of styles) {
+    const r = style.range;
+    if (Array.isArray(r) && r.length === 2 && typeof r[0] === "number" && typeof r[1] === "number") {
+      style.range = repaired[at++];
     }
   }
   return JSON.stringify(parsed);

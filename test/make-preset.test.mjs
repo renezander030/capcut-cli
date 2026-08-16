@@ -429,8 +429,7 @@ describe("--preset: rangeless preset onto a multi-range segment", () => {
     assert.equal(styles.length, 1, "all range blocks collapsed to one");
     assert.equal(styles[0].size, 40);
     assert.deepEqual(solidColor(styles[0]), [0, 0, 1]);
-    const byteLen = Buffer.from("hello world hi", "utf16le").length;
-    assert.deepEqual(styles[0].range, [0, byteLen], "the single block spans the whole text");
+    assert.deepEqual(styles[0].range, [0, "hello world hi".length], "the single block spans the whole text");
   });
 
   it("a preset WITH ranges keeps multiple blocks (no collapse)", () => {

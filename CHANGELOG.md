@@ -4,6 +4,67 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-08-16
+
+One bug, reported with the measurement that settled it, plus the repair for
+drafts already written. No command was removed and no existing flag changed
+meaning.
+
+### Fixed
+
+- **Every multi-range text highlight was written past the end of its text**
+  ([#85](https://github.com/renezander030/capcut-cli/issues/85)). A text
+  material's `content.styles[].range` holds UTF-16 **code units** — plain JS
+  string indices — and this CLI wrote UTF-16LE **bytes**, so every stored
+  offset was doubled. A single full-span range survived the mistake, because
+  `[0, 2n]` clamps back to the end of the text when CapCut opens the draft,
+  which is exactly why ordinary `add-text` looked correct and the premise went
+  unchallenged. A multi-range highlight did not: on the 17 code-unit string
+  `อย่าไปซื้อ Claude`, `text-ranges --styles '[{"start":11,"end":17,…}]'` wrote
+  the emphasised span at `[22, 34]`, entirely past the end, and CapCut painted
+  nothing. `text-ranges`, `caption --karaoke`, `--highlight-words` and any
+  preset carrying `text_ranges` were all affected.
+
+  The premise came from this repo's own schema notes and had never been
+  measured. @hillimited measured it: across 38 app-authored drafts on one
+  machine, 211 text materials from CapCut International 7.9.0 and 8.9.1 store
+  code units and none store bytes — and CLI-written drafts read back as code
+  units once the app has re-saved them, the app parsing the doubled values,
+  clamping them, and writing its own interpretation back.
+
+  Eight sites shared the assumption — the writer, preset capture, the
+  `lint --fix` re-wrap, `export-srt`'s karaoke word matching, `edit`'s text
+  replacement, the text factory and the schema doc — so flipping the writer
+  alone would have broken the readers. All of them now go through one module,
+  `text-offsets.ts`, which is also the single place to branch should a
+  JianYing draft ever turn out to store something else. Side effect worth
+  having: in the code-unit domain `range` *is* the JS string index, so the BMP
+  assumption that came with the byte conversion is gone and an emoji highlight
+  is correct by construction.
+
+- **`export-srt --granularity word` still collapses old karaoke drafts.** It
+  matches highlight ranges against word offsets, so it now reads the doubled
+  form as well and lines the words up either way.
+
+### Added
+
+- **`lint` reports and repairs the doubled ranges earlier versions wrote**
+  (`text-range-doubled`, fixable). The doubled form is identifiable with
+  certainty rather than by guess — every offset even, every range inside
+  `[0, 2n]`, and the last one ending at exactly `2n`, which is out of bounds
+  as code units and precisely where the old writer's trailing block landed —
+  so `lint --fix` halves them. App-authored drafts, drafts written from 0.19.1
+  on, and drafts already repaired all end at `n` and are never touched.
+
+- `extractCodeUnitStyleRanges` and the `text-offsets` helpers are exported
+  from the library entry for anyone reading `styles[].range` themselves.
+
+### Documentation
+
+- `docs/draft-schema/02-materials.md` said "UTF-16 BYTE offsets, not character
+  indices". It now says code units, shows the measurement behind that, and
+  points at the repair for drafts written by earlier versions.
+
 ## [0.19.0] — 2026-08-14
 
 Nine items from an opportunity-mining pass over this repo's own issues and the

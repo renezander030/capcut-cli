@@ -34,7 +34,7 @@ import type { Draft, MaterialText, Segment, Track } from "./draft.js";
 import {
   assertTargetsUnchangedOnDisk,
   commitDraftTargets,
-  extractStyleRanges,
+  extractCodeUnitStyleRanges,
   extractText,
   findDraft,
   findMaterial,
@@ -1866,7 +1866,7 @@ async function cmdExportSrt(draft: Draft, flags: Flags): Promise<void> {
         startUs: t.start,
         endUs: t.start + t.duration,
         text: extractText(mat.content),
-        styleRanges: extractStyleRanges(mat.content),
+        styleRanges: extractCodeUnitStyleRanges(mat.content),
       });
     }
     // Word granularity: karaoke runs (one word-timed segment per word) carry

@@ -27,6 +27,8 @@ export type {
   Track,
 } from "./draft.js";
 export {
+  extractCodeUnitStyleRanges,
+  extractStyleRanges,
   extractText,
   findDraft,
   findMaterial,
@@ -47,6 +49,13 @@ export {
 } from "./lint.js";
 export type { RunCommandRequest, RunCommandResult } from "./runner.js";
 export { runCommand } from "./runner.js";
+export {
+  fromStoredOffset,
+  rangesLookDoubled,
+  repairDoubledRanges,
+  storedTextLength,
+  toStoredOffset,
+} from "./text-offsets.js";
 export { framesFor, quantizeToFrame } from "./time.js";
 export type { AppSource, VersionInfo } from "./version.js";
 export { detectVersion } from "./version.js";

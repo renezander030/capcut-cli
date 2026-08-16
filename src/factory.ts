@@ -17,6 +17,7 @@ import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { isManagedDraftPath, parseCandidate } from "./store.js";
+import { storedTextLength } from "./text-offsets.js";
 import { atLeast, versionTuple } from "./version.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
 
@@ -1274,11 +1275,10 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 function buildTextContent(text: string, fontSize: number, color: [number, number, number]): string {
-  const encoded = Buffer.from(text, "utf16le");
   return JSON.stringify({
     styles: [
       {
-        range: [0, encoded.length],
+        range: [0, storedTextLength(text)],
         size: fontSize,
         bold: false,
         italic: false,
@@ -1916,8 +1916,7 @@ export function applyTemplate(
       if (parsed.text !== undefined) {
         parsed.text = overrides.text;
         if (parsed.styles && parsed.styles.length > 0) {
-          const encoded = Buffer.from(overrides.text, "utf16le");
-          parsed.styles[0].range = [0, encoded.length];
+          parsed.styles[0].range = [0, storedTextLength(overrides.text)];
         }
         newMat.content = JSON.stringify(parsed);
       }
