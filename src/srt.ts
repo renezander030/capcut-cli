@@ -9,6 +9,7 @@
 //   ...
 // Accepts '.' or ',' as the ms separator. Index lines are optional.
 
+import { toStoredOffset } from "./text-offsets.js";
 import { srtTime, vttTime } from "./time.js";
 
 export interface SrtCue {
@@ -72,7 +73,7 @@ export interface SubtitleCue {
 }
 
 export interface SegmentCue extends SubtitleCue {
-  styleRanges?: Array<[number, number]>; // UTF-16LE byte ranges from the material's styles
+  styleRanges?: Array<[number, number]>; // code-unit ranges from the material's styles
 }
 
 // No stored word timing: spread the cue's duration across its words,
@@ -116,8 +117,8 @@ export function collapseKaraokeRuns(entries: SegmentCue[]): SubtitleCue[] {
 
 interface TokenRange {
   word: string;
-  byteStart: number;
-  byteEnd: number;
+  start: number;
+  end: number;
 }
 
 function tokenRanges(text: string): TokenRange[] {
@@ -125,14 +126,14 @@ function tokenRanges(text: string): TokenRange[] {
     const at = tok.index ?? 0;
     return {
       word: tok[0],
-      byteStart: toUtf16Bytes(text, at),
-      byteEnd: toUtf16Bytes(text, at + tok[0].length),
+      start: toStoredOffset(text, at),
+      end: toStoredOffset(text, at + tok[0].length),
     };
   });
 }
 
 function matchesToken(entry: SegmentCue, tok: TokenRange): boolean {
-  return (entry.styleRanges ?? []).some((r) => r[0] === tok.byteStart && r[1] === tok.byteEnd);
+  return (entry.styleRanges ?? []).some((r) => r[0] === tok.start && r[1] === tok.end);
 }
 
 // Collapse one maximal stretch of consecutive same-text segments. Greedy:
@@ -186,10 +187,6 @@ function orphanCue(stretch: SegmentCue[], entry: SegmentCue, tokens: TokenRange[
     cue.words = [{ word: matched[0].word, startUs: entry.startUs, endUs: entry.endUs }];
   }
   return cue;
-}
-
-function toUtf16Bytes(text: string, codeUnitIdx: number): number {
-  return Buffer.from(text.slice(0, codeUnitIdx), "utf16le").length;
 }
 
 export function renderSrt(cues: Array<{ startUs: number; endUs: number; text: string }>): string {

@@ -27,6 +27,7 @@ import {
   serializeDraftCandidate,
   storeAfterWrite,
 } from "./store.js";
+import { repairDoubledRanges, storedTextLength } from "./text-offsets.js";
 import { assessWriteSafety } from "./version.js";
 
 export interface Timerange {
@@ -484,7 +485,9 @@ export function extractText(content: string): string {
   return content;
 }
 
-// Style `range` entries are UTF-16LE byte offsets (see setTextRanges).
+// Style `range` entries exactly as stored, for callers that need to judge the
+// raw values (the lint detector for pre-0.19.1 doubled offsets). Everything
+// that wants to *use* an offset wants extractCodeUnitStyleRanges below.
 export function extractStyleRanges(content: string): Array<[number, number]> {
   try {
     const parsed = JSON.parse(content) as { styles?: Array<{ range?: unknown }> };
@@ -502,14 +505,25 @@ export function extractStyleRanges(content: string): Array<[number, number]> {
   }
 }
 
+/**
+ * Style ranges as code-unit offsets (text-offsets.ts), repairing the doubled
+ * form this CLI wrote before 0.19.1 so a reader — `export-srt --granularity
+ * word` above all — still lines its highlights up with the words in an old
+ * karaoke draft.
+ */
+export function extractCodeUnitStyleRanges(content: string): Array<[number, number]> {
+  const ranges = extractStyleRanges(content);
+  const text = extractText(content);
+  return repairDoubledRanges(text, ranges) ?? ranges;
+}
+
 export function updateTextContent(content: string, newText: string): string {
   try {
     const parsed = JSON.parse(content);
     if (parsed.text !== undefined) {
       parsed.text = newText;
       if (parsed.styles && parsed.styles.length > 0) {
-        const encoded = Buffer.from(newText, "utf16le");
-        parsed.styles[0].range = [0, encoded.length];
+        parsed.styles[0].range = [0, storedTextLength(newText)];
       }
       return JSON.stringify(parsed);
     }

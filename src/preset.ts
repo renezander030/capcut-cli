@@ -3,6 +3,7 @@ import { stripBom } from "./bom.js";
 import { hexToRgb01, requireTextMaterial, setBubble, setTextRanges, type TextRangeInput } from "./decorators.js";
 import type { Draft, MaterialText } from "./draft.js";
 import { STYLE_FIELDS } from "./factory.js";
+import { fromStoredOffset, repairDoubledRanges, storedTextLength } from "./text-offsets.js";
 
 // --- Text style presets (make-preset / --preset) ---
 // A preset captures the styling of one text segment as a portable JSON file:
@@ -94,17 +95,27 @@ export function extractTextPreset(
     captured.push("bubble");
   }
 
-  // Multi-range styling (text-ranges / karaoke). Ranges are stored in UTF-16LE
-  // bytes; convert back to code units (BMP assumption, same as setTextRanges).
+  // Multi-range styling (text-ranges / karaoke). Stored offsets are code units
+  // (text-offsets.ts). A draft this CLI wrote before 0.19.1 carries the doubled
+  // form instead, so repair those on the way in — otherwise a preset lifted
+  // from an old karaoke draft would carry offsets pointing past its own text.
   const styles = content?.styles ?? [];
+  const styleText = content?.text ?? "";
   if (styles.length > 1) {
+    const stored: Array<[number, number]> = [];
+    for (const s of styles) {
+      if (Array.isArray(s.range) && s.range.length === 2) stored.push([s.range[0], s.range[1]]);
+    }
+    const pairs = repairDoubledRanges(styleText, stored) ?? stored;
     const ranges: TextRangeInput[] = [];
+    let at = 0;
     for (const s of styles) {
       if (!Array.isArray(s.range) || s.range.length !== 2) continue;
+      const [storedStart, storedEnd] = pairs[at++];
       const solid = s.fill?.content?.solid;
       ranges.push({
-        start: s.range[0] / 2,
-        end: s.range[1] / 2,
+        start: fromStoredOffset(styleText, storedStart),
+        end: fromStoredOffset(styleText, storedEnd),
         font_color: solid?.color ? rgb01ToHex(solid.color) : undefined,
         font_size: s.size,
         font_alpha: solid?.alpha,
@@ -315,8 +326,7 @@ export function applyTextPreset(
     // old size/colour while the material/output claim the new style.
     const hasPresetRanges = Array.isArray(preset.text_ranges) && preset.text_ranges.length > 0;
     if (!hasPresetRanges && content.styles && content.styles.length > 1) {
-      const byteLen = Buffer.from(content.text ?? "", "utf16le").length;
-      base.range = [0, byteLen];
+      base.range = [0, storedTextLength(content.text ?? "")];
       content.styles = [base];
     }
     mat.content = JSON.stringify(content);

@@ -14,6 +14,7 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { findSegment } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
 import { parseSrt } from "./srt.js";
+import { storedTextLength } from "./text-offsets.js";
 
 export interface CaptionOptions {
   audio?: string; // path to audio file; if absent, derived from --from-segment
@@ -206,7 +207,7 @@ function addCaptionSegment(
   const matId = uuid();
   const content = JSON.stringify({
     text,
-    styles: [{ ...baseStyle, range: [0, Buffer.from(text, "utf16le").length] }],
+    styles: [{ ...baseStyle, range: [0, storedTextLength(text)] }],
   });
   draft.materials.texts.push({
     id: matId,

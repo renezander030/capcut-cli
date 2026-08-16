@@ -1081,14 +1081,14 @@ describe("capcut lint", () => {
             alignment: 1,
           },
           // A real styles[] range spanning the whole text, so the repair's
-          // UTF-16LE byte-offset shift is actually exercised rather than
-          // skipped over an empty styles array.
+          // offset shift is actually exercised rather than skipped over an
+          // empty styles array.
           {
             id: "stamp-cjk-mat",
             type: "text",
             content: JSON.stringify({
               text: "字".repeat(60),
-              styles: [{ range: [0, Buffer.from("字".repeat(60), "utf16le").length] }],
+              styles: [{ range: [0, "字".repeat(60).length] }],
             }),
             font_size: 15,
             text_color: "#FFFFFF",
@@ -1124,8 +1124,8 @@ describe("capcut lint", () => {
       assert.equal(remaining.length, 2, "the two unrepairable shapes stay reported");
 
       // The repair must leave every line within the cap and keep styles[]
-      // pointing at the same characters: ranges are UTF-16LE BYTE offsets, so
-      // each inserted newline shifts a later boundary by exactly 2.
+      // pointing at the same characters: ranges are code-unit offsets, so each
+      // inserted newline shifts a later boundary by exactly 1.
       const after = JSON.parse(readFileSync(fix.path, "utf-8"));
       const cjkMat = after.materials.texts.find((m) => m.id === "stamp-cjk-mat");
       const content = JSON.parse(cjkMat.content);
@@ -1137,8 +1137,8 @@ describe("capcut lint", () => {
       const breaks = content.text.split("\n").length - 1;
       assert.equal(
         content.styles[0].range[1],
-        Buffer.from(content.text, "utf16le").length,
-        `the style range must span the rewrapped text (${breaks} insertion(s) => +${breaks * 2} bytes)`,
+        content.text.length,
+        `the style range must span the rewrapped text (${breaks} insertion(s) => +${breaks} code units)`,
       );
     });
   });

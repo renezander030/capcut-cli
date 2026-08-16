@@ -16,8 +16,9 @@ const GOLD = [1, 215 / 255, 0]; // #FFD700 — the caption --karaoke gold
 const RED = [1, 0, 0];
 const GREEN = [0, 1, 0];
 
-/** UTF-16LE byte offset of code-unit index `n` in `text` — the draft's range unit. */
-const bytes = (text, n) => Buffer.from(text.slice(0, n), "utf16le").length;
+/** Stored offset of code-unit index `n` in `text`. The draft's range unit is
+ *  UTF-16 code units — plain JS string indices (#85). */
+const offset = (text, n) => text.slice(0, n).length;
 
 function textTrack(draft, name) {
   return draft.tracks.find((t) => t.type === "text" && t.name === name);
@@ -86,7 +87,7 @@ describe("import-srt --highlight-words", () => {
     "3\n00:00:04,000 --> 00:00:06,000\nno match here\n",
   ].join("\n");
 
-  it("styles single and multiple matches per cue at the byte offsets setTextRanges uses", () => {
+  it("styles single and multiple matches per cue at the code-unit offsets setTextRanges uses", () => {
     const r = spawnCli(["import-srt", fix.path, "-", "--highlight-words", "hello,world"], { input: srt });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.equal(r.json.cues, 3);
@@ -99,8 +100,8 @@ describe("import-srt --highlight-words", () => {
     // cue 1: "hello" [0,5) + "world" [12,17) with an inherited gap between
     const c1 = materialContent(draft, segs[0]);
     assert.equal(c1.styles.length, 3);
-    assert.deepEqual(c1.styles[0].range, [bytes(c1.text, 0), bytes(c1.text, 5)]);
-    assert.deepEqual(c1.styles[2].range, [bytes(c1.text, 12), bytes(c1.text, 17)]);
+    assert.deepEqual(c1.styles[0].range, [offset(c1.text, 0), offset(c1.text, 5)]);
+    assert.deepEqual(c1.styles[2].range, [offset(c1.text, 12), offset(c1.text, 17)]);
     assert.deepEqual(fillColor(c1.styles[0]), GOLD); // default --keyword-color
     assert.equal(c1.styles[0].size, 15 * 1.2); // default --keyword-size on base 15
     assert.equal(c1.styles[1].size, 15); // gap keeps the base size
@@ -111,8 +112,8 @@ describe("import-srt --highlight-words", () => {
     assert.deepEqual(
       emphasized.map((s) => s.range),
       [
-        [bytes(c2.text, 4), bytes(c2.text, 9)],
-        [bytes(c2.text, 15), bytes(c2.text, 20)],
+        [offset(c2.text, 4), offset(c2.text, 9)],
+        [offset(c2.text, 15), offset(c2.text, 20)],
       ],
     );
 
@@ -132,7 +133,7 @@ describe("import-srt --highlight-words — multibyte offsets", () => {
     "3\n00:00:04,000 --> 00:00:06,000\nfürs Leben\n",
   ].join("\n");
 
-  it("computes UTF-16LE byte ranges for umlaut and CJK text", () => {
+  it("computes code-unit ranges for umlaut and CJK text", () => {
     const r = spawnCli(["import-srt", fix.path, "-", "--highlight-words", "für,世界"], { input: srt });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.equal(r.json.keyword_matches, 2);
@@ -142,12 +143,12 @@ describe("import-srt --highlight-words — multibyte offsets", () => {
 
     const c1 = materialContent(draft, segs[0]); // "Grüße für alle" — "für" at units [6,9)
     const hit1 = c1.styles.find((s) => s.size === 18);
-    assert.deepEqual(hit1.range, [12, 18]);
-    assert.deepEqual(hit1.range, [bytes(c1.text, 6), bytes(c1.text, 9)]);
+    assert.deepEqual(hit1.range, [6, 9]);
+    assert.deepEqual(hit1.range, [offset(c1.text, 6), offset(c1.text, 9)]);
 
     const c2 = materialContent(draft, segs[1]); // "你好 世界" — "世界" at units [3,5)
     const hit2 = c2.styles.find((s) => s.size === 18);
-    assert.deepEqual(hit2.range, [6, 10]);
+    assert.deepEqual(hit2.range, [3, 5]);
 
     // "für" must NOT match inside "fürs" (Unicode-aware word boundary)
     const c3 = materialContent(draft, segs[2]);
@@ -182,8 +183,8 @@ describe("import-srt keyword flags — size math, @file, validation", () => {
     assert.equal(r.json.keyword_matches, 2);
     const draft = loadDraft(fix.path);
     const c = materialContent(draft, textTrack(draft, "subtitle").segments[0]);
-    const phrase = c.styles.find((s) => s.range[0] === bytes(c.text, 6));
-    assert.deepEqual(phrase.range, [bytes(c.text, 6), bytes(c.text, 17)]); // "brave world"
+    const phrase = c.styles.find((s) => s.range[0] === offset(c.text, 6));
+    assert.deepEqual(phrase.range, [offset(c.text, 6), offset(c.text, 17)]); // "brave world"
   });
 
   it("rejects a non-positive, oversized, or malformed emphasis flag", (t) => {
@@ -260,7 +261,7 @@ describe("import-srt --color-cycle", () => {
     const c4 = materialContent(draft, segs[3]); // "four hello", cycle index 3 -> #00FF00 base
     assert.deepEqual(fillColor(c4.styles[0]), GREEN); // unmatched text keeps the cycled base
     const hit = c4.styles.find((s) => s.size === 18);
-    assert.deepEqual(hit.range, [bytes(c4.text, 5), bytes(c4.text, 10)]);
+    assert.deepEqual(hit.range, [offset(c4.text, 5), offset(c4.text, 10)]);
     assert.deepEqual(fillColor(hit), GOLD);
     const invalid = spawnCli(["import-srt", fix.path, "-", "--color-cycle", "red,blue"], { input: srt });
     assert.notEqual(invalid.status, 0);
@@ -356,12 +357,12 @@ describe("caption --karaoke + --highlight-words interplay", { skip: isWindows },
     const segs = textTrack(draft, "captions").segments;
     assert.equal(segs.length, 3);
     const text = "go capcut now";
-    const kwRange = [bytes(text, 3), bytes(text, 9)];
+    const kwRange = [offset(text, 3), offset(text, 9)];
 
     // active word "go": gold karaoke range AND the red keyword range coexist
     const c1 = materialContent(draft, segs[0]);
     const gold1 = c1.styles.find((s) => s.bold === true);
-    assert.deepEqual(gold1.range, [bytes(text, 0), bytes(text, 2)]);
+    assert.deepEqual(gold1.range, [offset(text, 0), offset(text, 2)]);
     assert.deepEqual(fillColor(gold1), GOLD);
     assert.equal(gold1.size, 15 * 1.08);
     const kw1 = c1.styles.find((s) => s.range[0] === kwRange[0]);
@@ -417,7 +418,7 @@ describe("caption --color-cycle + --highlight-words (plain cues)", { skip: isWin
     // cue 1 "say hello now": emphasis range plus explicit base-coloured gaps
     const c1 = materialContent(draft, segs[0]);
     const hit = c1.styles.find((s) => s.size === 18);
-    assert.deepEqual(hit.range, [bytes(c1.text, 4), bytes(c1.text, 9)]);
+    assert.deepEqual(hit.range, [offset(c1.text, 4), offset(c1.text, 9)]);
     assert.deepEqual(fillColor(hit), GOLD);
     assert.deepEqual(fillColor(c1.styles[0]), RED); // gap keeps the cue's cycled base
 

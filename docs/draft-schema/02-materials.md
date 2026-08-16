@@ -117,7 +117,7 @@ The top-level fields (`text_color`, `border_width`, `has_shadow`, …) are the "
   "text": "Hello world",            // the actual rendered characters
   "styles": [
     {
-      "range": [0, 10],             // UTF-16 BYTE offsets, not character indices
+      "range": [0, 11],             // UTF-16 code-unit offsets (JS string indices)
       "fill": { "content": { "solid": { "color": [1.0, 0.84, 0.0] } } },  // [r,g,b] 0..1
       "font": { "id": "...", "path": "..." },
       "size": 18,
@@ -131,7 +131,9 @@ The top-level fields (`text_color`, `border_width`, `has_shadow`, …) are the "
 }
 ```
 
-**The `range` array is in UTF-16 little-endian byte offsets.** This trips up everyone the first time. For ASCII text, byte index = character index. For Chinese / emoji, each char is 2 bytes (BMP) or 4 bytes (non-BMP). `capcut-cli text-ranges` handles the conversion.
+**The `range` array is in UTF-16 code units** — the same indices `"abc".slice(start, end)` takes in JavaScript, or `text[start:end]` in Python 3. One BMP character (Latin, Chinese, Thai) is one unit; one emoji or other astral character is two, because UTF-16 encodes it as a surrogate pair.
+
+This is worth stating plainly because this repo got it wrong. Until v0.19.1 `capcut-cli` wrote these offsets as UTF-16LE **bytes** — every value doubled ([#85](https://github.com/renezander030/capcut-cli/issues/85)). A single full-span range survived the mistake, since `[0, 2n]` clamps back to the end of the text when CapCut opens the draft, which is exactly why it went unnoticed; a multi-range highlight did not. A scan of 38 app-authored drafts from CapCut International 7.9.0 and 8.9.1 settled it: 211 text materials in code units, none in bytes. `capcut lint --fix` repairs drafts written by the older versions (`text-range-doubled`).
 
 `capcut-cli` exposes:
 

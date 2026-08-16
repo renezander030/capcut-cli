@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Draft, MaterialText, Segment } from "./draft.js";
 import { findMaterial, findSegment } from "./draft.js";
 import { findEnum, type Namespace, slugsFor } from "./enums.js";
+import { storedTextLength, toStoredOffset } from "./text-offsets.js";
 import { atLeast } from "./version.js";
 
 const PROPERTY_MAP: Record<string, string> = {
@@ -989,8 +990,9 @@ export function addTextAnim(
 
 // --- Phase 4: multi-style text ranges ---
 // CapCut text materials store a `content` JSON string with:
-//   { styles: [{range:[startByte,endByte], size, bold, italic, underline, fill:{...}}, ...], text }
-// `range` is in UTF-16LE bytes (== JS string code-unit index * 2 for BMP chars).
+//   { styles: [{range:[start,end], size, bold, italic, underline, fill:{...}}, ...], text }
+// `range` holds UTF-16 code-unit offsets — see text-offsets.ts, which owns the
+// mapping and the story of the doubled offsets this writer used to produce.
 // This writer replaces the entire `styles` array, so every range the caller
 // wants highlighted must be passed in one call. Gaps between ranges are filled
 // with an inherited default block so CapCut doesn't render blank text.
@@ -1024,7 +1026,7 @@ export function setTextRanges(
     text: string;
   };
   const full = content.text ?? "";
-  const byteLen = Buffer.from(full, "utf16le").length;
+  const fullLen = storedTextLength(full);
 
   // Baseline style inherited for fields the user didn't override.
   const base = content.styles?.[0] ?? {};
@@ -1038,8 +1040,9 @@ export function setTextRanges(
   const defaultItalic = (base.italic as boolean | undefined) ?? false;
   const defaultUnderline = (base.underline as boolean | undefined) ?? false;
 
-  // Validate + normalise ranges (char indices -> byte offsets). BMP assumption:
-  // one code-unit = 2 bytes, matching Buffer.from(s.slice(0,n), 'utf16le').length.
+  // Validate the caller's ranges. Both sides of the conversion are code-unit
+  // indices, so this needs no assumption about which plane the characters are
+  // in — an emoji is two code units to CapCut exactly as it is to JS.
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   const maxCodeUnits = full.length;
   for (const r of sorted) {
@@ -1056,13 +1059,13 @@ export function setTextRanges(
     }
   }
 
-  const toBytes = (codeUnitIdx: number) => Buffer.from(full.slice(0, codeUnitIdx), "utf16le").length;
+  const toStored = (codeUnitIdx: number) => toStoredOffset(full, codeUnitIdx);
 
-  const makeStyle = (byteStart: number, byteEnd: number, r?: TextRangeInput): Record<string, unknown> => {
+  const makeStyle = (start: number, end: number, r?: TextRangeInput): Record<string, unknown> => {
     const color = r?.font_color ? hexToRgb01(r.font_color) : defaultColor;
     const alpha = r?.font_alpha ?? defaultAlpha;
     return {
-      range: [byteStart, byteEnd],
+      range: [start, end],
       size: r?.font_size ?? defaultSize,
       bold: r?.bold ?? defaultBold,
       italic: r?.italic ?? defaultItalic,
@@ -1082,13 +1085,13 @@ export function setTextRanges(
   let cursor = 0;
   for (const r of sorted) {
     if (r.start > cursor) {
-      styles.push(makeStyle(toBytes(cursor), toBytes(r.start)));
+      styles.push(makeStyle(toStored(cursor), toStored(r.start)));
     }
-    styles.push(makeStyle(toBytes(r.start), toBytes(r.end), r));
+    styles.push(makeStyle(toStored(r.start), toStored(r.end), r));
     cursor = r.end;
   }
   if (cursor < maxCodeUnits) {
-    styles.push(makeStyle(toBytes(cursor), byteLen));
+    styles.push(makeStyle(toStored(cursor), fullLen));
   }
 
   content.styles = styles;
@@ -1100,7 +1103,7 @@ export function setTextRanges(
 // --- v0.14: per-word keyword emphasis + colour cycling ---
 // Both `caption` and `import-srt` accept --highlight-words / --keyword-color /
 // --keyword-size / --color-cycle. The offset scheme is the one setTextRanges
-// already defines: JS string code-unit indices in, UTF-16LE bytes in the draft.
+// already defines: JS string code-unit indices in, code units in the draft.
 // No second offset scheme — findKeywordRanges only ever produces code-unit
 // indices that feed straight into TextRangeInput.
 
