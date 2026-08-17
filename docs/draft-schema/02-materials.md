@@ -135,6 +135,8 @@ The top-level fields (`text_color`, `border_width`, `has_shadow`, …) are the "
 
 This is worth stating plainly because this repo got it wrong. Until v0.19.1 `capcut-cli` wrote these offsets as UTF-16LE **bytes** — every value doubled ([#85](https://github.com/renezander030/capcut-cli/issues/85)). A single full-span range survived the mistake, since `[0, 2n]` clamps back to the end of the text when CapCut opens the draft, which is exactly why it went unnoticed; a multi-range highlight did not. A scan of 38 app-authored drafts from CapCut International 7.9.0 and 8.9.1 settled it: 211 text materials in code units, none in bytes. `capcut lint --fix` repairs drafts written by the older versions (`text-range-doubled`).
 
+**A `text-range-doubled` hit on an ordinary draft is expected, not damage.** Because every pre-0.19.1 `add-text` wrote a doubled full-span range, and a full-span range clamps back to the end of the text, most drafts carrying the defect rendered correctly the whole time — the rule fires on plain caption work, not only on karaoke or keyword-highlight drafts. Read a hit as "written by an older version", and only as a visible rendering bug when the caption has more than one range. `--fix` halves the offsets either way; on the harmless kind it is a tidy-up, and it is safe to run because the doubled form is identifiable with certainty rather than inferred.
+
 `capcut-cli` exposes:
 
 - `set-text <id> <new-text>` — replaces `content.text` AND updates `content.styles[0].range` to cover the new length.
