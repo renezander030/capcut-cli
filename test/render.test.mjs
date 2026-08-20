@@ -1,16 +1,51 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildRenderPlan, probeFfmpegCapabilities } from "../dist/render.js";
+import { buildRenderPlan, probeFfmpegCapabilities, renderDraft } from "../dist/render.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const US = 1_000_000;
 const hasFfmpeg = spawnSync("ffmpeg", ["-version"], { encoding: "utf-8" }).status === 0;
+const isWindows = process.platform === "win32"; // fake-ffmpeg tests use /bin/sh scripts
+
+// A stand-in for a minimal/custom ffmpeg build (e.g. Remotion's bundled
+// compositor binary, #89): reports libx264 and a handful of filters as
+// present, but omits fps/pad/setsar/setpts from -filters, the way that real
+// build does. Skipped on Windows because spawnSync cannot exec a shebang
+// script directly there (same constraint as detect-scenes.test.mjs).
+function fakeFfmpeg(dir) {
+  const path = join(dir, "fake-ffmpeg");
+  writeFileSync(
+    path,
+    [
+      "#!/bin/sh",
+      'case "$*" in',
+      "  *-filters*)",
+      "    cat <<'EOF'",
+      " ... scale              V->V       Scale the input video size and/or convert the image format.",
+      " ... format             V->V       Convert the input video to one of several formats.",
+      " ... trim               V->V       Pick one continuous section from the input, drop the rest.",
+      " ..C concat             N->N       Concatenate audio and video streams.",
+      "EOF",
+      "    exit 0 ;;",
+      "  *-encoders*)",
+      "    cat <<'EOF'",
+      " V..... libx264              H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+      "EOF",
+      "    exit 0 ;;",
+      "esac",
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
 
 // A minimal but real draft shape: 2 video segments (main track), 1 audio, 1 text.
 function buildDraft(dir, { withText = true } = {}) {
@@ -189,6 +224,27 @@ describe("render — plan (buildRenderPlan, pure)", () => {
     assert.equal(capabilities.available, true);
     assert.equal(typeof capabilities.drawtext, "boolean");
     assert.equal(typeof capabilities.overlay, "boolean");
+    assert.equal(typeof capabilities.fps, "boolean");
+  });
+
+  // #89: a minimal/custom ffmpeg build (Remotion's bundled compositor binary
+  // is the reported case) can compile in scale/format/trim/concat but omit
+  // fps/pad/setsar/setpts, which the base render chain needs on every segment
+  // regardless of any flag. The probe must name exactly the missing ones.
+  it("flags missing base-chain filters on a minimal ffmpeg build (#89)", { skip: isWindows }, () => {
+    const s = setup();
+    after(s.cleanup);
+    const capabilities = probeFfmpegCapabilities(fakeFfmpeg(s.dir));
+    assert.equal(capabilities.available, true);
+    assert.equal(capabilities.scale, true);
+    assert.equal(capabilities.format, true);
+    assert.equal(capabilities.trim, true);
+    assert.equal(capabilities.concat, true);
+    assert.equal(capabilities.x264, true);
+    assert.equal(capabilities.fps, false);
+    assert.equal(capabilities.pad, false);
+    assert.equal(capabilities.setsar, false);
+    assert.equal(capabilities.setpts, false);
   });
 
   it("throws when there is no usable video segment", () => {
@@ -247,5 +303,49 @@ describe("render — CLI", () => {
     });
     assert.match(probe.stdout, /video/);
     assert.match(probe.stdout, /audio/);
+  });
+
+  // #89: previously this reached ffmpeg and surfaced its raw, position-only
+  // parse error ("No option name near '30'") with no mention of `fps` at all.
+  it("fails fast naming the missing filters instead of a raw ffmpeg parse error (#89)", { skip: isWindows }, () => {
+    const s = setup();
+    after(s.cleanup);
+    const draftPath = join(s.dir, "draft_content.json");
+    const draft = buildDraft(s.dir);
+    writeFileSync(draftPath, JSON.stringify(draft));
+    let err = null;
+    try {
+      renderDraft(draft, draftPath, { out: join(s.dir, "p.mp4"), ffmpegCmd: fakeFfmpeg(s.dir) });
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err, "expected renderDraft to throw before invoking ffmpeg");
+    assert.match(err.message, /'fps'/);
+    assert.match(err.message, /'pad'/);
+    assert.match(err.message, /'setsar'/);
+    assert.match(err.message, /'setpts'/);
+    assert.doesNotMatch(err.message, /'scale'/, "a present filter must not be named as missing");
+    assert.match(err.message, /minimal\/custom ffmpeg builds/);
+  });
+
+  // --dry-run must not skip the check: it still names the ffmpeg binary the
+  // plan would have run against, so a broken --ffmpeg-cmd is caught even
+  // when previewing.
+  it("--dry-run still fails fast on a minimal ffmpeg build (#89)", { skip: isWindows }, () => {
+    const s = setup();
+    after(s.cleanup);
+    const draftPath = join(s.dir, "draft_content.json");
+    writeFileSync(draftPath, JSON.stringify(buildDraft(s.dir)));
+    const r = spawnCli([
+      "render",
+      draftPath,
+      "--out",
+      join(s.dir, "p.mp4"),
+      "--dry-run",
+      "--ffmpeg-cmd",
+      fakeFfmpeg(s.dir),
+    ]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.json?.error ?? "", /'fps'/);
   });
 });

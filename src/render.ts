@@ -121,11 +121,30 @@ export interface RenderResult extends RenderPlan {
   executed: boolean;
 }
 
+/**
+ * Filters the base render chain hard-requires on every segment, regardless of
+ * any user-facing flag (`--burn-captions`/`--all-video-tracks` gate drawtext/
+ * overlay instead — see the fallback in renderDraft). A minimal/custom ffmpeg
+ * build (e.g. Remotion's bundled compositor binary, which compiles in only an
+ * explicit filter allowlist) can lack one of these silently: the graph still
+ * spawns, but ffmpeg's own parser error ("No option name near ...") names a
+ * fragment of the filter_complex string, not the missing filter (#89).
+ */
+const BASE_CHAIN_FILTERS = ["fps", "scale", "pad", "setsar", "format", "concat", "trim", "setpts"] as const;
+
 export interface FfmpegCapabilities {
   available: boolean;
   drawtext: boolean;
   overlay: boolean;
   x264: boolean;
+  fps: boolean;
+  scale: boolean;
+  pad: boolean;
+  setsar: boolean;
+  format: boolean;
+  concat: boolean;
+  trim: boolean;
+  setpts: boolean;
 }
 
 export function probeFfmpegCapabilities(command = "ffmpeg"): FfmpegCapabilities {
@@ -142,14 +161,31 @@ export function probeFfmpegCapabilities(command = "ffmpeg"): FfmpegCapabilities 
     });
     const filterText = `${filters.stdout ?? ""}${filters.stderr ?? ""}`;
     const encoderText = `${encoders.stdout ?? ""}${encoders.stderr ?? ""}`;
+    const baseChain = Object.fromEntries(
+      BASE_CHAIN_FILTERS.map((name) => [name, new RegExp(`\\b${name}\\b`).test(filterText)]),
+    ) as Record<(typeof BASE_CHAIN_FILTERS)[number], boolean>;
     return {
       available: filters.status === 0,
       drawtext: /\bdrawtext\b/.test(filterText),
       overlay: /\boverlay\b/.test(filterText),
       x264: /\blibx264\b/.test(encoderText),
+      ...baseChain,
     };
   } catch {
-    return { available: false, drawtext: false, overlay: false, x264: false };
+    return {
+      available: false,
+      drawtext: false,
+      overlay: false,
+      x264: false,
+      fps: false,
+      scale: false,
+      pad: false,
+      setsar: false,
+      format: false,
+      concat: false,
+      trim: false,
+      setpts: false,
+    };
   }
 }
 
@@ -496,6 +532,16 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     throw new Error(
       `render: ffmpeg is unavailable at '${opts.ffmpegCmd ?? "ffmpeg"}'. ` +
         "Install ffmpeg or pass --ffmpeg-cmd <path>.",
+    );
+  }
+  const missingBaseFilters = BASE_CHAIN_FILTERS.filter((name) => !capabilities[name]);
+  if (missingBaseFilters.length > 0) {
+    const list = missingBaseFilters.map((name) => `'${name}'`).join(", ");
+    throw new Error(
+      `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' is missing the filter${missingBaseFilters.length > 1 ? "s" : ""} ${list}, ` +
+        "which the base render chain applies to every segment unconditionally (not gated by any flag). " +
+        "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. " +
+        `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
     );
   }
   const fallbackSkipped: Array<{ segmentId: string; reason: string }> = [];
