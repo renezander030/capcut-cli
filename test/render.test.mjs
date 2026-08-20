@@ -328,10 +328,13 @@ describe("render — CLI", () => {
     assert.match(err.message, /minimal\/custom ffmpeg builds/);
   });
 
-  // --dry-run must not skip the check: it still names the ffmpeg binary the
-  // plan would have run against, so a broken --ffmpeg-cmd is caught even
-  // when previewing.
-  it("--dry-run still fails fast on a minimal ffmpeg build (#89)", { skip: isWindows }, () => {
+  // cmdRender routes --dry-run through buildRenderPlan directly (src/index.ts,
+  // cmdRender), never through renderDraft/probeFfmpegCapabilities — on purpose,
+  // so the plan stays inspectable on a machine with no ffmpeg at all (the
+  // existing "--dry-run returns the plan" test above runs ungated on
+  // ffmpeg-less machines for the same reason). The base-chain probe added for
+  // #89 must not change that: this locks it in as a regression test.
+  it("--dry-run stays ffmpeg-free even with a minimal ffmpeg build (#89)", { skip: isWindows }, () => {
     const s = setup();
     after(s.cleanup);
     const draftPath = join(s.dir, "draft_content.json");
@@ -345,7 +348,8 @@ describe("render — CLI", () => {
       "--ffmpeg-cmd",
       fakeFfmpeg(s.dir),
     ]);
-    assert.notEqual(r.status, 0);
-    assert.match(r.json?.error ?? "", /'fps'/);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.executed, false);
+    assert.equal(r.json.videoSegments, 2);
   });
 });
