@@ -4,6 +4,10 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **`render` no longer reaches ffmpeg's raw parser error when a base filter is missing** — the render chain applies `fps`/`scale`/`pad`/`setsar`/`format`/`concat`/`trim`/`setpts` to every segment unconditionally, but `probeFfmpegCapabilities` only checked `drawtext`/`overlay`/`libx264`, the flag-gated ones. A build missing one of the unconditional filters — reported on Remotion's bundled compositor ffmpeg binary, a minimal build that compiles in only an explicit `--enable-filter=` allowlist — reached `spawnSync` anyway and surfaced ffmpeg's own parse error verbatim (`No option name near '30'`, `Failed to set value '...' for option 'filter_complex': Invalid argument`), naming a fragment of the filter graph rather than the missing filter ([#89](https://github.com/renezander030/capcut-cli/issues/89)). The probe now checks all eight against the same `-filters` output already fetched, and `render` fails fast — before building the plan — naming exactly which filter(s) are missing and pointing at `--ffmpeg-cmd`, the same style as the existing "ffmpeg lacks drawtext" fallback message. `--dry-run` is unaffected by design: `cmdRender` routes it through `buildRenderPlan` directly rather than `renderDraft`, so a plan stays inspectable on a machine with no ffmpeg at all — the same reason the pre-existing `--dry-run` test already ran ungated on ffmpeg-less machines. Swapping `fps=` for an output-level `-r` is deliberately out of scope here (would change per-segment CFR normalization ahead of `concat`); this PR is the fail-fast fix only.
+
 ## [0.19.1] — 2026-08-16
 
 One bug, reported with the measurement that settled it, plus the repair for
