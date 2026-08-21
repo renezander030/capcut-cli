@@ -95,6 +95,7 @@ export const COMMANDS = [
   "add-audio",
   "add-video",
   "add-text",
+  "tts",
   "crop",
   "cut",
   "duplicate",
@@ -328,6 +329,20 @@ Add:
                --track-name <s>   Track name (default: "text")
                --preset <file>    Apply a make-preset style preset; explicit
                                   flags override preset values
+
+  tts        <project> [start] [duration] (--text <s> | --text-file <f>) --tts-cmd <template>
+             Synthesize a voiceover with a local TTS tool and add it as an
+             audio segment (synthesized into assets/audio/, duration via
+             ffprobe unless [duration] is passed). The template runs WITHOUT
+             a shell: {out} (required) is replaced with the .wav path the
+             tool must write, {text} with the text as ONE argument — no
+             {text} means the text is piped to stdin. Examples:
+               --tts-cmd 'piper --model en_US-amy-medium --output_file {out}'
+               --tts-cmd 'say -o {out} {text}'          (macOS)
+               --tts-cmd 'espeak-ng -w {out} {text}'
+             Options:
+               --volume <n>       Volume 0.0-1.0 (default: 1.0)
+               --track-name <s>   Track name (default: "audio")
 
 Edit:
   set-text   <project> <id> <text>              Change text content
@@ -885,6 +900,10 @@ interface Flags {
   colorCycle?: string;
   noProbe?: boolean;
   ffprobeCmd?: string;
+  // tts
+  text?: string;
+  textFile?: string;
+  ttsCmd?: string;
   // export-srt
   granularity?: "line" | "word";
   format?: "srt" | "vtt";
@@ -1240,6 +1259,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.colorCycle = args[++i];
     } else if (a === "--no-probe") {
       flags.noProbe = true;
+    } else if (a === "--text" && i + 1 < args.length) {
+      flags.text = args[++i];
+    } else if (a === "--text-file" && i + 1 < args.length) {
+      flags.textFile = args[++i];
+    } else if (a === "--tts-cmd" && i + 1 < args.length) {
+      flags.ttsCmd = args[++i];
     } else if (a === "--granularity" && i + 1 < args.length) {
       const granularity = args[++i];
       if (!["line", "word"].includes(granularity)) {
@@ -2342,6 +2367,79 @@ async function cmdAddAudio(draft: Draft, filePath: string, positional: string[],
   if (asset) payload.wikimedia = wikimediaPayload(asset);
   if (warning) payload.warning = warning;
   out(payload, flags);
+}
+
+async function cmdTts(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { collisionSafeOutPath, synthesizeSpeech } = await import("./tts.js");
+  const { addAudio } = await import("./factory.js");
+  const { probeMedia } = await import("./probe.js");
+  if (flags.text !== undefined && flags.textFile !== undefined) {
+    die("--text and --text-file are mutually exclusive. Pass one text source.");
+  }
+  let text = flags.text;
+  if (flags.textFile !== undefined) {
+    if (!existsSync(flags.textFile)) die(`Text file not found: ${flags.textFile}`);
+    text = stripBom(readFileSync(flags.textFile, "utf-8"));
+  }
+  if (text === undefined) {
+    die(
+      "Missing --text <string> or --text-file <path>. " +
+        "Usage: capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template>",
+    );
+  }
+  text = text.trim();
+  if (text.length === 0) die("The voiceover text is empty. Pass non-empty --text or --text-file content.");
+  if (!flags.ttsCmd) {
+    die(
+      "Missing --tts-cmd <template>. tts runs a local TTS tool you provide (without a shell): {out} is replaced " +
+        "with the .wav path the tool must write; {text} with the text as a single argument, or the text is piped " +
+        "to stdin when the template has no {text}. Known-working examples:\n" +
+        "  --tts-cmd 'piper --model en_US-amy-medium --output_file {out}'   (reads text on stdin)\n" +
+        "  --tts-cmd 'say -o {out} {text}'                                  (macOS)\n" +
+        "  --tts-cmd 'espeak-ng -w {out} {text}'\n" +
+        "The tool must write a wav (or other CapCut-supported) audio file at {out}.",
+    );
+  }
+  const start = positional[2] ? parseTimeInput(positional[2]) : 0;
+  const durationStr = positional[3];
+  // Synthesize straight into the dir addAudio copies into (like the Wikimedia
+  // fetch path) so its copyAssetDeduped becomes a no-op on the same file.
+  const assetsDir = path.resolve(path.dirname(filePath), "assets", "audio");
+  const outPath = collisionSafeOutPath(assetsDir);
+  const synthesis = synthesizeSpeech(text, flags.ttsCmd, outPath);
+  const media = flags.noProbe ? null : probeMedia(outPath, flags.ffprobeCmd);
+  const duration = durationStr ? parseTimeInput(durationStr) : media?.durationUs;
+  if (!duration || duration <= 0) {
+    die("The synthesized audio's duration could not be probed. Pass duration explicitly or install ffprobe.");
+  }
+  if (durationStr && media?.durationUs && duration > media.durationUs + 10_000) {
+    die(`Requested duration ${duration}us exceeds synthesized duration ${media.durationUs}us.`);
+  }
+  const result = addAudio(draft, filePath, {
+    path: outPath,
+    start,
+    duration,
+    volume: flags.volume,
+    trackName: flags.trackName,
+  });
+  saveDraft(filePath, draft);
+  out(
+    {
+      ok: true,
+      segment_id: result.segmentId,
+      material_id: result.materialId,
+      track_id: result.trackId,
+      path: outPath,
+      bytes: synthesis.bytes,
+      text_chars: text.length,
+      text_delivery: synthesis.delivery,
+      start_us: start,
+      duration_us: duration,
+      duration_source: durationStr ? "argument" : "ffprobe",
+      media_probe: media,
+    },
+    flags,
+  );
 }
 
 async function cmdAddVideo(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
@@ -4302,6 +4400,7 @@ const SUMMARIES: Record<string, string> = {
   segment: "Full detail for one segment and its material.",
   material: "Full detail for one material.",
   "add-audio": "Add a local or Wikimedia audio file on an audio track.",
+  tts: "Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment.",
   "add-video": "Add a local or Wikimedia video/image on a video track.",
   "add-text": "Add a text segment with font/color/position options.",
   crop: "Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset).",
@@ -5227,6 +5326,9 @@ async function main(): Promise<void> {
     case "add-text":
       requireArgs(positional, 5, "capcut add-text <project> <start> <duration> <text>");
       await cmdAddText(draft, filePath, positional, flags);
+      break;
+    case "tts":
+      await cmdTts(draft, filePath, positional, flags);
       break;
     case "crop":
       requireArgs(positional, 3, "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]");

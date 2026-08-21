@@ -171,6 +171,7 @@ const usages = {
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
   "add-audio": "capcut add-audio <project> <file-or-url> <start> [duration] [options]",
+  tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
   "add-video": "capcut add-video <project> <file-or-url> <start> [duration] [options]",
   "add-text": "capcut add-text <project> <start> <duration> <text> [options]",
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
@@ -263,6 +264,21 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
     TRACK_NAME,
     option("force_license", ["--force-license"], "boolean", "Allow restrictive or unknown Wikimedia licenses."),
+    option("no_probe", ["--no-probe"], "boolean", "Disable automatic media probing."),
+    FFPROBE,
+  ],
+  tts: [
+    option("text", ["--text"], "string", "Voiceover text to synthesize."),
+    option("text_file", ["--text-file"], "path", "Read the voiceover text from this file."),
+    option(
+      "tts_cmd",
+      ["--tts-cmd"],
+      "string",
+      "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must " +
+        "write, {text} with the text as one argument; without {text} the text is piped to stdin.",
+    ),
+    option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
+    TRACK_NAME,
     option("no_probe", ["--no-probe"], "boolean", "Disable automatic media probing."),
     FFPROBE,
   ],
@@ -657,6 +673,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --into               -> import-timeline (v0.17 append target)
 //   --encoder            -> render (v0.20 proxy video encoder)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
+//   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -689,8 +706,11 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--rect",
   "--reset",
   "--sync",
+  "--text",
+  "--text-file",
   "--threshold",
   "--threshold-db",
+  "--tts-cmd",
 ]);
 
 /** True when `command` declares `flag` among its command-specific options. */
@@ -711,6 +731,7 @@ const mutating = new Set([
   "add-audio",
   "add-video",
   "add-text",
+  "tts",
   "crop",
   "cut",
   "duplicate",
@@ -801,10 +822,11 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
     const usage = usages[name as CommandName] ?? `capcut ${name} <project>`;
     const prerequisites: string[] = [];
     if (["render", "detect-scenes", "detect-silence"].includes(name)) prerequisites.push("ffmpeg");
-    if (["add-video", "add-audio", "compile", "detect-scenes", "detect-silence"].includes(name)) {
+    if (["add-video", "add-audio", "tts", "compile", "detect-scenes", "detect-silence"].includes(name)) {
       prerequisites.push("ffprobe (optional)");
     }
     if (name === "caption") prerequisites.push("whisper CLI");
+    if (name === "tts") prerequisites.push("a local TTS CLI via --tts-cmd");
     if (name === "translate") prerequisites.push("ANTHROPIC_API_KEY or --api-key");
     if (["add-video", "add-audio"].includes(name)) prerequisites.push("network for Wikimedia URLs only");
     const exitCodes: Record<string, string> = { "0": "success", "1": "invalid input, warning, or operation failure" };

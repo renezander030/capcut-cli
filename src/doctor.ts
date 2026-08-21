@@ -92,6 +92,17 @@ export function runDoctor(): DoctorReport {
     fix: whisper ? undefined : "pip install openai-whisper · brew install whisper-cpp · or pass --whisper-cmd <path>",
   });
 
+  // TTS — needed by `tts`. --tts-cmd takes any local tool, so this only
+  // reports whether one of the common engines is on PATH.
+  const tts = onPath("piper") ?? onPath("say") ?? onPath("espeak-ng") ?? onPath("flite");
+  checks.push({
+    name: "tts",
+    status: tts ? "ok" : "warn",
+    detail: tts ? `found: ${tts}` : "no TTS binary on PATH (looked for piper, say, espeak-ng, flite)",
+    affects: ["tts"],
+    fix: tts ? undefined : "Install piper or espeak-ng, or pass --tts-cmd <template> pointing at your TTS tool.",
+  });
+
   // ANTHROPIC_API_KEY — needed by `translate`.
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
   checks.push({
