@@ -642,8 +642,13 @@ Stateless queue runner (v0.5):
 Subtitles (Phase 3):
   import-ass <project> <ass-path-or--> [options]
              Parse an ASS / SSA file ([Events] section, Dialogue lines)
-             and create one text segment per cue. Inline override codes
-             ({\\b1\\an8}, \\N) are stripped from the displayed text.
+             and create one text segment per cue. Inline bold/italic/
+             underline/colour/size overrides ({\\b1}, {\\i1}, {\\c&HBBGGRR&},
+             {\\fs20}) become per-range styles on the segment (the ranges
+             text-ranges writes); the cue's [V4+ Styles] line seeds font
+             size, colour, and alignment where no flag overrides them.
+             Other override codes ({\\an8}, \\pos, \\k, ...) are stripped
+             from the displayed text as before.
              Same flags as import-srt below.
   import-srt <project> <srt-path-or--> [options]
              Parse an SRT file and create one text segment per cue.
@@ -2950,10 +2955,21 @@ function textBaseFontSize(draft: Draft, materialId: string): number {
   return typeof fallback === "number" && Number.isFinite(fallback) ? fallback : 15;
 }
 
+interface ImportCue {
+  index: number;
+  startUs: number;
+  endUs: number;
+  text: string;
+  // import-ass only: inline override tags mapped onto per-range styles, and
+  // the Dialogue's Style line seeding segment defaults the flags don't set.
+  spans?: TextRangeInput[];
+  styleSeed?: { fontSize?: number; color?: string; alignment?: number };
+}
+
 async function importCuesToDraft(
   draft: Draft,
   filePath: string,
-  cues: Array<{ index: number; startUs: number; endUs: number; text: string }>,
+  cues: ImportCue[],
   flags: Flags,
   label: string,
 ): Promise<void> {
@@ -2983,10 +2999,11 @@ async function importCuesToDraft(
       text: cue.text,
       start,
       duration,
-      fontSize: flags.fontSize,
+      // Explicit flags beat the cue's [V4+ Styles] seed (import-ass).
+      fontSize: flags.fontSize ?? cue.styleSeed?.fontSize,
       // --color-cycle rotates the base colour per cue and wins over --color.
-      color: emphasis.cycle ? emphasis.cycle[cueIndex % emphasis.cycle.length] : flags.color,
-      alignment: flags.align,
+      color: emphasis.cycle ? emphasis.cycle[cueIndex % emphasis.cycle.length] : (flags.color ?? cue.styleSeed?.color),
+      alignment: flags.align ?? cue.styleSeed?.alignment,
       x: flags.x,
       y: flags.y,
       trackName: flags.trackName ?? "subtitle",
@@ -2997,6 +3014,10 @@ async function importCuesToDraft(
     if (flags.styleRef)
       copyTextStyle(draft, flags.styleRef, res.materialId, { keepFillColor: Boolean(emphasis.cycle) });
     if (hasStyleFlags) setTextStyle(draft, res.segmentId, styleOpts);
+    // Inline override spans from the cue (import-ass). setTextRanges replaces
+    // the whole styles array, so this must precede the emphasis ranges — which
+    // no command combines with span-carrying cues today.
+    if (cue.spans && cue.spans.length > 0) setTextRanges(draft, res.segmentId, cue.spans);
     if (emphasis.words) {
       // Emphasis ranges sit on top of the base styling written above; unmatched
       // text inherits the cue's styles[0] via setTextRanges' gap fill.
@@ -3046,7 +3067,18 @@ async function cmdImportAss(draft: Draft, filePath: string, positional: string[]
   const assArg = positional[2];
   if (!assArg) die(`Usage: capcut import-ass <project> <ass-path-or-->`);
   const assContent = stripBom(assArg === "-" ? readFileSync(0, "utf-8") : readFileSync(assArg, "utf-8"));
-  const cues = parseAss(assContent);
+  const cues = parseAss(assContent).map((cue) => ({
+    ...cue,
+    spans: cue.spans?.map((s) => {
+      const range: TextRangeInput = { start: s.start, end: s.end };
+      if (s.bold !== undefined) range.bold = s.bold;
+      if (s.italic !== undefined) range.italic = s.italic;
+      if (s.underline !== undefined) range.underline = s.underline;
+      if (s.color !== undefined) range.font_color = s.color;
+      if (s.size !== undefined) range.font_size = s.size;
+      return range;
+    }),
+  }));
   if (cues.length === 0) die(`ASS produced 0 cues`);
   await importCuesToDraft(draft, filePath, cues, flags, "ass");
 }
@@ -4101,7 +4133,7 @@ const SUMMARIES: Record<string, string> = {
   templates: "List bundled reusable templates.",
   batch: "Run multiple edits from stdin (JSONL), one file write.",
   "import-srt": "Import an SRT file/stdin as one text segment per cue.",
-  "import-ass": "Import an ASS/SSA subtitle file as text segments.",
+  "import-ass": "Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles.",
   "text-ranges": "Apply byte-accurate multi-style ranges to a text segment.",
   caption: "Transcribe audio via whisper into real caption-track segments.",
   translate: "Clone a draft into another language via the Anthropic API.",

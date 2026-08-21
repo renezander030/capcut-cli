@@ -1,12 +1,24 @@
 // Zero-dep ASS / SSA subtitle parser. Returns cues with microsecond timings,
 // shaped identically to SrtCue so the import pipeline can be shared.
-// We parse only the [Events] section and only Dialogue: lines. The Format:
-// header is read to find the Start / End / Text column indices (these vary
-// between ASS files). ASS time format is H:MM:SS.cc (centiseconds).
-// Inline override codes ({\\b1}, {\\an8}, …) and \\N line breaks are stripped
-// so the imported text shows what the viewer sees, not the raw markup.
+// We parse the [Events] Dialogue: lines plus the [V4+ Styles] section. The
+// Format: header is read to find the column indices (these vary between ASS
+// files). ASS time format is H:MM:SS.cc (centiseconds).
+// The displayed text still shows what the viewer sees — tags never leak into
+// it — but the inline overrides this module maps onto the draft's per-range
+// styling (\b, \i, \u, \c/\1c, \fs, \r) come back as `spans`, with offsets in
+// UTF-16 code units of the FINAL text (after tag removal, \N -> newline).
+// Every other override ({\an8}, \pos, \k, ...) is stripped as before.
 
 import { repairDoubledRanges } from "./text-offsets.js";
+
+/** Segment-level defaults a Dialogue's Style line carries into the import. */
+export interface AssStyleSeed {
+  fontSize?: number;
+  color?: string; // "#RRGGBB"
+  alignment?: number; // draft scheme: 0 left, 1 center, 2 right
+  bold?: boolean;
+  italic?: boolean;
+}
 
 export interface AssCue {
   index: number;
@@ -14,6 +26,8 @@ export interface AssCue {
   endUs: number;
   text: string;
   style?: string;
+  spans?: AssSpanStyle[]; // inline override ranges that differ from the style
+  styleSeed?: AssStyleSeed; // resolved from the referenced Style line
 }
 
 const TIME = /^(\d+):(\d{2}):(\d{2})[.,](\d{1,3})$/;
@@ -26,31 +40,192 @@ function timeToUs(s: string): number {
   return (parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10)) * 1_000_000 + ms * 1000;
 }
 
-function stripOverrides(raw: string): string {
-  // Drop ASS override blocks like {\\b1\\an8}; convert \\N and \\n to real newlines;
-  // drop \\h (hard-space marker) → keep as space.
-  return raw
-    .replace(/\{[^}]*\}/g, "")
-    .replace(/\\N/g, "\n")
-    .replace(/\\n/g, "\n")
-    .replace(/\\h/g, " ")
-    .trim();
+interface InlineState {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+  size?: number;
+}
+
+const INLINE_KEYS = ["bold", "italic", "underline", "color", "size"] as const;
+
+function sameState(a: InlineState, b: InlineState): boolean {
+  return INLINE_KEYS.every((k) => a[k] === b[k]);
+}
+
+// One override block's tags applied onto the running state. \b takes 0/1 and
+// the 400/700 weight form; \c and \1c set the primary colour; \r drops every
+// override (back to the Style line, ignoring \r<OtherStyle> retargeting).
+// Unrecognized tags leave the state alone — they are stripped, not styling.
+function applyOverrides(block: string, state: InlineState): InlineState {
+  let next = { ...state };
+  for (const tag of block.split("\\")) {
+    const bold = /^b(\d+)/.exec(tag);
+    const italic = /^i([01])/.exec(tag);
+    const underline = /^u([01])/.exec(tag);
+    const size = /^fs(\d+(?:\.\d+)?)/.exec(tag);
+    const color = /^1?c(&H[0-9a-fA-F]{1,8}&?)/.exec(tag);
+    if (bold) {
+      const n = parseInt(bold[1], 10);
+      next.bold = n === 1 || n >= 700;
+    } else if (italic) {
+      next.italic = italic[1] === "1";
+    } else if (underline) {
+      next.underline = underline[1] === "1";
+    } else if (size) {
+      next.size = parseFloat(size[1]);
+    } else if (color) {
+      const parsed = parseAssColor(color[1]);
+      if (parsed) next.color = parsed.color;
+    } else if (/^r/.test(tag)) {
+      next = {};
+    }
+  }
+  return next;
+}
+
+// Dialogue text -> displayed text + inline override spans. Tag state persists
+// until the next block changes it, so a span runs from the block that set it
+// to the block that changes it (or the end of the line). The final text is
+// trimmed exactly as the old flattening did; span offsets shift with the trim.
+function parseDialogueText(raw: string): { text: string; spans: AssSpanStyle[] } {
+  let text = "";
+  const spans: AssSpanStyle[] = [];
+  let state: InlineState = {};
+  let spanStart = 0;
+  const flush = (end: number) => {
+    if (end <= spanStart || !INLINE_KEYS.some((k) => state[k] !== undefined)) return;
+    const span: AssSpanStyle = { start: spanStart, end };
+    if (state.bold !== undefined) span.bold = state.bold;
+    if (state.italic !== undefined) span.italic = state.italic;
+    if (state.underline !== undefined) span.underline = state.underline;
+    if (state.color !== undefined) span.color = state.color;
+    if (state.size !== undefined) span.size = state.size;
+    spans.push(span);
+  };
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === "\\" && i + 1 < raw.length) {
+      const n = raw[i + 1];
+      if (n === "N" || n === "n") {
+        text += "\n";
+      } else if (n === "h") {
+        text += " ";
+      } else if (n === "{" || n === "}") {
+        text += n; // export-ass escapes literal braces this way
+      } else {
+        text += ch + n;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === "{") {
+      const close = raw.indexOf("}", i + 1);
+      if (close < 0) {
+        // Unmatched brace: literal, exactly as the old regex left it.
+        text += ch;
+        i++;
+        continue;
+      }
+      const next = applyOverrides(raw.slice(i + 1, close), state);
+      if (!sameState(next, state)) {
+        flush(text.length);
+        state = next;
+        spanStart = text.length;
+      }
+      i = close + 1;
+      continue;
+    }
+    text += ch;
+    i++;
+  }
+  flush(text.length);
+  const lead = text.length - text.trimStart().length;
+  const trimmed = text.trim();
+  const adjusted = spans.flatMap((s) => {
+    const start = Math.max(0, s.start - lead);
+    const end = Math.min(trimmed.length, s.end - lead);
+    return end > start ? [{ ...s, start, end }] : [];
+  });
+  return { text: trimmed, spans: adjusted };
+}
+
+// Spans carry only what actually differs from the Dialogue's Style line, so a
+// tag that restates the default (the \b0 half of a bold range, a \c back to
+// the primary colour) produces no range at all.
+function pruneAgainstStyle(spans: AssSpanStyle[], seed: AssStyleSeed | undefined): AssSpanStyle[] {
+  const bold = seed?.bold ?? false;
+  const italic = seed?.italic ?? false;
+  return spans.flatMap((s) => {
+    const out: AssSpanStyle = { start: s.start, end: s.end };
+    if (s.bold !== undefined && s.bold !== bold) out.bold = s.bold;
+    if (s.italic !== undefined && s.italic !== italic) out.italic = s.italic;
+    if (s.underline !== undefined && s.underline !== false) out.underline = s.underline;
+    if (s.color !== undefined && s.color !== seed?.color) out.color = s.color;
+    if (s.size !== undefined && s.size !== seed?.fontSize) out.size = s.size;
+    return Object.keys(out).length > 2 ? [out] : [];
+  });
+}
+
+// A [V4+ Styles] Style line reduced to what the import can seed. ASS numpad
+// alignment columns (1/4/7 left, 2/5/8 center, 3/6/9 right) fold onto the
+// draft's 0/1/2; Bold/Italic are the -1/0 convention (1 accepted too).
+function parseStyleLine(line: string, format: string[]): { name: string; seed: AssStyleSeed } | null {
+  const values = line
+    .slice(line.indexOf(":") + 1)
+    .split(",")
+    .map((s) => s.trim());
+  const col = (name: string): string | undefined => {
+    const at = format.indexOf(name);
+    return at >= 0 && at < values.length ? values[at] : undefined;
+  };
+  const name = col("name");
+  if (!name) return null;
+  const seed: AssStyleSeed = {};
+  const fontSize = Number(col("fontsize"));
+  if (Number.isFinite(fontSize) && fontSize > 0) seed.fontSize = fontSize;
+  const primary = col("primarycolour");
+  const color = primary ? parseAssColor(primary) : null;
+  if (color) seed.color = color.color;
+  const alignment = Number(col("alignment"));
+  if (Number.isInteger(alignment) && alignment >= 1 && alignment <= 9) seed.alignment = (alignment - 1) % 3;
+  const bold = col("bold");
+  if (bold !== undefined) seed.bold = bold === "-1" || bold === "1";
+  const italic = col("italic");
+  if (italic !== undefined) seed.italic = italic === "-1" || italic === "1";
+  return { name, seed };
 }
 
 export function parseAss(content: string): AssCue[] {
   const lines = content.replace(/\r\n?/g, "\n").split("\n");
-  let inEvents = false;
+  let section: "events" | "styles" | "other" = "other";
   let format: string[] | null = null;
+  let styleFormat: string[] | null = null;
+  const styleSeeds = new Map<string, AssStyleSeed>();
   const cues: AssCue[] = [];
   let idx = 0;
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
     if (line.startsWith("[")) {
-      inEvents = /^\[events\]/i.test(line);
+      section = /^\[events\]/i.test(line) ? "events" : /^\[v4\+? styles\]/i.test(line) ? "styles" : "other";
       continue;
     }
-    if (!inEvents) continue;
+    if (section === "styles") {
+      if (/^Format\s*:/i.test(line)) {
+        styleFormat = line
+          .slice(line.indexOf(":") + 1)
+          .split(",")
+          .map((s) => s.trim().toLowerCase());
+      } else if (/^Style\s*:/i.test(line) && styleFormat) {
+        const parsed = parseStyleLine(line, styleFormat);
+        if (parsed) styleSeeds.set(parsed.name, parsed.seed);
+      }
+      continue;
+    }
+    if (section !== "events") continue;
     if (/^Format\s*:/i.test(line)) {
       format = line
         .slice(line.indexOf(":") + 1)
@@ -98,15 +273,21 @@ export function parseAss(content: string): AssCue[] {
     const startUs = timeToUs(parts[startCol]);
     const endUs = timeToUs(parts[endCol]);
     if (endUs <= startUs) continue; // CapCut/JianYing won't render zero/neg cues
-    const text = stripOverrides(parts[textCol]);
+    const { text, spans } = parseDialogueText(parts[textCol]);
     if (!text) continue;
+    // "*Default" is SSA's marker for a synthesized style — same style name.
+    const styleName = styleCol >= 0 ? parts[styleCol].trim().replace(/^\*/, "") : undefined;
+    const seed = styleName !== undefined ? styleSeeds.get(styleName) : undefined;
+    const kept = pruneAgainstStyle(spans, seed);
     idx++;
     cues.push({
       index: idx,
       startUs,
       endUs,
       text,
-      style: styleCol >= 0 ? parts[styleCol].trim() : undefined,
+      style: styleName,
+      spans: kept.length > 0 ? kept : undefined,
+      styleSeed: seed,
     });
   }
   return cues;
