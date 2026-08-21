@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -611,6 +611,53 @@
       }
     },
     {
+      "name": "export-ass",
+      "summary": "Export styled ASS subtitles on stdout or --out, with per-range overrides and --karaoke word timing.",
+      "usage": "capcut export-ass <project> [--karaoke] [--out <file.ass>]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "file.ass",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "karaoke",
+          "flags": [
+            "--karaoke"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Emit {\\k} word timing per Dialogue (stored word timings where present, interpolated elsewhere)."
+        },
+        {
+          "name": "out",
+          "flags": [
+            "--out"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Output path."
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [],
+      "output": {
+        "type": "text",
+        "description": "Plain text on stdout."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "export-timeline",
       "summary": "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
       "usage": "capcut export-timeline <project> [--out <file.otio>]",
@@ -1081,6 +1128,112 @@
       ],
       "mutates": true,
       "prerequisites": [],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "tts",
+      "summary": "Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment.",
+      "usage": "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "string",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "start",
+          "type": "time",
+          "required": false
+        },
+        {
+          "name": "duration",
+          "type": "time",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "text",
+          "flags": [
+            "--text"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Voiceover text to synthesize."
+        },
+        {
+          "name": "text_file",
+          "flags": [
+            "--text-file"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Read the voiceover text from this file."
+        },
+        {
+          "name": "tts_cmd",
+          "flags": [
+            "--tts-cmd"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must write, {text} with the text as one argument; without {text} the text is piped to stdin."
+        },
+        {
+          "name": "volume",
+          "flags": [
+            "--volume"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Audio volume.",
+          "default": 1
+        },
+        {
+          "name": "track_name",
+          "flags": [
+            "--track-name"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Target track name."
+        },
+        {
+          "name": "no_probe",
+          "flags": [
+            "--no-probe"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Disable automatic media probing."
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [
+        "ffprobe (optional)",
+        "a local TTS CLI via --tts-cmd"
+      ],
       "output": {
         "type": "object",
         "description": "JSON by default; use -H where supported for human output."
@@ -3031,7 +3184,7 @@
     },
     {
       "name": "import-ass",
-      "summary": "Import an ASS/SSA subtitle file as text segments.",
+      "summary": "Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles.",
       "usage": "capcut import-ass <project> <ass-or-> [options]",
       "positionals": [
         {
@@ -4230,13 +4383,23 @@
     },
     {
       "name": "harvest-enums",
-      "summary": "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
-      "usage": "capcut harvest-enums <project> [--apply] [--catalogue <path>]",
+      "summary": "Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add).",
+      "usage": "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
       "positionals": [
         {
           "name": "project",
           "type": "path",
-          "required": true
+          "required": false
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "resource-id",
+          "type": "id",
+          "required": false
         },
         {
           "name": "path",
@@ -4262,6 +4425,42 @@
           "type": "path",
           "required": false,
           "description": "User catalogue file (default: ~/.config/capcut-cli/user-enums.json, or $CAPCUT_CLI_USER_ENUMS)."
+        },
+        {
+          "name": "sync",
+          "flags": [
+            "--sync"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Harvest every draft in the library (what `projects` lists) in one sweep."
+        },
+        {
+          "name": "drafts",
+          "flags": [
+            "--drafts"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Draft library root for --sync (default: the per-OS CapCut/JianYing dirs)."
+        },
+        {
+          "name": "add",
+          "flags": [
+            "--add"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Register one entry by hand: --add <kind> <slug> <resource-id>."
+        },
+        {
+          "name": "effect_id",
+          "flags": [
+            "--effect-id"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Effect id for an --add entry that carries both ids."
         }
       ],
       "mutates": false,
@@ -4884,6 +5083,15 @@
           "description": "FFmpeg binary."
         },
         {
+          "name": "encoder",
+          "flags": [
+            "--encoder"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering."
+        },
+        {
           "name": "burn_captions",
           "flags": [
             "--burn-captions"
@@ -4982,6 +5190,99 @@
           "type": "path",
           "required": false,
           "description": "ffprobe binary for the video-stream duration (falls back to the container duration without it)."
+        },
+        {
+          "name": "json",
+          "flags": [
+            "--json"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Force JSON output (the default; overrides -H)."
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [
+        "ffmpeg",
+        "ffprobe (optional)"
+      ],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "detect-silence",
+      "summary": "Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut.",
+      "usage": "capcut detect-silence <media> [options]",
+      "positionals": [
+        {
+          "name": "media",
+          "type": "path",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "name": "threshold_db",
+          "flags": [
+            "--threshold-db"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Noise floor in dBFS; audio at or below this level counts as silence.",
+          "default": -30
+        },
+        {
+          "name": "min_silence",
+          "flags": [
+            "--min-silence"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shortest silence to report, in seconds.",
+          "default": 0.5
+        },
+        {
+          "name": "pad",
+          "flags": [
+            "--pad"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Margin in seconds kept around speech: each silence span is shrunk by this on both ends so cuts never clip a word mid-syllable.",
+          "default": 0.1
+        },
+        {
+          "name": "limit",
+          "flags": [
+            "--limit"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Keep only the N longest silences."
+        },
+        {
+          "name": "ffmpeg_cmd",
+          "flags": [
+            "--ffmpeg-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "FFmpeg binary."
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary for the container duration (falls back to ffmpeg's stderr header without it)."
         },
         {
           "name": "json",
