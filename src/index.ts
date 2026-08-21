@@ -11,6 +11,7 @@ import {
   takeAppVersionDrift,
   trackAppVersion,
 } from "./app-versions.js";
+import type { AssEvent, AssStyleDef } from "./ass.js";
 import { stripBom } from "./bom.js";
 import {
   buildCommandSpecs,
@@ -52,6 +53,7 @@ import {
 } from "./draft.js";
 import type { Category, Namespace } from "./enums.js";
 import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CropRect, CutOptions } from "./factory.js";
+import type { NestedTimelinesEvidence } from "./fixture.js";
 import type { ImportPlan } from "./interchange.js";
 import type { LintOptions } from "./lint.js";
 import type { TextStylePreset } from "./preset.js";
@@ -66,6 +68,7 @@ import {
   planTimelineSync,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
+import type { UserEnumEntry } from "./user-enums.js";
 import { assessWriteSafety, detectVersion } from "./version.js";
 import type { WikimediaAsset } from "./wikimedia.js";
 
@@ -84,6 +87,7 @@ export const COMMANDS = [
   "trim",
   "opacity",
   "export-srt",
+  "export-ass",
   "export-timeline",
   "import-timeline",
   "materials",
@@ -92,6 +96,7 @@ export const COMMANDS = [
   "add-audio",
   "add-video",
   "add-text",
+  "tts",
   "crop",
   "cut",
   "duplicate",
@@ -150,6 +155,7 @@ export const COMMANDS = [
   "compile",
   "render",
   "detect-scenes",
+  "detect-silence",
 ] as const;
 
 const HELP = `capcut-cli -- fast edits to CapCut projects
@@ -243,6 +249,7 @@ Preview:
                --fps <n>          Output fps (default draft fps)
                --burn-captions    Draw text-track segments onto the video
                --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
+               --encoder <name>   Video encoder for -c:v (default libx264)
                --dry-run          Print the ffmpeg plan; do not execute
 
 Analyze:
@@ -265,6 +272,32 @@ Analyze:
                --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
                --ffprobe-cmd <p>  ffprobe binary for the video-stream
                                   duration (default ffprobe)
+               --json             Force JSON output (the default; overrides -H)
+  detect-silence <media> [--threshold-db <dB>] [--min-silence <s>] [--pad <s>] [--limit <n>]
+             Detect silence spans in an audio or video file (ffmpeg
+             silencedetect — deterministic, no draft needed). Prints each
+             silence span AND the complementary keep segments (the speech),
+             both in seconds AND microseconds (the draft-native unit), ready
+             to seed an auto-cut: feed the keep segments into "capcut
+             compile" (one clip per segment) or "capcut cut" to drop the
+             dead air. Keep segments span the CONTAINER duration (read via
+             ffprobe; without ffprobe the report falls back to ffmpeg's
+             stderr header and duration_source says so). A silence that runs
+             to the end of the file stays open-ended (end null) when the
+             duration is unknown. Detection only — it never touches a
+             draft. Options:
+               --threshold-db <dB> Noise floor in dBFS; audio at or below
+                                  this level counts as silence (default -30)
+               --min-silence <s>  Shortest silence to report, in seconds
+                                  (default 0.5)
+               --pad <s>          Margin in seconds kept around speech: each
+                                  silence span is shrunk by this on both ends
+                                  so cuts never clip a word mid-syllable
+                                  (default 0.1)
+               --limit <n>        Keep only the <n> longest silences
+               --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
+               --ffprobe-cmd <p>  ffprobe binary for the container duration
+                                  (default ffprobe)
                --json             Force JSON output (the default; overrides -H)
 
 Add:
@@ -297,6 +330,20 @@ Add:
                --track-name <s>   Track name (default: "text")
                --preset <file>    Apply a make-preset style preset; explicit
                                   flags override preset values
+
+  tts        <project> [start] [duration] (--text <s> | --text-file <f>) --tts-cmd <template>
+             Synthesize a voiceover with a local TTS tool and add it as an
+             audio segment (synthesized into assets/audio/, duration via
+             ffprobe unless [duration] is passed). The template runs WITHOUT
+             a shell: {out} (required) is replaced with the .wav path the
+             tool must write, {text} with the text as ONE argument — no
+             {text} means the text is piped to stdin. Examples:
+               --tts-cmd 'piper --model en_US-amy-medium --output_file {out}'
+               --tts-cmd 'say -o {out} {text}'          (macOS)
+               --tts-cmd 'espeak-ng -w {out} {text}'
+             Options:
+               --volume <n>       Volume 0.0-1.0 (default: 1.0)
+               --track-name <s>   Track name (default: "audio")
 
 Edit:
   set-text   <project> <id> <text>              Change text content
@@ -339,6 +386,7 @@ Edit:
              skips the sweep). Recomputes the project duration to the max
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
+  export-ass <project> [--karaoke] [--out <f.ass>]  Export styled subtitles as ASS
   export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
   import-timeline <f.otio> (--out <dir> | --into <project>)  Import an OpenTimelineIO cut
   batch      <project>                          Run multiple edits from stdin (JSONL)
@@ -351,6 +399,14 @@ Maintenance & inspection:
              harvested ids stop lint-flagging as unknown, and named effects/
              filters/transitions/masks/sfx become writable slugs. Plan by
              default; --apply writes the catalogue (never the draft).
+             --sync (instead of <project>) sweeps every draft the projects
+             listing can see ([--drafts <dir>]) into one merged write;
+             unreadable drafts are skipped with a note, never fatal.
+             --add <kind> <slug> <resource-id> [--effect-id <id>] registers
+             one entry by hand when its witness draft is gone. Writable
+             kinds only — animations/bubbles/fonts stay id-only because a
+             draft cannot disambiguate them; duplicate ids are refused,
+             naming the entry that already owns them.
   prune      <project>                          Remove materials no segment references
   register   <project-dir> [--apply] [--drafts <dir>]  Repair an EXISTING draft's
              registration metadata so the CapCut app lists it again (init only
@@ -638,8 +694,13 @@ Stateless queue runner (v0.5):
 Subtitles (Phase 3):
   import-ass <project> <ass-path-or--> [options]
              Parse an ASS / SSA file ([Events] section, Dialogue lines)
-             and create one text segment per cue. Inline override codes
-             ({\\b1\\an8}, \\N) are stripped from the displayed text.
+             and create one text segment per cue. Inline bold/italic/
+             underline/colour/size overrides ({\\b1}, {\\i1}, {\\c&HBBGGRR&},
+             {\\fs20}) become per-range styles on the segment (the ranges
+             text-ranges writes); the cue's [V4+ Styles] line seeds font
+             size, colour, and alignment where no flag overrides them.
+             Other override codes ({\\an8}, \\pos, \\k, ...) are stripped
+             from the displayed text as before.
              Same flags as import-srt below.
   import-srt <project> <srt-path-or--> [options]
              Parse an SRT file and create one text segment per cue.
@@ -678,6 +739,20 @@ Subtitles (Phase 3):
              Word timings are real where the draft stores them (caption
              --karaoke word segments); elsewhere they are interpolated within
              each cue, weighted by word character length.
+  export-ass <project> [options]
+             Export subtitles as styled ASS (stdout, or --out): PlayRes from
+             the draft canvas, one [V4+ Styles] line per distinct text
+             styling (font size/colour, bold/italic, alignment, border/
+             shadow/background where mappable), one Dialogue per segment.
+             Multi-range styling (text-ranges, --highlight-words) survives
+             as inline override tags ({\\b1}, {\\c&HBBGGRR&}, {\\fs<n>}).
+             Options:
+               --karaoke      Emit {\\k} word timing per Dialogue. Word
+                              timings follow export-srt --granularity word:
+                              real where stored, else interpolated. The
+                              highlight colour becomes PrimaryColour, the
+                              base colour SecondaryColour.
+               --out <f.ass>  Write to a file and print a JSON summary.
   export-timeline <project> [--out <file.otio>]
              Export video/audio tracks as OpenTimelineIO JSON (stdout, or
              --out): clip order, trims, gaps, and speed (LinearTimeWarp) —
@@ -826,6 +901,10 @@ interface Flags {
   colorCycle?: string;
   noProbe?: boolean;
   ffprobeCmd?: string;
+  // tts
+  text?: string;
+  textFile?: string;
+  ttsCmd?: string;
   // export-srt
   granularity?: "line" | "word";
   format?: "srt" | "vtt";
@@ -863,6 +942,7 @@ interface Flags {
   names?: boolean;
   fps?: number;
   ffmpegCmd?: string;
+  encoder?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
   progress?: boolean;
@@ -874,6 +954,9 @@ interface Flags {
   check?: boolean;
   plan?: boolean;
   apply?: boolean;
+  // harvest-enums library sweep / manual entry
+  sync?: boolean;
+  add?: boolean;
   // compile --data
   data?: string;
   // import-timeline
@@ -883,6 +966,10 @@ interface Flags {
   minGap?: number;
   limit?: number;
   json?: boolean;
+  // detect-silence
+  thresholdDb?: number;
+  minSilence?: number;
+  pad?: number;
   // crop
   ratio?: string;
   rect?: string;
@@ -1173,6 +1260,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.colorCycle = args[++i];
     } else if (a === "--no-probe") {
       flags.noProbe = true;
+    } else if (a === "--text" && i + 1 < args.length) {
+      flags.text = args[++i];
+    } else if (a === "--text-file" && i + 1 < args.length) {
+      flags.textFile = args[++i];
+    } else if (a === "--tts-cmd" && i + 1 < args.length) {
+      flags.ttsCmd = args[++i];
     } else if (a === "--granularity" && i + 1 < args.length) {
       const granularity = args[++i];
       if (!["line", "word"].includes(granularity)) {
@@ -1235,6 +1328,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.fps = parseFloat(args[++i]);
     } else if (a === "--ffmpeg-cmd" && i + 1 < args.length) {
       flags.ffmpegCmd = args[++i];
+    } else if (a === "--encoder" && i + 1 < args.length) {
+      flags.encoder = args[++i];
     } else if (a === "--burn-captions") {
       flags.burnCaptions = true;
     } else if (a === "--all-video-tracks") {
@@ -1255,6 +1350,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.plan = true;
     } else if (a === "--apply") {
       flags.apply = true;
+    } else if (a === "--sync") {
+      flags.sync = true;
+    } else if (a === "--add") {
+      flags.add = true;
     } else if (a === "--threshold" && i + 1 < args.length) {
       flags.threshold = parseFloat(args[++i]);
     } else if (a === "--min-gap" && i + 1 < args.length) {
@@ -1263,6 +1362,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.limit = parseInt(args[++i], 10);
     } else if (a === "--json") {
       flags.json = true;
+    } else if (a === "--threshold-db" && i + 1 < args.length) {
+      flags.thresholdDb = parseFloat(args[++i]);
+    } else if (a === "--min-silence" && i + 1 < args.length) {
+      flags.minSilence = parseFloat(args[++i]);
+    } else if (a === "--pad" && i + 1 < args.length) {
+      flags.pad = parseFloat(args[++i]);
     } else if (a === "--ratio" && i + 1 < args.length) {
       flags.ratio = args[++i];
     } else if (a === "--rect" && i + 1 < args.length) {
@@ -1692,6 +1797,148 @@ async function cmdHarvestEnums(draft: Draft, flags: Flags): Promise<void> {
   if (!flags.quiet) process.stderr.write(`Catalogue updated: ${cataloguePath} (+${added}, ${total} total)\n`);
 }
 
+// `harvest-enums --sync` runs the same harvest over every draft the library
+// discovery (`projects`) can see, into ONE merged catalogue write. A draft
+// that cannot be read is skipped with a one-line note, never fatal: one
+// broken project must not abort learning from the rest.
+async function cmdHarvestEnumsSync(flags: Flags): Promise<void> {
+  const { draftDirs } = await import("./doctor.js");
+  const { knownEffectIds } = await import("./lint.js");
+  const { allUserEnumIds, harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } = await import(
+    "./user-enums.js"
+  );
+  const cataloguePath = userEnumsPath(flags.catalogue);
+  const { error } = loadUserEnums(cataloguePath);
+  // knownEffectIds() folds in the default catalogue only; add the ids from an
+  // overridden --catalogue so re-syncing into it stays idempotent.
+  const knownIds = new Set(knownEffectIds());
+  for (const id of allUserEnumIds(cataloguePath)) knownIds.add(id);
+
+  const roots = flags.drafts ? [{ label: "custom", path: flags.drafts }] : draftDirs();
+  const skipped: Array<{ draft: string; reason: string }> = [];
+  const candidates: UserEnumEntry[] = [];
+  let scanned = 0;
+  let found = 0;
+  let known = 0;
+  for (const root of roots) {
+    if (!existsSync(root.path)) continue;
+    for (const entry of readdirSync(root.path).sort()) {
+      const folder = path.join(root.path, entry);
+      let isDir = false;
+      try {
+        isDir = statSync(folder).isDirectory();
+      } catch {
+        isDir = false;
+      }
+      if (!isDir) continue;
+      const draftFile = ["draft_content.json", "draft_info.json"]
+        .map((f) => path.join(folder, f))
+        .find((p) => existsSync(p));
+      if (!draftFile) continue;
+      try {
+        const { draft } = loadDraft(draftFile);
+        const result = harvestDraft(draft, knownIds);
+        found += result.found;
+        known += result.known;
+        // Feed accepted ids back into the known set: the same store resource
+        // in a later draft counts as already known, not a second candidate.
+        for (const candidate of result.candidates) {
+          candidates.push(candidate);
+          if (candidate.effect_id) knownIds.add(candidate.effect_id);
+          if (candidate.resource_id) knownIds.add(candidate.resource_id);
+        }
+        scanned++;
+      } catch (e) {
+        const reason = (e instanceof Error ? e.message : String(e)).split("\n")[0];
+        skipped.push({ draft: entry, reason });
+        if (!flags.quiet) process.stderr.write(`skipped ${entry}: ${reason}\n`);
+      }
+    }
+  }
+
+  const newByKind: Record<string, number> = {};
+  for (const candidate of candidates) newByKind[candidate.kind] = (newByKind[candidate.kind] ?? 0) + 1;
+  const writable = candidates.filter((candidate) => candidate.slug !== "").length;
+  const base = {
+    catalogue: cataloguePath,
+    catalogue_error: error,
+    drafts_scanned: scanned,
+    drafts_skipped: skipped,
+    found,
+    known,
+    new: candidates,
+    new_by_kind: newByKind,
+    writable_slugs: writable,
+    id_only: candidates.length - writable,
+  };
+  const sweep = `${scanned} drafts${skipped.length > 0 ? ` (${skipped.length} skipped)` : ""}`;
+  if (scanned === 0 && skipped.length === 0 && !flags.quiet) {
+    process.stderr.write(`No drafts found under ${roots.map((root) => root.path).join(", ")}.\n`);
+  }
+  if (!flags.apply) {
+    out({ ok: error === null, applied: false, ...base }, flags);
+    if (!flags.quiet) {
+      process.stderr.write(
+        candidates.length === 0
+          ? `No new resource ids across ${sweep} — every id is already known.\n`
+          : `Would add ${candidates.length} entries (${writable} writable slugs) from ${sweep}. Re-run with --apply to write.\n`,
+      );
+      if (error) process.stderr.write(`WARNING: ${error}\n`);
+    }
+    return;
+  }
+  if (error) {
+    die(
+      `Refusing to rewrite a catalogue that did not parse (${error}). ` +
+        `Fix or remove ${cataloguePath}, then re-run.`,
+    );
+  }
+  if (isDryRun()) {
+    out({ ok: true, applied: false, would_add: candidates.length, ...base }, flags);
+    if (!flags.quiet) process.stderr.write("Dry run — nothing was written.\n");
+    return;
+  }
+  const { added, duplicates, total } = mergeUserEnums(cataloguePath, candidates);
+  out({ ok: true, applied: true, added, duplicates, total, ...base }, flags);
+  if (!flags.quiet) {
+    process.stderr.write(`Catalogue updated from ${sweep}: ${cataloguePath} (+${added}, ${total} total)\n`);
+  }
+}
+
+const HARVEST_ADD_USAGE =
+  "capcut harvest-enums --add <kind> <slug> <resource-id> [--effect-id <id>] [--apply] [--catalogue <path>]";
+
+// `harvest-enums --add` registers one entry whose witness draft is gone — the
+// same validation and catalogue write as a harvest, minus the draft.
+async function cmdHarvestEnumsAdd(positional: string[], flags: Flags): Promise<void> {
+  const { loadUserEnums, mergeUserEnums, planManualEntry, userEnumsPath } = await import("./user-enums.js");
+  if (positional.length !== 4) die(`Usage: ${HARVEST_ADD_USAGE}`);
+  const [, kind, slug, resourceId] = positional;
+  const cataloguePath = userEnumsPath(flags.catalogue);
+  const { error } = loadUserEnums(cataloguePath);
+  // Unlike a plan-mode harvest (which only warns), --add cannot even check
+  // for duplicates against a catalogue that did not parse.
+  if (error) {
+    die(`Refusing to extend a catalogue that did not parse (${error}). Fix or remove ${cataloguePath}, then re-run.`);
+  }
+  const plan = planManualEntry({ kind, slug, resourceId, effectId: flags.effectId }, cataloguePath);
+  if (plan.error !== null) die(plan.error);
+  const base = { catalogue: cataloguePath, entry: plan.entry };
+  if (!flags.apply) {
+    out({ ok: true, applied: false, ...base }, flags);
+    if (!flags.quiet) process.stderr.write(`Would add ${kind}/${slug}. Re-run with --apply to write.\n`);
+    return;
+  }
+  if (isDryRun()) {
+    out({ ok: true, applied: false, ...base }, flags);
+    if (!flags.quiet) process.stderr.write("Dry run — nothing was written.\n");
+    return;
+  }
+  const { added, total } = mergeUserEnums(cataloguePath, [plan.entry]);
+  out({ ok: true, applied: true, added, total, ...base }, flags);
+  if (!flags.quiet) process.stderr.write(`Catalogue updated: ${cataloguePath} (+${added}, ${total} total)\n`);
+}
+
 // Read-only NLE handoff: the draft's video/audio cut as OpenTimelineIO JSON.
 // Raw document on stdout (pipe-able, like export-srt); --out writes the file
 // and prints a JSON summary instead. Skips are reported on stderr, never
@@ -1850,25 +2097,34 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
   }
 }
 
+// The one walk both subtitle exporters share: per text track, one cue per
+// segment with the material's text and repaired code-unit style ranges, plus
+// the material itself for exporters that carry styling (export-ass).
+function textTrackCues(draft: Draft): Array<Array<SegmentCue & { material: MaterialText }>> {
+  return getTracksByType(draft, "text").map((track) =>
+    track.segments.flatMap((seg) => {
+      const mat = findMaterial(draft.materials.texts, seg.material_id);
+      if (!mat) return [];
+      const t = seg.target_timerange;
+      return [
+        {
+          startUs: t.start,
+          endUs: t.start + t.duration,
+          text: extractText(mat.content),
+          styleRanges: extractCodeUnitStyleRanges(mat.content),
+          material: mat,
+        },
+      ];
+    }),
+  );
+}
+
 async function cmdExportSrt(draft: Draft, flags: Flags): Promise<void> {
   const { collapseKaraokeRuns, cueWords, renderSrt, renderVtt } = await import("./srt.js");
   const granularity = flags.granularity ?? "line";
   const format = flags.format ?? "srt";
-  const textTracks = getTracksByType(draft, "text");
   const cues: SegmentCue[] = [];
-  for (const track of textTracks) {
-    const entries: SegmentCue[] = [];
-    for (const seg of track.segments) {
-      const mat = findMaterial(draft.materials.texts, seg.material_id);
-      if (!mat) continue;
-      const t = seg.target_timerange;
-      entries.push({
-        startUs: t.start,
-        endUs: t.start + t.duration,
-        text: extractText(mat.content),
-        styleRanges: extractCodeUnitStyleRanges(mat.content),
-      });
-    }
+  for (const entries of textTrackCues(draft)) {
     // Word granularity: karaoke runs (one word-timed segment per word) carry
     // real word timings; other cues fall back to length-weighted interpolation.
     if (granularity === "word") cues.push(...collapseKaraokeRuns(entries));
@@ -1882,6 +2138,92 @@ async function cmdExportSrt(draft: Draft, flags: Flags): Promise<void> {
     process.stdout.write(renderSrt(words));
   } else {
     process.stdout.write(renderSrt(cues));
+  }
+}
+
+// Styled ASS export: [Script Info] PlayRes from the draft canvas, one [V4+
+// Styles] line per distinct material styling, one Dialogue per text segment
+// with the material's non-default style ranges as inline overrides. With
+// --karaoke, cues collapse the way `export-srt --granularity word` does and
+// each Dialogue carries {\k} word timing instead of range overrides — the
+// highlight becomes the style's Primary/Secondary colour pair.
+async function cmdExportAss(draft: Draft, flags: Flags): Promise<void> {
+  const { assStyleFromMaterial, renderAss } = await import("./ass.js");
+  const { collapseKaraokeRuns, cueWords } = await import("./srt.js");
+
+  const parts = new Map<string, ReturnType<typeof assStyleFromMaterial>>();
+  const partsOf = (mat: MaterialText) => {
+    let p = parts.get(mat.id);
+    if (!p) {
+      p = assStyleFromMaterial(mat);
+      parts.set(mat.id, p);
+    }
+    return p;
+  };
+  const styles: AssStyleDef[] = [];
+  const styleNames = new Map<string, string>();
+  const styleNameFor = (def: Omit<AssStyleDef, "name">): string => {
+    const signature = JSON.stringify(def);
+    let name = styleNames.get(signature);
+    if (!name) {
+      name = styles.length === 0 ? "Default" : `Default${styles.length + 1}`;
+      styleNames.set(signature, name);
+      styles.push({ ...def, name });
+    }
+    return name;
+  };
+
+  const events: AssEvent[] = [];
+  for (const entries of textTrackCues(draft)) {
+    if (flags.karaoke) {
+      // The track's highlight colour: the first span colour that differs from
+      // its material's base — the paint caption --karaoke moves word to word.
+      let highlight: string | undefined;
+      for (const e of entries) {
+        highlight ??= partsOf(e.material).spans.find((s) => s.color !== undefined)?.color;
+      }
+      for (const cue of collapseKaraokeRuns(entries)) {
+        const rep = entries.find((e) => e.startUs === cue.startUs && e.text === cue.text) ?? entries[0];
+        const base = partsOf(rep.material).style;
+        const def = highlight ? { ...base, color: highlight, secondaryColor: base.color } : base;
+        events.push({
+          startUs: cue.startUs,
+          endUs: cue.endUs,
+          text: cue.text,
+          style: styleNameFor(def),
+          words: cueWords(cue),
+        });
+      }
+    } else {
+      for (const e of entries) {
+        const p = partsOf(e.material);
+        events.push({
+          startUs: e.startUs,
+          endUs: e.endUs,
+          text: e.text,
+          style: styleNameFor(p.style),
+          spans: p.spans.length > 0 ? p.spans : undefined,
+        });
+      }
+    }
+  }
+  events.sort((a, b) => a.startUs - b.startUs);
+
+  const rendered = renderAss({
+    title: draft.name || undefined,
+    playResX: draft.canvas_config?.width || 1920,
+    playResY: draft.canvas_config?.height || 1080,
+    styles,
+    events,
+  });
+  if (flags.out) {
+    writeFileSync(flags.out, rendered, "utf-8");
+    out(
+      { ok: true, out: flags.out, events: events.length, styles: styles.length || 1, karaoke: Boolean(flags.karaoke) },
+      flags,
+    );
+  } else {
+    process.stdout.write(rendered);
   }
 }
 
@@ -2026,6 +2368,79 @@ async function cmdAddAudio(draft: Draft, filePath: string, positional: string[],
   if (asset) payload.wikimedia = wikimediaPayload(asset);
   if (warning) payload.warning = warning;
   out(payload, flags);
+}
+
+async function cmdTts(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { collisionSafeOutPath, synthesizeSpeech } = await import("./tts.js");
+  const { addAudio } = await import("./factory.js");
+  const { probeMedia } = await import("./probe.js");
+  if (flags.text !== undefined && flags.textFile !== undefined) {
+    die("--text and --text-file are mutually exclusive. Pass one text source.");
+  }
+  let text = flags.text;
+  if (flags.textFile !== undefined) {
+    if (!existsSync(flags.textFile)) die(`Text file not found: ${flags.textFile}`);
+    text = stripBom(readFileSync(flags.textFile, "utf-8"));
+  }
+  if (text === undefined) {
+    die(
+      "Missing --text <string> or --text-file <path>. " +
+        "Usage: capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template>",
+    );
+  }
+  text = text.trim();
+  if (text.length === 0) die("The voiceover text is empty. Pass non-empty --text or --text-file content.");
+  if (!flags.ttsCmd) {
+    die(
+      "Missing --tts-cmd <template>. tts runs a local TTS tool you provide (without a shell): {out} is replaced " +
+        "with the .wav path the tool must write; {text} with the text as a single argument, or the text is piped " +
+        "to stdin when the template has no {text}. Known-working examples:\n" +
+        "  --tts-cmd 'piper --model en_US-amy-medium --output_file {out}'   (reads text on stdin)\n" +
+        "  --tts-cmd 'say -o {out} {text}'                                  (macOS)\n" +
+        "  --tts-cmd 'espeak-ng -w {out} {text}'\n" +
+        "The tool must write a wav (or other CapCut-supported) audio file at {out}.",
+    );
+  }
+  const start = positional[2] ? parseTimeInput(positional[2]) : 0;
+  const durationStr = positional[3];
+  // Synthesize straight into the dir addAudio copies into (like the Wikimedia
+  // fetch path) so its copyAssetDeduped becomes a no-op on the same file.
+  const assetsDir = path.resolve(path.dirname(filePath), "assets", "audio");
+  const outPath = collisionSafeOutPath(assetsDir);
+  const synthesis = synthesizeSpeech(text, flags.ttsCmd, outPath);
+  const media = flags.noProbe ? null : probeMedia(outPath, flags.ffprobeCmd);
+  const duration = durationStr ? parseTimeInput(durationStr) : media?.durationUs;
+  if (!duration || duration <= 0) {
+    die("The synthesized audio's duration could not be probed. Pass duration explicitly or install ffprobe.");
+  }
+  if (durationStr && media?.durationUs && duration > media.durationUs + 10_000) {
+    die(`Requested duration ${duration}us exceeds synthesized duration ${media.durationUs}us.`);
+  }
+  const result = addAudio(draft, filePath, {
+    path: outPath,
+    start,
+    duration,
+    volume: flags.volume,
+    trackName: flags.trackName,
+  });
+  saveDraft(filePath, draft);
+  out(
+    {
+      ok: true,
+      segment_id: result.segmentId,
+      material_id: result.materialId,
+      track_id: result.trackId,
+      path: outPath,
+      bytes: synthesis.bytes,
+      text_chars: text.length,
+      text_delivery: synthesis.delivery,
+      start_us: start,
+      duration_us: duration,
+      duration_source: durationStr ? "argument" : "ffprobe",
+      media_probe: media,
+    },
+    flags,
+  );
 }
 
 async function cmdAddVideo(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
@@ -2834,10 +3249,21 @@ function textBaseFontSize(draft: Draft, materialId: string): number {
   return typeof fallback === "number" && Number.isFinite(fallback) ? fallback : 15;
 }
 
+interface ImportCue {
+  index: number;
+  startUs: number;
+  endUs: number;
+  text: string;
+  // import-ass only: inline override tags mapped onto per-range styles, and
+  // the Dialogue's Style line seeding segment defaults the flags don't set.
+  spans?: TextRangeInput[];
+  styleSeed?: { fontSize?: number; color?: string; alignment?: number };
+}
+
 async function importCuesToDraft(
   draft: Draft,
   filePath: string,
-  cues: Array<{ index: number; startUs: number; endUs: number; text: string }>,
+  cues: ImportCue[],
   flags: Flags,
   label: string,
 ): Promise<void> {
@@ -2867,10 +3293,11 @@ async function importCuesToDraft(
       text: cue.text,
       start,
       duration,
-      fontSize: flags.fontSize,
+      // Explicit flags beat the cue's [V4+ Styles] seed (import-ass).
+      fontSize: flags.fontSize ?? cue.styleSeed?.fontSize,
       // --color-cycle rotates the base colour per cue and wins over --color.
-      color: emphasis.cycle ? emphasis.cycle[cueIndex % emphasis.cycle.length] : flags.color,
-      alignment: flags.align,
+      color: emphasis.cycle ? emphasis.cycle[cueIndex % emphasis.cycle.length] : (flags.color ?? cue.styleSeed?.color),
+      alignment: flags.align ?? cue.styleSeed?.alignment,
       x: flags.x,
       y: flags.y,
       trackName: flags.trackName ?? "subtitle",
@@ -2881,6 +3308,10 @@ async function importCuesToDraft(
     if (flags.styleRef)
       copyTextStyle(draft, flags.styleRef, res.materialId, { keepFillColor: Boolean(emphasis.cycle) });
     if (hasStyleFlags) setTextStyle(draft, res.segmentId, styleOpts);
+    // Inline override spans from the cue (import-ass). setTextRanges replaces
+    // the whole styles array, so this must precede the emphasis ranges — which
+    // no command combines with span-carrying cues today.
+    if (cue.spans && cue.spans.length > 0) setTextRanges(draft, res.segmentId, cue.spans);
     if (emphasis.words) {
       // Emphasis ranges sit on top of the base styling written above; unmatched
       // text inherits the cue's styles[0] via setTextRanges' gap fill.
@@ -2930,7 +3361,18 @@ async function cmdImportAss(draft: Draft, filePath: string, positional: string[]
   const assArg = positional[2];
   if (!assArg) die(`Usage: capcut import-ass <project> <ass-path-or-->`);
   const assContent = stripBom(assArg === "-" ? readFileSync(0, "utf-8") : readFileSync(assArg, "utf-8"));
-  const cues = parseAss(assContent);
+  const cues = parseAss(assContent).map((cue) => ({
+    ...cue,
+    spans: cue.spans?.map((s) => {
+      const range: TextRangeInput = { start: s.start, end: s.end };
+      if (s.bold !== undefined) range.bold = s.bold;
+      if (s.italic !== undefined) range.italic = s.italic;
+      if (s.underline !== undefined) range.underline = s.underline;
+      if (s.color !== undefined) range.font_color = s.color;
+      if (s.size !== undefined) range.font_size = s.size;
+      return range;
+    }),
+  }));
   if (cues.length === 0) die(`ASS produced 0 cues`);
   await importCuesToDraft(draft, filePath, cues, flags, "ass");
 }
@@ -3308,9 +3750,19 @@ async function cmdDoctor(flags: Flags): Promise<boolean> {
   return report.ok;
 }
 
-function cmdDiagnose(projectPath: string | undefined, flags: Flags): void {
+async function cmdDiagnose(projectPath: string | undefined, flags: Flags): Promise<void> {
   if (!projectPath) die("Usage: capcut diagnose <project> [--bundle <report.json>]");
-  const report = diagnoseDraftStore(projectPath);
+  const base = diagnoseDraftStore(projectPath);
+  // Nested-Timelines evidence (issue #50) is attached only when the structure
+  // exists, so a normal draft's report stays byte-identical. The builder lives
+  // in fixture.ts (lazy-loaded, like the fixture command itself) because the
+  // captured Timelines/project.json goes through the bundle redactors.
+  let report: ReturnType<typeof diagnoseDraftStore> & { nested_evidence?: NestedTimelinesEvidence } = base;
+  if (base.layout === "timelines-nested" || base.nested_timelines.length > 0) {
+    const { buildNestedTimelinesEvidence } = await import("./fixture.js");
+    const evidence = buildNestedTimelinesEvidence(projectPath);
+    if (evidence) report = { ...base, nested_evidence: evidence };
+  }
   if (flags.bundle) {
     writeFileSync(flags.bundle, `${JSON.stringify(report, null, 2)}\n`, "utf-8");
   }
@@ -3324,6 +3776,21 @@ function cmdDiagnose(projectPath: string | undefined, flags: Flags): void {
     for (const candidate of report.candidates) {
       const state = !candidate.exists ? "missing" : candidate.parseable_timeline ? "timeline" : "unreadable";
       console.log(`${candidate.file.padEnd(24)} ${state.padEnd(10)} ${String(candidate.size).padStart(9)} bytes`);
+    }
+    if (report.nested_evidence) {
+      console.log("");
+      console.log("Nested Timelines/ evidence (issue #50) — full redacted detail in the JSON report:");
+      for (const cmp of report.nested_evidence.root_vs_nested) {
+        const order =
+          cmp.mtime_newer === "root" || cmp.mtime_newer === "nested"
+            ? `${cmp.mtime_newer} file is mtime-newer`
+            : `mtime order: ${cmp.mtime_newer}`;
+        console.log(
+          cmp.identical
+            ? `${cmp.nested_file} matches the root ${cmp.root_file}`
+            : `${cmp.nested_file} DIVERGES from the root ${cmp.root_file} (${order})`,
+        );
+      }
     }
     if (flags.bundle) console.log(`\nBundle: ${flags.bundle}`);
   } else {
@@ -3948,16 +4415,18 @@ const SUMMARIES: Record<string, string> = {
   trim: "Trim a segment to a start/duration window.",
   opacity: "Set a segment's opacity (0.0-1.0).",
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
+  "export-ass": "Export styled ASS subtitles on stdout or --out, with per-range overrides and --karaoke word timing.",
   "export-timeline":
     "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
   "import-timeline":
     "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
   "harvest-enums":
-    "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
+    "Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add).",
   materials: "List material types and counts; filter with --type.",
   segment: "Full detail for one segment and its material.",
   material: "Full detail for one material.",
   "add-audio": "Add a local or Wikimedia audio file on an audio track.",
+  tts: "Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment.",
   "add-video": "Add a local or Wikimedia video/image on a video track.",
   "add-text": "Add a text segment with font/color/position options.",
   crop: "Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset).",
@@ -3984,7 +4453,7 @@ const SUMMARIES: Record<string, string> = {
   templates: "List bundled reusable templates.",
   batch: "Run multiple edits from stdin (JSONL), one file write.",
   "import-srt": "Import an SRT file/stdin as one text segment per cue.",
-  "import-ass": "Import an ASS/SSA subtitle file as text segments.",
+  "import-ass": "Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles.",
   "text-ranges": "Apply byte-accurate multi-style ranges to a text segment.",
   caption: "Transcribe audio via whisper into real caption-track segments.",
   translate: "Clone a draft into another language via the Anthropic API.",
@@ -4018,6 +4487,8 @@ const SUMMARIES: Record<string, string> = {
   render: "Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render.",
   "detect-scenes":
     "Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut.",
+  "detect-silence":
+    "Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut.",
 };
 
 // `describe` emits a machine-readable tool spec for LLM/agent callers, so they
@@ -4405,6 +4876,7 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     scale: flags.scale,
     fps: flags.fps,
     ffmpegCmd: flags.ffmpegCmd,
+    encoder: flags.encoder,
     burnCaptions: flags.burnCaptions,
     allVideoTracks: flags.allVideoTracks,
     dryRun: isDryRun(),
@@ -4474,6 +4946,65 @@ async function cmdDetectScenes(positional: string[], flags: Flags): Promise<void
   out(report, flags);
 }
 
+async function cmdDetectSilence(positional: string[], flags: Flags): Promise<void> {
+  const { detectSilence } = await import("./silence.js");
+  const { timecode } = await import("./scenes.js");
+  const mediaPath = positional[1];
+  if (!mediaPath) {
+    die(
+      "Missing media. Usage: capcut detect-silence <media> [--threshold-db <dBFS>] [--min-silence <seconds>] [--pad <seconds>] [--limit <n>]",
+    );
+  }
+  const thresholdDb = flags.thresholdDb ?? -30;
+  if (!Number.isFinite(thresholdDb) || thresholdDb > 0) die("--threshold-db must be <= 0 (a dBFS noise floor)");
+  const minSilence = flags.minSilence ?? 0.5;
+  if (!Number.isFinite(minSilence) || minSilence <= 0) die("--min-silence must be > 0 seconds");
+  const pad = flags.pad ?? 0.1;
+  if (!Number.isFinite(pad) || pad < 0) die("--pad must be >= 0 seconds");
+  if (flags.limit !== undefined && (!Number.isFinite(flags.limit) || flags.limit < 1)) {
+    die("--limit must be a positive integer");
+  }
+  const report = detectSilence(mediaPath, {
+    thresholdDb,
+    minSilence,
+    pad,
+    limit: flags.limit,
+    ffmpegCmd: flags.ffmpegCmd,
+    ffprobeCmd: flags.ffprobeCmd,
+  });
+  // --json forces machine output even when a config/alias turned on --human.
+  if (flags.human && !flags.json) {
+    console.log(`Media:     ${report.media}`);
+    const durationNote =
+      report.duration_source === "ffmpeg-header" ? " (ffmpeg header — ffprobe unavailable; centisecond precision)" : "";
+    console.log(
+      `Duration:  ${report.duration === null ? "unknown" : formatDuration(report.duration_us ?? 0)}${durationNote}`,
+    );
+    console.log(
+      `Threshold: ${report.threshold_db} dBFS  (min silence ${report.min_silence}s, pad ${report.pad}s${
+        report.limit ? `, limit ${report.limit}` : ""
+      })`,
+    );
+    console.log(`Silences:  ${report.silences.length}`);
+    for (const [i, s] of report.silences.entries()) {
+      const end = s.end === null ? "end" : timecode(s.end);
+      const dur = s.duration_us === null ? "?" : formatDuration(s.duration_us);
+      console.log(`  ${String(i + 1).padStart(3)}  ${timecode(s.start)} - ${end}  ${dur}`);
+    }
+    console.log(`Keeps:     ${report.keeps.length}`);
+    for (const [i, s] of report.keeps.entries()) {
+      const end = s.end === null ? "end" : timecode(s.end);
+      const dur = s.duration_us === null ? "?" : formatDuration(s.duration_us);
+      console.log(`  ${String(i + 1).padStart(3)}  ${timecode(s.start)} - ${end}  ${dur}`);
+    }
+    console.log(
+      "Next: pipe the keep segments into `capcut compile` (one clip per segment) or `capcut cut` to drop the silences.",
+    );
+    return;
+  }
+  out(report, flags);
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -4533,7 +5064,7 @@ async function main(): Promise<void> {
 
   // `diagnose` must inspect unreadable/divergent sibling files before loadDraft.
   if (cmd === "diagnose") {
-    cmdDiagnose(projectPath, flags);
+    await cmdDiagnose(projectPath, flags);
     process.exit(0);
   }
 
@@ -4585,6 +5116,19 @@ async function main(): Promise<void> {
   // `projects` scans the disk for draft folders — no single project needed.
   if (cmd === "projects") {
     await cmdProjects(positional, flags);
+    process.exit(0);
+  }
+
+  // `harvest-enums --sync` sweeps every draft in the library and `--add`
+  // registers an entry whose witness draft is gone — no single project to load.
+  if (cmd === "harvest-enums" && (flags.sync || flags.add)) {
+    if (flags.sync && flags.add) die("--sync and --add are mutually exclusive.");
+    if (flags.sync) {
+      if (projectPath) die("--sync scans the whole library; drop the <project> argument (or drop --sync).");
+      await cmdHarvestEnumsSync(flags);
+    } else {
+      await cmdHarvestEnumsAdd(positional, flags);
+    }
     process.exit(0);
   }
 
@@ -4699,6 +5243,12 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // `detect-silence` analyzes a raw media file for silence spans — no draft needed.
+  if (cmd === "detect-silence") {
+    await cmdDetectSilence(positional, flags);
+    process.exit(0);
+  }
+
   if (!projectPath) die("Missing project path. Run 'capcut --help' for usage.");
 
   const { draft, filePath } = loadDraft(projectPath);
@@ -4771,6 +5321,9 @@ async function main(): Promise<void> {
     case "export-srt":
       await cmdExportSrt(draft, flags);
       break;
+    case "export-ass":
+      await cmdExportAss(draft, flags);
+      break;
     case "export-timeline":
       await cmdExportTimeline(draft, flags);
       break;
@@ -4799,6 +5352,9 @@ async function main(): Promise<void> {
     case "add-text":
       requireArgs(positional, 5, "capcut add-text <project> <start> <duration> <text>");
       await cmdAddText(draft, filePath, positional, flags);
+      break;
+    case "tts":
+      await cmdTts(draft, filePath, positional, flags);
       break;
     case "crop":
       requireArgs(positional, 3, "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]");

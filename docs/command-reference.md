@@ -18,6 +18,7 @@
 | `trim` | `capcut trim <project> <id> <start> <duration>` | yes | Trim a segment to a start/duration window. |
 | `opacity` | `capcut opacity <project> <id> <alpha>` | yes | Set a segment's opacity (0.0-1.0). |
 | `export-srt` | `capcut export-srt <project> [options]` | no | Export subtitles to SRT or WebVTT on stdout, per line or per word. |
+| `export-ass` | `capcut export-ass <project> [--karaoke] [--out <file.ass>]` | no | Export styled ASS subtitles on stdout or --out, with per-range overrides and --karaoke word timing. |
 | `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | no | Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively). |
 | `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | yes | Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent. |
 | `materials` | `capcut materials <project> [--type <type>]` | no | List material types and counts; filter with --type. |
@@ -26,6 +27,7 @@
 | `add-audio` | `capcut add-audio <project> <file-or-url> <start> [duration] [options]` | yes | Add a local or Wikimedia audio file on an audio track. |
 | `add-video` | `capcut add-video <project> <file-or-url> <start> [duration] [options]` | yes | Add a local or Wikimedia video/image on a video track. |
 | `add-text` | `capcut add-text <project> <start> <duration> <text> [options]` | yes | Add a text segment with font/color/position options. |
+| `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [options]` | yes | Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment. |
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | yes | Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset). |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | yes | Extract a time range into a new standalone draft. |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | yes | Duplicate a segment at its same timeline position onto a track above the source. |
@@ -50,7 +52,7 @@
 | `templates` | `capcut templates <project>` | no | List bundled reusable templates. |
 | `batch` | `capcut batch <project> [--continue-on-error] < operations.jsonl` | yes | Run multiple edits from stdin (JSONL), one file write. |
 | `import-srt` | `capcut import-srt <project> <srt-or-> [options]` | yes | Import an SRT file/stdin as one text segment per cue. |
-| `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | yes | Import an ASS/SSA subtitle file as text segments. |
+| `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | yes | Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles. |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | yes | Apply byte-accurate multi-style ranges to a text segment. |
 | `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | yes | Transcribe audio via whisper into real caption-track segments. |
 | `translate` | `capcut translate <project> --to <language> --out <path> [options]` | yes | Clone a draft into another language via the Anthropic API. |
@@ -70,7 +72,7 @@
 | `describe` | `capcut describe` | no | Emit the full command surface as JSON (agent tool spec). |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | no | Generate shell completions (bash|zsh|fish). |
 | `enums` | `capcut enums <category-flag> [--jianying]` | no | List enum slugs (transitions, masks, effects, ...) by category. |
-| `harvest-enums` | `capcut harvest-enums <project> [--apply] [--catalogue <path>]` | no | Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs). |
+| `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | no | Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add). |
 | `doctor` | `capcut doctor` | no | Environment preflight (Node, whisper, API key, project dir). |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | no | Inspect canonical draft files, divergence, and editor-write safety. |
 | `fixture` | `capcut fixture <project> --out <dir>` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44). |
@@ -84,3 +86,4 @@
 | `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |
+| `detect-silence` | `capcut detect-silence <media> [options]` | no | Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut. |

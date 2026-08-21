@@ -29,6 +29,7 @@ export interface RenderOptions {
   scale?: number; // proxy scale factor applied to canvas dims (default 0.5)
   fps?: number; // output fps override (default draft.fps or 30)
   ffmpegCmd?: string; // ffmpeg binary (default "ffmpeg")
+  encoder?: string; // -c:v video encoder (default libx264; e.g. h264_videotoolbox/h264_nvenc/h264_qsv)
   burnCaptions?: boolean; // draw text-track segments onto the video
   allVideoTracks?: boolean; // composite overlay video tracks
   dryRun?: boolean; // build the plan, do not execute ffmpeg
@@ -132,6 +133,29 @@ export interface RenderResult extends RenderPlan {
  */
 const BASE_CHAIN_FILTERS = ["fps", "scale", "pad", "setsar", "format", "concat", "trim", "setpts"] as const;
 
+// The audio side of the same graph has the same failure class (#91).
+// Unconditional per audio segment: atrim/asetpts/adelay, then anull (one
+// segment) or amix (several). The conditional three are emitted only when the
+// draft sets a speed/volume/fade, so they are checked against the built plan
+// rather than up front — and they fail rather than degrade, because silently
+// dropping them changes the audio (unlike the drawtext/overlay flag fallbacks,
+// which only withhold an explicitly optional extra).
+const AUDIO_CHAIN_FILTERS = ["atrim", "asetpts", "adelay", "anull", "amix"] as const;
+const AUDIO_CONDITIONAL_FILTERS = ["atempo", "volume", "afade"] as const;
+
+/**
+ * Every filter name the -filters probe checks. The chain/probe guard test
+ * asserts the generated filter_complex never uses a name outside this list
+ * (plus its explicit allowlist), so graph and probe cannot drift apart again.
+ */
+export const PROBED_FILTERS = [
+  "drawtext",
+  "overlay",
+  ...BASE_CHAIN_FILTERS,
+  ...AUDIO_CHAIN_FILTERS,
+  ...AUDIO_CONDITIONAL_FILTERS,
+] as const;
+
 export interface FfmpegCapabilities {
   available: boolean;
   drawtext: boolean;
@@ -145,9 +169,21 @@ export interface FfmpegCapabilities {
   concat: boolean;
   trim: boolean;
   setpts: boolean;
+  atrim: boolean;
+  asetpts: boolean;
+  adelay: boolean;
+  anull: boolean;
+  amix: boolean;
+  atempo: boolean;
+  volume: boolean;
+  afade: boolean;
 }
 
+type ProbedFilterFlags = Record<(typeof PROBED_FILTERS)[number], boolean>;
+
 export function probeFfmpegCapabilities(command = "ffmpeg"): FfmpegCapabilities {
+  const filterFlags = (test: (name: string) => boolean): ProbedFilterFlags =>
+    Object.fromEntries(PROBED_FILTERS.map((name) => [name, test(name)])) as ProbedFilterFlags;
   try {
     const filters = spawnSync(command, ["-hide_banner", "-filters"], {
       encoding: "utf-8",
@@ -161,31 +197,87 @@ export function probeFfmpegCapabilities(command = "ffmpeg"): FfmpegCapabilities 
     });
     const filterText = `${filters.stdout ?? ""}${filters.stderr ?? ""}`;
     const encoderText = `${encoders.stdout ?? ""}${encoders.stderr ?? ""}`;
-    const baseChain = Object.fromEntries(
-      BASE_CHAIN_FILTERS.map((name) => [name, new RegExp(`\\b${name}\\b`).test(filterText)]),
-    ) as Record<(typeof BASE_CHAIN_FILTERS)[number], boolean>;
     return {
       available: filters.status === 0,
-      drawtext: /\bdrawtext\b/.test(filterText),
-      overlay: /\boverlay\b/.test(filterText),
       x264: /\blibx264\b/.test(encoderText),
-      ...baseChain,
+      ...filterFlags((name) => new RegExp(`\\b${name}\\b`).test(filterText)),
     };
   } catch {
-    return {
-      available: false,
-      drawtext: false,
-      overlay: false,
-      x264: false,
-      fps: false,
-      scale: false,
-      pad: false,
-      setsar: false,
-      format: false,
-      concat: false,
-      trim: false,
-      setpts: false,
-    };
+    return { available: false, x264: false, ...filterFlags(() => false) };
+  }
+}
+
+/**
+ * Filter names used in a filter_complex string, in the grammar buildRenderPlan
+ * emits: `;`-separated chains of `,`-separated filters, each surrounded by
+ * optional [labels], with single-quoted option values that may themselves
+ * carry commas and brackets (drawtext's enable='between(t,..)'). Pure and
+ * exported for the chain/probe guard test; renderDraft uses it to check the
+ * conditional audio filters against what the plan actually emits.
+ */
+export function filterNamesInGraph(filterComplex: string): string[] {
+  const names = new Set<string>();
+  let element = "";
+  let quoted = false;
+  const flush = () => {
+    const name = element.split("=", 1)[0]?.trim();
+    element = "";
+    if (name) names.add(name);
+  };
+  for (let i = 0; i < filterComplex.length; i++) {
+    const ch = filterComplex[i];
+    if (ch === "'") quoted = !quoted;
+    if (!quoted) {
+      if (ch === "," || ch === ";") {
+        flush();
+        continue;
+      }
+      if (ch === "[") {
+        const close = filterComplex.indexOf("]", i);
+        i = close === -1 ? filterComplex.length : close;
+        continue;
+      }
+    }
+    element += ch;
+  }
+  flush();
+  return [...names].sort();
+}
+
+/**
+ * Encoder names from `ffmpeg -hide_banner -encoders` output. Rows look like
+ * ` V....D libx264              libx264 H.264 / ...`: a six-character
+ * capability column whose first letter is the codec type, then the name. The
+ * legend at the top reuses the column shape (` V..... = Video`), so the name
+ * token must not be `=`. Pure and exported so it can be fed captured output
+ * strings in tests, the same reason parse helpers elsewhere are.
+ */
+export function parseFfmpegEncoders(output: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^ ?[VAS][F.][S.][X.][B.][D.] +([^\s=]+)/);
+    if (match?.[1]) names.add(match[1]);
+  }
+  return names;
+}
+
+/**
+ * The one extra spawn --encoder costs, run only when the flag was given
+ * (renderDraft) — the default libx264 path never pays it. `listed: false`
+ * means the binary would not enumerate its encoders at all; validation is then
+ * skipped so the render still reaches ffmpeg, whose own "Unknown encoder"
+ * error explainFfmpegFailure already maps.
+ */
+export function probeFfmpegEncoders(command = "ffmpeg"): { listed: boolean; encoders: Set<string> } {
+  try {
+    const r = spawnSync(command, ["-hide_banner", "-encoders"], {
+      encoding: "utf-8",
+      timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return { listed: r.status === 0, encoders: parseFfmpegEncoders(`${r.stdout ?? ""}${r.stderr ?? ""}`) };
+  } catch {
+    return { listed: false, encoders: new Set() };
   }
 }
 
@@ -497,7 +589,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     `[${vOut}]`,
     ...(aOut ? ["-map", `[${aOut}]`] : []),
     "-c:v",
-    "libx264",
+    opts.encoder ?? "libx264",
     "-preset",
     "veryfast",
     "-crf",
@@ -544,6 +636,26 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
         `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
     );
   }
+  const missingAudioFilters = AUDIO_CHAIN_FILTERS.filter((name) => !capabilities[name]);
+  if (missingAudioFilters.length > 0) {
+    const list = missingAudioFilters.map((name) => `'${name}'`).join(", ");
+    throw new Error(
+      `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' is missing the filter${missingAudioFilters.length > 1 ? "s" : ""} ${list}, ` +
+        "which the audio mix chain applies to every audio segment unconditionally (not gated by any flag). " +
+        "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. " +
+        `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
+    );
+  }
+  if (opts.encoder) {
+    const { listed, encoders } = probeFfmpegEncoders(opts.ffmpegCmd ?? "ffmpeg");
+    if (listed && !encoders.has(opts.encoder)) {
+      throw new Error(
+        `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' has no '${opts.encoder}' encoder. ` +
+          "Hardware encoders (h264_videotoolbox, h264_nvenc, h264_qsv, ...) exist only in builds compiled for them — " +
+          `'${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -encoders' lists what this build carries. Omit --encoder to use libx264.`,
+      );
+    }
+  }
   const fallbackSkipped: Array<{ segmentId: string; reason: string }> = [];
   const effective = { ...opts, out };
   if (effective.burnCaptions && !capabilities.drawtext) {
@@ -556,6 +668,21 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   }
   const basePlan = buildRenderPlan(draft, effective);
   const plan = { ...basePlan, capabilities, skipped: [...basePlan.skipped, ...fallbackSkipped] };
+
+  // Speed/volume/fade filters are checked against the plan actually built:
+  // a draft that never sets them must keep rendering on a build without them,
+  // and one that does must fail here rather than silently lose the retiming.
+  const usedFilters = new Set(filterNamesInGraph(plan.filterComplex));
+  const missingConditional = AUDIO_CONDITIONAL_FILTERS.filter((name) => usedFilters.has(name) && !capabilities[name]);
+  if (missingConditional.length > 0) {
+    const list = missingConditional.map((name) => `'${name}'`).join(", ");
+    throw new Error(
+      `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' is missing the filter${missingConditional.length > 1 ? "s" : ""} ${list}, ` +
+        "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
+        "Rendering without them would silently change the audio, so render refuses instead of degrading. " +
+        `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
+    );
+  }
 
   if (opts.dryRun) {
     return { ...plan, ok: true, executed: false };

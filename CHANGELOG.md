@@ -4,9 +4,129 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-08-21
+
+Two threads run through this release. Subtitles now carry their styling across
+the draft boundary in both directions — `export-ass` writes it out,
+`import-ass` stops throwing it away. And the raw-recording pipeline closes:
+find the speech (`detect-silence`), voice the script (`tts`), and the ffmpeg
+fail-fast work from 0.19.0 is finished on the audio chain, with hardware
+encoders selectable where the build has them. `diagnose` now captures, in
+sanitized form, the evidence the two open store-layout questions are waiting
+on. No command was removed and no existing flag changed meaning.
+
 ### Fixed
 
 - **`render` no longer reaches ffmpeg's raw parser error when a base filter is missing** — the render chain applies `fps`/`scale`/`pad`/`setsar`/`format`/`concat`/`trim`/`setpts` to every segment unconditionally, but `probeFfmpegCapabilities` only checked `drawtext`/`overlay`/`libx264`, the flag-gated ones. A build missing one of the unconditional filters — reported on Remotion's bundled compositor ffmpeg binary, a minimal build that compiles in only an explicit `--enable-filter=` allowlist — reached `spawnSync` anyway and surfaced ffmpeg's own parse error verbatim (`No option name near '30'`, `Failed to set value '...' for option 'filter_complex': Invalid argument`), naming a fragment of the filter graph rather than the missing filter ([#89](https://github.com/renezander030/capcut-cli/issues/89)). The probe now checks all eight against the same `-filters` output already fetched, and `render` fails fast — before building the plan — naming exactly which filter(s) are missing and pointing at `--ffmpeg-cmd`, the same style as the existing "ffmpeg lacks drawtext" fallback message. `--dry-run` is unaffected by design: `cmdRender` routes it through `buildRenderPlan` directly rather than `renderDraft`, so a plan stays inspectable on a machine with no ffmpeg at all — the same reason the pre-existing `--dry-run` test already ran ungated on ffmpeg-less machines. Swapping `fps=` for an output-level `-r` is deliberately out of scope here (would change per-segment CFR normalization ahead of `concat`); this PR is the fail-fast fix only.
+
+- **`render` probed the video chain but not the audio chain**
+  ([#91](https://github.com/renezander030/capcut-cli/issues/91)). The audio
+  side of the render graph applies `atrim`/`asetpts`/`adelay` plus `anull`
+  (one audio segment) or `amix` (several) unconditionally, with
+  `atempo`/`volume`/`afade` joining when a draft carries a speed change,
+  volume or fades — none of them probed, so a minimal ffmpeg build missing one
+  still reached `spawnSync` and died on the same raw parser error class #89
+  eliminated for video. The probe now reads the audio filter names from the
+  same single `-filters` output (no extra spawn); `render` fails fast up front
+  for the unconditional five, and for the conditional three exactly when the
+  built plan uses them — refusing rather than silently dropping a retime or a
+  fade. A guard test builds a plan from a draft exercising speed, volume,
+  fades, captions, overlays and multi-track audio, extracts every filter name
+  from the generated `filter_complex`, and asserts each one is probed or
+  explicitly allowlisted — for both chains, so chain and probe cannot drift
+  apart again.
+- **`import-ass` dropped every inline override tag.** A styled ASS file —
+  bold or italic spans, per-word colour, size changes — flattened to plain
+  text on import: the parser deleted `{...}` blocks wholesale and never read
+  `[V4+ Styles]`. Inline `\b`/`\i`/`\u`/`\c`/`\1c`/`\fs`/`\r` overrides now
+  become per-range styles through the same writer `text-ranges` uses (ranges
+  in UTF-16 code units of the stored text — the #85 rule), and the Dialogue's
+  referenced Style line seeds font size, colour and alignment unless flags
+  override them. Unknown tags (`\pos`, `\an`, karaoke `\k`, `\2c`–`\4c`) are
+  still stripped, now deliberately. The round-trip is pinned by test:
+  `export-ass` output re-imported reproduces the same `styles[]` arrays and
+  timings exactly.
+
+### Added
+
+- **`export-ass` — styled subtitles can finally leave a draft.** `export-srt`
+  stays bare by design; `export-ass <project>` writes the styling too: PlayRes
+  from the draft canvas, one `[V4+ Styles]` line per distinct text styling
+  (size, colour and alpha, bold/italic/underline, alignment, border, shadow
+  and background), one Dialogue per text segment, and `styles[].range` blocks
+  becoming inline override tags with explicit resets — ASS colour order is
+  `&HAABBGGRR`, tested in both directions. `--karaoke` emits `{\k}`
+  centisecond word timing from the same word timestamps the WebVTT karaoke
+  writer uses, with the highlight colour as PrimaryColour over the base
+  SecondaryColour. CapCut's border/shadow numbers pass through unscaled — they
+  are text-size-relative and ASS wants PlayRes pixels, and inventing a scale
+  would be worse than none (documented in the code).
+- **`detect-silence` — the audio twin of `detect-scenes`.** ffmpeg's
+  silencedetect filter run deterministically over any media file, no draft
+  required: the silence spans and the complementary keep segments (the
+  speech), in seconds and draft-native microseconds, directly consumable by
+  `cut`/`compile` the way `detect-scenes` segments already are.
+  `--threshold-db` (default −30 dBFS) and `--min-silence` (default 0.5 s) map
+  onto the filter's noise/duration; `--pad` (default 0.1 s) shrinks every
+  silence span on both ends so a cut keeps a margin around speech and never
+  clips a word mid-syllable — a pad wider than a span makes the span
+  disappear, never a negative time. Silence running into end-of-file is an
+  open span, `--limit` keeps the N longest, and `--ffmpeg-cmd`/`--json`/`-H`
+  behave exactly as in `detect-scenes`, including the actionable no-ffmpeg
+  error.
+- **`tts` — voiceover without leaving the CLI.** `capcut tts <project>
+  --text "..." --tts-cmd "<template>"` runs any local TTS tool (piper, macOS
+  `say`, espeak-ng — the missing-flag error carries working examples) and
+  lands the result as a real audio segment through the exact `add-audio`
+  path: same ffprobe duration probing with the same `--no-probe`/
+  `--ffprobe-cmd` escape hatches, same `--volume`/`--track-name`,
+  collision-safe `voiceover[-N].wav` naming. The template never passes
+  through a shell: `{out}` and `{text}` substitute as single argv tokens, and
+  a template without `{text}` gets the text on stdin instead. A tool that
+  exits non-zero or writes an empty file reports a bounded stderr tail and
+  cleans up after itself. `doctor` reports the configuration the way it
+  reports whisper.
+- **`harvest-enums --sync` and `--add`.** `--sync` sweeps every draft the
+  `projects` listing can see (honouring `--drafts`) into one merged catalogue
+  write: unreadable or damaged drafts are skipped with a one-line note
+  instead of aborting, cross-draft repeats merge to one entry, the report
+  counts drafts scanned and skipped plus entries new and already known, and a
+  second sync adds nothing. `--add <kind> <slug> <resource-id>
+  [--effect-id <id>]` registers an entry whose witness draft is gone —
+  refusing unknown kinds, the deliberately excluded ambiguous kinds, unclean
+  slugs (suggesting the clean form) and duplicate ids (naming the entry that
+  owns them). Both keep the command's plan-by-default/`--apply` convention
+  and both funnel through the existing fsynced atomic catalogue writer.
+- **`render --encoder`** picks the video encoder for proxy renders —
+  `h264_videotoolbox`, `h264_nvenc`, `h264_qsv`, anything the build
+  enumerates. Validation is lazy: only when the flag is given does `render`
+  spawn `ffmpeg -encoders`, failing fast with the encoder name and how to
+  list what is available; without the flag the ffmpeg invocation is
+  byte-identical to 0.19.1 (a test diffs the two argument arrays at exactly
+  one slot).
+- **`diagnose` captures the nested-Timelines evidence #50 is waiting on**
+  ([#50](https://github.com/renezander030/capcut-cli/issues/50)). When a
+  draft carries the nested `Timelines/` layout, the report — and the
+  `--bundle`/`fixture` output, through the existing #59 redaction rules —
+  attaches the `Timelines/project.json` pointer, the draft-file tree with
+  sizes and mtimes, the app version and OS marker, and a root-vs-nested
+  divergence comparison per nested document: content hashes, which side is
+  mtime-newer, per-track segment and text counts and a text hash — never raw
+  text. That is precisely the before/after that decides whether the nested
+  pointer is authoritative; the write-path question stays open until it
+  arrives. A non-nested draft's diagnose output is unchanged, byte for byte.
+- **`diagnose` notes unregistered timeline media in `draft_meta_info.json`.**
+  Newer CapCut builds (reported on CapCut International 9.1.0, macOS) mark
+  every clip "file inaccessible" and demand per-clip relinking when the
+  sidecar's `draft_materials` does not register the timeline's media — even
+  with valid paths in `draft_content.json`, and this CLI has never written
+  `draft_materials`. `diagnose` now says so, read-only, when the condition
+  provably holds (sidecar missing, key missing, or every group empty while
+  the timeline references local media), and asks for the one thing that lets
+  the write side be built from evidence rather than guesswork: a
+  `capcut fixture` bundle from an app-authored draft on such a build — the
+  bundle already carries `draft_meta_info.json`. Nothing writes or invents
+  `draft_materials` content anywhere.
 
 ## [0.19.1] — 2026-08-16
 

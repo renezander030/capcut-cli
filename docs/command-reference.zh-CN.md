@@ -20,6 +20,7 @@
 | `trim` | `capcut trim <project> <id> <start> <duration>` | 是 | 把片段裁剪到指定的起点/时长窗口。 |
 | `opacity` | `capcut opacity <project> <id> <alpha>` | 是 | 设置片段不透明度（0.0-1.0）。 |
 | `export-srt` | `capcut export-srt <project> [options]` | 否 | 把字幕导出为 SRT 或 WebVTT（输出到 stdout），按行或按词。 |
+| `export-ass` | `capcut export-ass <project> [--karaoke] [--out <file.ass>]` | 否 | 把带样式的 ASS 字幕导出到 stdout 或 --out，支持按区间的样式覆盖；--karaoke 输出逐词时间。 |
 | `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | 否 | 把视频/音频轨道导出为 OpenTimelineIO JSON，交接给 NLE（DaVinci Resolve 原生导入 .otio）。 |
 | `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | 是 | 导入 OpenTimelineIO JSON（export-timeline 输出的 schema 集合），生成新草稿（--out）或追加到已有草稿（--into）；不支持的 OTIO 特性一律报告，绝不静默丢弃。 |
 | `materials` | `capcut materials <project> [--type <type>]` | 否 | 列出素材类型与数量；用 --type 过滤。 |
@@ -28,6 +29,7 @@
 | `add-audio` | `capcut add-audio <project> <file-or-url> <start> [duration] [options]` | 是 | 在音频轨道上添加本地或 Wikimedia 音频文件。 |
 | `add-video` | `capcut add-video <project> <file-or-url> <start> [duration] [options]` | 是 | 在视频轨道上添加本地或 Wikimedia 视频/图片。 |
 | `add-text` | `capcut add-text <project> <start> <duration> <text> [options]` | 是 | 添加文本片段，带字体/颜色/位置选项。 |
+| `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [options]` | 是 | 通过本地 TTS 命令（--tts-cmd）从文本合成配音，并作为音频片段添加。 |
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | 是 | 读取或设置视频/图片片段的源素材裁剪（--ratio 预设、--rect x,y,w,h 或 --reset）。 |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | 是 | 把一段时间范围提取为一个独立的新草稿。 |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | 是 | 在相同的时间线位置，把片段复制到源轨道上方的轨道。 |
@@ -52,7 +54,7 @@
 | `templates` | `capcut templates <project>` | 否 | 列出内置的可复用模板。 |
 | `batch` | `capcut batch <project> [--continue-on-error] < operations.jsonl` | 是 | 从 stdin（JSONL）批量执行多个编辑，只写一次文件。 |
 | `import-srt` | `capcut import-srt <project> <srt-or-> [options]` | 是 | 导入 SRT 文件/stdin，每条字幕生成一个文本片段。 |
-| `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | 是 | 把 ASS/SSA 字幕文件导入为文本片段。 |
+| `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | 是 | 把 ASS/SSA 字幕文件导入为文本片段，并把内联覆盖标签保留为按区间的样式。 |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | 是 | 为文本片段应用字节级精确的多样式区间。 |
 | `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | 是 | 用 whisper 转写音频，生成真正的字幕轨道片段。 |
 | `translate` | `capcut translate <project> --to <language> --out <path> [options]` | 是 | 通过 Anthropic API 把草稿克隆为另一种语言。 |
@@ -72,7 +74,7 @@
 | `describe` | `capcut describe` | 否 | 以 JSON 输出完整命令面（Agent 工具规范）。 |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | 否 | 生成 shell 补全（bash\|zsh\|fish）。 |
 | `enums` | `capcut enums <category-flag> [--jianying]` | 否 | 按类别列出枚举 slug（转场、蒙版、特效等）。 |
-| `harvest-enums` | `capcut harvest-enums <project> [--apply] [--catalogue <path>]` | 否 | 从应用自己生成的草稿学习商店资源 ID，写入用户级素材目录（供 lint 与可写 slug 使用）。 |
+| `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | 否 | 把商店资源 ID 学习进用户级素材目录：来源可以是单个草稿、整个草稿库（--sync），或手动添加（--add）。 |
 | `doctor` | `capcut doctor` | 否 | 环境预检（Node、whisper、API key、项目目录）。 |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | 否 | 检查草稿的规范文件、文件间分歧与编辑器写入安全性。 |
 | `fixture` | `capcut fixture <project> --out <dir>` | 否 | 构建可分享、已脱敏的兼容性包（仅时间线 JSON），用于版本支持 issue，内含蒙版关键帧证据报告（#44）。 |
@@ -86,3 +88,4 @@
 | `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | 是 | 从声明式 JSON spec 构建草稿（describe 的逆操作）。 |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | 否 | 渲染低清 ffmpeg 代理预览（裁剪+变速+音频，--burn-captions）；不是 CapCut 的最终渲染。 |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | 否 | 检测视频中的场景切换切点（ffmpeg scene 滤镜）；输出切点与片段列表，供 compile/cut 使用。 |
+| `detect-silence` | `capcut detect-silence <media> [options]` | 否 | 检测媒体文件中的静音区间（ffmpeg silencedetect）；输出静音与保留片段列表，供 compile/cut 使用。 |

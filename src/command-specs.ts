@@ -164,12 +164,14 @@ const usages = {
   trim: "capcut trim <project> <id> <start> <duration>",
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
+  "export-ass": "capcut export-ass <project> [--karaoke] [--out <file.ass>]",
   "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
   "import-timeline": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
   materials: "capcut materials <project> [--type <type>]",
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
   "add-audio": "capcut add-audio <project> <file-or-url> <start> [duration] [options]",
+  tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
   "add-video": "capcut add-video <project> <file-or-url> <start> [duration] [options]",
   "add-text": "capcut add-text <project> <start> <duration> <text> [options]",
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
@@ -214,7 +216,8 @@ const usages = {
   describe: "capcut describe",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
-  "harvest-enums": "capcut harvest-enums <project> [--apply] [--catalogue <path>]",
+  "harvest-enums":
+    "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
   fixture: "capcut fixture <project> --out <dir>",
@@ -229,6 +232,7 @@ const usages = {
   compile: "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
+  "detect-silence": "capcut detect-silence <media> [options]",
 } as const satisfies Record<string, string>;
 
 export type CommandName = keyof typeof usages;
@@ -260,6 +264,21 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
     TRACK_NAME,
     option("force_license", ["--force-license"], "boolean", "Allow restrictive or unknown Wikimedia licenses."),
+    option("no_probe", ["--no-probe"], "boolean", "Disable automatic media probing."),
+    FFPROBE,
+  ],
+  tts: [
+    option("text", ["--text"], "string", "Voiceover text to synthesize."),
+    option("text_file", ["--text-file"], "path", "Read the voiceover text from this file."),
+    option(
+      "tts_cmd",
+      ["--tts-cmd"],
+      "string",
+      "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must " +
+        "write, {text} with the text as one argument; without {text} the text is piped to stdin.",
+    ),
+    option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
+    TRACK_NAME,
     option("no_probe", ["--no-probe"], "boolean", "Disable automatic media probing."),
     FFPROBE,
   ],
@@ -408,6 +427,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     }),
     option("format", ["--format"], "enum", "Subtitle output format.", { values: ["srt", "vtt"], default: "srt" }),
   ],
+  "export-ass": [
+    option(
+      "karaoke",
+      ["--karaoke"],
+      "boolean",
+      "Emit {\\k} word timing per Dialogue (stored word timings where present, interpolated elsewhere).",
+    ),
+    OUT,
+  ],
   "export-timeline": [OUT],
   "import-timeline": [
     option("out", ["--out"], "path", "Build a NEW draft directory at this path from the OTIO timeline."),
@@ -485,6 +513,10 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "path",
       "User catalogue file (default: ~/.config/capcut-cli/user-enums.json, or $CAPCUT_CLI_USER_ENUMS).",
     ),
+    option("sync", ["--sync"], "boolean", "Harvest every draft in the library (what `projects` lists) in one sweep."),
+    option("drafts", ["--drafts"], "path", "Draft library root for --sync (default: the per-OS CapCut/JianYing dirs)."),
+    option("add", ["--add"], "boolean", "Register one entry by hand: --add <kind> <slug> <resource-id>."),
+    option("effect_id", ["--effect-id"], "string", "Effect id for an --add entry that carries both ids."),
   ],
   relink: [
     option("dir", ["--dir"], "path", "Directory containing replacement files."),
@@ -564,6 +596,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("scale", ["--scale"], "number", "Proxy scale.", { default: 0.5 }),
     option("fps", ["--fps"], "number", "Output FPS."),
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary."),
+    option(
+      "encoder",
+      ["--encoder"],
+      "string",
+      "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering.",
+    ),
     option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
     option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
@@ -580,6 +618,32 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       ["--ffprobe-cmd"],
       "path",
       "ffprobe binary for the video-stream duration (falls back to the container duration without it).",
+    ),
+    option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
+  ],
+  "detect-silence": [
+    option(
+      "threshold_db",
+      ["--threshold-db"],
+      "number",
+      "Noise floor in dBFS; audio at or below this level counts as silence.",
+      { default: -30 },
+    ),
+    option("min_silence", ["--min-silence"], "number", "Shortest silence to report, in seconds.", { default: 0.5 }),
+    option(
+      "pad",
+      ["--pad"],
+      "number",
+      "Margin in seconds kept around speech: each silence span is shrunk by this on both ends so cuts never clip a word mid-syllable.",
+      { default: 0.1 },
+    ),
+    option("limit", ["--limit"], "number", "Keep only the N longest silences."),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary."),
+    option(
+      "ffprobe_cmd",
+      ["--ffprobe-cmd"],
+      "path",
+      "ffprobe binary for the container duration (falls back to ffmpeg's stderr header without it).",
     ),
     option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
   ],
@@ -604,17 +668,23 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --bind               -> add-effect (v0.15 per-segment attachment)
 //   --mask-field         -> mask (v0.16 explicit mask array variant)
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
+//   --sync, --add        -> harvest-enums (v0.20 library sweep + manual entry)
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
 //   --into               -> import-timeline (v0.17 append target)
+//   --encoder            -> render (v0.20 proxy video encoder)
+//   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
+//   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--add",
   "--apply",
   "--bind",
   "--catalogue",
   "--color-cycle",
   "--data",
   "--easing",
+  "--encoder",
   "--format",
   "--full",
   "--granularity",
@@ -628,12 +698,19 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--limit",
   "--mask-field",
   "--min-gap",
+  "--min-silence",
   "--new-track",
+  "--pad",
   "--preset",
   "--ratio",
   "--rect",
   "--reset",
+  "--sync",
+  "--text",
+  "--text-file",
   "--threshold",
+  "--threshold-db",
+  "--tts-cmd",
 ]);
 
 /** True when `command` declares `flag` among its command-specific options. */
@@ -654,6 +731,7 @@ const mutating = new Set([
   "add-audio",
   "add-video",
   "add-text",
+  "tts",
   "crop",
   "cut",
   "duplicate",
@@ -698,7 +776,7 @@ const mutating = new Set([
 ]);
 
 const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
-const textOutputs = new Set(["export-srt", "export-timeline", "completions"]);
+const textOutputs = new Set(["export-srt", "export-ass", "export-timeline", "completions"]);
 const fileOutputs = new Set([
   "render",
   "translate",
@@ -710,7 +788,7 @@ const fileOutputs = new Set([
 ]);
 
 function inferType(name: string): ArgumentType {
-  if (/project|file|path|dir|template|audio|video|image|srt|ass|spec|draft/i.test(name)) return "path";
+  if (/project|file|path|dir|template|audio|video|image|media|srt|ass|spec|draft/i.test(name)) return "path";
   if (/^(id|segment-id|resource-id)$/.test(name)) return "id";
   if (/start|end|duration|offset|time/.test(name)) return "time";
   if (/level|multiplier|alpha|value/.test(name)) return "number";
@@ -743,9 +821,12 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
   return commands.map((name) => {
     const usage = usages[name as CommandName] ?? `capcut ${name} <project>`;
     const prerequisites: string[] = [];
-    if (name === "render" || name === "detect-scenes") prerequisites.push("ffmpeg");
-    if (["add-video", "add-audio", "compile", "detect-scenes"].includes(name)) prerequisites.push("ffprobe (optional)");
+    if (["render", "detect-scenes", "detect-silence"].includes(name)) prerequisites.push("ffmpeg");
+    if (["add-video", "add-audio", "tts", "compile", "detect-scenes", "detect-silence"].includes(name)) {
+      prerequisites.push("ffprobe (optional)");
+    }
     if (name === "caption") prerequisites.push("whisper CLI");
+    if (name === "tts") prerequisites.push("a local TTS CLI via --tts-cmd");
     if (name === "translate") prerequisites.push("ANTHROPIC_API_KEY or --api-key");
     if (["add-video", "add-audio"].includes(name)) prerequisites.push("network for Wikimedia URLs only");
     const exitCodes: Record<string, string> = { "0": "success", "1": "invalid input, warning, or operation failure" };

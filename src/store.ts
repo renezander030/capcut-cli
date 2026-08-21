@@ -80,6 +80,16 @@ export interface DraftStoreReport {
     error?: string;
   }>;
   next_actions: string[];
+  /** Present only when the timeline references local media that
+   * draft_meta_info.json's `draft_materials` provably does not register —
+   * see assessMediaRegistration. Informational: no exit-code change. */
+  media_registration?: MediaRegistrationNote;
+}
+
+export interface MediaRegistrationNote {
+  referenced_media: number;
+  draft_materials: "missing-file" | "missing-key" | "all-groups-empty";
+  note: string;
 }
 
 function hash(value: string): string {
@@ -738,6 +748,91 @@ export function planTimelineSync(input: string): TimelineSyncResult {
   };
 }
 
+/** Distinct local file paths the timeline's video/audio materials reference —
+ * URLs never need registration, and repeated references to one file are one
+ * file to relink. */
+function referencedLocalMedia(draft: Draft): number {
+  const paths = new Set<string>();
+  for (const group of [draft.materials.videos ?? [], draft.materials.audios ?? []]) {
+    for (const mat of group) {
+      const path = (mat as Record<string, unknown>).path;
+      if (typeof path === "string" && path.length > 0 && !/^https?:\/\//i.test(path)) paths.add(path);
+    }
+  }
+  return paths.size;
+}
+
+/** True when `draft_materials` provably registers nothing: an empty array, an
+ * array whose every group has an empty `value` array, or an object of empty
+ * arrays. Any shape not provably empty counts as populated — the note must
+ * never fire on a shape this repo has no evidence for. */
+function draftMaterialsAllEmpty(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.every((group) => {
+      if (group === null || typeof group !== "object" || Array.isArray(group)) return false;
+      const inner = (group as Record<string, unknown>).value;
+      return Array.isArray(inner) && inner.length === 0;
+    });
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).every((entry) => Array.isArray(entry) && entry.length === 0);
+  }
+  return false;
+}
+
+/**
+ * Unregistered-media sidecar note (read-only). Newer CapCut builds (reported
+ * on CapCut International 9.1.0, macOS) are reported to show timeline media as
+ * "file inaccessible" and prompt per-clip relinking when draft_meta_info.json's
+ * `draft_materials` does not register the media, even with valid paths in
+ * draft_content.json. This CLI never writes `draft_materials` and the entry
+ * shape has never been captured from a real draft, so the registration write
+ * is deliberately out of scope — diagnose only observes and asks for the one
+ * artifact it can be built from. Null (no note) whenever the timeline
+ * references no local media, the sidecar is unreadable, or `draft_materials`
+ * is not provably empty.
+ */
+function assessMediaRegistration(store: DraftStore): MediaRegistrationNote | null {
+  const referenced = store.canonical.draft ? referencedLocalMedia(store.canonical.draft) : 0;
+  if (referenced === 0) return null;
+  const meta = store.candidates.find((candidate) => candidate.name === "draft_meta_info.json");
+  let state: MediaRegistrationNote["draft_materials"];
+  if (!meta?.exists) {
+    state = "missing-file";
+  } else {
+    if (meta.raw === null) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(meta.raw);
+    } catch {
+      return null; // unreadable sidecar — the candidate row already reports that
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    if (!("draft_materials" in record)) state = "missing-key";
+    else if (draftMaterialsAllEmpty(record.draft_materials)) state = "all-groups-empty";
+    else return null;
+  }
+  const observed =
+    state === "missing-file"
+      ? "this draft has no draft_meta_info.json, so nothing registers them in `draft_materials`"
+      : state === "missing-key"
+        ? "draft_meta_info.json carries no `draft_materials` key"
+        : "draft_meta_info.json carries `draft_materials`, but every group in it is empty";
+  return {
+    referenced_media: referenced,
+    draft_materials: state,
+    note:
+      `${referenced} local media file(s) are referenced by the timeline, and ${observed}. ` +
+      "Newer builds (reported on CapCut International 9.1.0, macOS) are reported to show such media as " +
+      '"file inaccessible" and to prompt per-clip relinking even when the timeline file carries valid paths. ' +
+      "This CLI does not write `draft_materials` — no real entry shape has been captured yet. If you see that " +
+      "symptom: save a draft with the same media in the CapCut app itself on such a build, then run " +
+      "`capcut fixture <project> --out <dir>` on it. The sanitized bundle includes draft_meta_info.json and is " +
+      "the evidence a registration write can be built from.",
+  };
+}
+
 export function diagnoseDraftStore(input: string): DraftStoreReport {
   const store = discoverDraftStore(input);
   const running = editorProcesses();
@@ -780,6 +875,10 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
   if (actions.length === 0)
     actions.push("Storage targets are readable and agree. A normal CLI write will synchronize them.");
 
+  // Attached only when it fires, so a draft without the condition keeps a
+  // byte-identical report.
+  const mediaRegistration = assessMediaRegistration(store);
+
   return {
     ok: !store.diverged,
     project_dir: "<project>",
@@ -806,5 +905,6 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
       error: candidate.error,
     })),
     next_actions: actions,
+    ...(mediaRegistration ? { media_registration: mediaRegistration } : {}),
   };
 }

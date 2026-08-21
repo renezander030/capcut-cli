@@ -77,6 +77,27 @@ const KIND_TO_CATEGORY: Partial<Record<HarvestKind, Category>> = {
   audio_effects: "audio_effects",
 };
 
+export const HARVEST_KINDS: readonly HarvestKind[] = [
+  "video_effects",
+  "filters",
+  "transitions",
+  "masks",
+  "audio_effects",
+  "animations",
+  "bubbles",
+  "fonts",
+];
+
+// Why the unmapped kinds can never take a hand-written slug (`--add` refuses
+// them): the ambiguity that keeps harvestDraft slug-less does not go away
+// when the id arrives by hand instead of out of a draft.
+const ID_ONLY_KIND_REASONS: Partial<Record<HarvestKind, string>> = {
+  animations:
+    "intro/outro/combo and image/text animations cannot be told apart, so a slug could write the wrong material shape",
+  bubbles: "bubbles live in materials.filters but are not filters — a bubble slug would write the wrong material shape",
+  fonts: "font ids are nameless and have no writable category",
+};
+
 export function userEnumsPath(override?: string): string {
   if (override) return resolve(override);
   const env = process.env[USER_ENUMS_ENV];
@@ -295,4 +316,62 @@ export function mergeUserEnums(
     clearUserEnumsCache();
   }
   return { added, duplicates, total: merged.length };
+}
+
+export interface ManualEntryInput {
+  kind: string;
+  slug: string;
+  resourceId: string;
+  effectId?: string;
+}
+
+/** Validate a hand-registered entry (`--add`: the witness draft is gone).
+ * Refusals come back as `error`; a clashing id never silently re-keys or
+ * merges over the entry that already owns it. */
+export function planManualEntry(
+  input: ManualEntryInput,
+  path: string = userEnumsPath(),
+): { entry: UserEnumEntry; error: null } | { entry: null; error: string } {
+  const refuse = (error: string): { entry: null; error: string } => ({ entry: null, error });
+  if (!(HARVEST_KINDS as readonly string[]).includes(input.kind)) {
+    return refuse(`Unknown kind "${input.kind}". Writable kinds: ${Object.keys(KIND_TO_CATEGORY).join(", ")}.`);
+  }
+  const kind = input.kind as HarvestKind;
+  const idOnlyReason = ID_ONLY_KIND_REASONS[kind];
+  if (idOnlyReason !== undefined) {
+    return refuse(
+      `Kind "${kind}" is id-only: ${idOnlyReason}. ` +
+        "Harvest a draft that uses it instead — the id then informs lint without a slug.",
+    );
+  }
+  if (input.slug === "" || slugify(input.slug) !== input.slug) {
+    const cleaned = slugify(input.slug);
+    return refuse(
+      cleaned === ""
+        ? `Slug "${input.slug}" has no ascii-kebab form. Pick an ascii slug (e.g. "snow-fly").`
+        : `Slug "${input.slug}" does not slugify clean. Use "${cleaned}".`,
+    );
+  }
+  if (input.resourceId === "") return refuse("Missing <resource-id>.");
+  const ids = [input.resourceId, ...(input.effectId ? [input.effectId] : [])];
+  for (const existing of loadUserEnums(path).entries) {
+    const hit = ids.find((id) => id === existing.effect_id || id === existing.resource_id);
+    if (hit === undefined) continue;
+    const named = existing.name && existing.name !== existing.slug ? ` ("${existing.name}")` : "";
+    return refuse(
+      `Id ${hit} is already registered to ${existing.kind}/${existing.slug || "(id-only)"}${named} ` +
+        `(effect_id: ${existing.effect_id ?? "none"}, resource_id: ${existing.resource_id ?? "none"}) in ${path}.`,
+    );
+  }
+  return {
+    entry: {
+      kind,
+      slug: input.slug,
+      name: input.slug,
+      ...(input.effectId ? { effect_id: input.effectId } : {}),
+      resource_id: input.resourceId,
+      harvested_from: "manual",
+    },
+    error: null,
+  };
 }
