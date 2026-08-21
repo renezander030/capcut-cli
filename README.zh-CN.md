@@ -28,9 +28,9 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
-> **v0.19.1 新增：** 此前每一处多区间文字高亮都被写到了文本末尾之外。`styles[].range` 存的是 UTF-16 码元（code unit）而非 UTF-16LE 字节，因此 `text-ranges`、`caption --karaoke`、`--highlight-words` 以及任何带 `text_ranges` 的预设，写入的偏移量都是应有值的两倍——普通的 `add-text` 看起来正常，只是因为整段区间会被裁回文本末尾（[#85](https://github.com/renezander030/capcut-cli/issues/85)，由 [@hillimited](https://github.com/hillimited) 在 38 个由 App 创建的草稿上实测得出）。所有读写该偏移量的位置均已修正，`lint --fix` 可修复旧版本写出的草稿（`text-range-doubled`）。详见[更新日志](./CHANGELOG.md)。
+> **v0.20.0 新增：** 字幕样式现在可以双向跨越草稿边界——`export-ass` 写出 `[V4+ Styles]`、逐区间覆盖标签与 `--karaoke` 逐词计时，`import-ass` 则保留内联的粗体/斜体/颜色/字号区间，不再压平为纯文本，并有往返测试兜底。原始录音的处理链路就此闭环：`detect-silence` 找出静音段（`--pad` 留出余量，不会把词切在半个音节上），`tts` 可通过任意本地 TTS 工具（piper、`say`、espeak-ng）把文稿直接配音到音频轨上。`render` 补完了 0.19.0 的快速失败工作——音频滤镜链与视频链一样接受预检（[#91](https://github.com/renezander030/capcut-cli/issues/91)）——并新增 `--encoder` 以启用硬件编码器。另有 `harvest-enums --sync`/`--add` 支持整库扫描与手工登记，`diagnose` 现在能为悬而未决的存储布局问题采集脱敏证据（[#50](https://github.com/renezander030/capcut-cli/issues/50)）。没有删除任何命令，现有参数含义均未改变。详见[更新日志](./CHANGELOG.md)。
 
-> **v0.19.0 新增：** 长时间的 `render` 不再在本身正常的草稿上以 `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` 失败；渲染确实失败时，现在会直接指出缺失的解码器、编码器或滤镜，而不是抛出一整段 ffmpeg 输出；`render --progress` 会实时输出进度，十分钟的任务不再看起来像卡死。`lint` 新增三项检查——字幕阅读速度（`--max-cps`）、竖屏安全区（`--safe-area`）与变速一致性；`lint --fix` 终于可以在不破坏逐字样式的前提下为中日韩字幕换行。此外，`export-timeline` 不再把不足半帧的片段导出为零长度的 OTIO 片段（[#82](https://github.com/renezander030/capcut-cli/issues/82)），关键帧文档也改为标注代码实际写入的 `property_type`（[#80](https://github.com/renezander030/capcut-cli/issues/80)）。没有删除任何命令，现有参数含义均未改变。详见[更新日志](./CHANGELOG.md)。
+> **v0.19.1 新增：** 此前每一处多区间文字高亮都被写到了文本末尾之外。`styles[].range` 存的是 UTF-16 码元（code unit）而非 UTF-16LE 字节，因此 `text-ranges`、`caption --karaoke`、`--highlight-words` 以及任何带 `text_ranges` 的预设，写入的偏移量都是应有值的两倍——普通的 `add-text` 看起来正常，只是因为整段区间会被裁回文本末尾（[#85](https://github.com/renezander030/capcut-cli/issues/85)，由 [@hillimited](https://github.com/hillimited) 在 38 个由 App 创建的草稿上实测得出）。所有读写该偏移量的位置均已修正，`lint --fix` 可修复旧版本写出的草稿（`text-range-doubled`）。详见[更新日志](./CHANGELOG.md)。
 
 ## 安装
 
