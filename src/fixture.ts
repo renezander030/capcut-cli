@@ -8,11 +8,14 @@
 // half of the "compatibility proof pack" — the other half (running it in a real
 // CapCut 8.7 desktop) can only happen on Windows.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { keyframePropertyTypes } from "./decorators.js";
-import { diagnoseDraftStore, discoverDraftStore } from "./store.js";
+import type { Draft } from "./draft.js";
+import { diagnoseDraftStore, discoverDraftStore, parseCandidate } from "./store.js";
+import { detectVersion } from "./version.js";
 
 // Only the timeline envelopes are bundled — never assets/ media.
 const TIMELINE_FILES = ["draft_content.json", "draft_info.json", "draft_meta_info.json", "template-2.tmp"];
@@ -419,8 +422,12 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
   const maskEvidenceFound = maskReport.verdict === "mask-keyframe-evidence-found";
 
   // Diagnose report (paths inside are already <project>-relative placeholders).
+  // The #50 nested-Timelines evidence `diagnose` attaches rides along, so one
+  // bundle carries every item that issue asks for.
   const report = diagnoseDraftStore(input);
-  writeFileSync(join(out, "diagnose.json"), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+  const nestedEvidence = buildNestedTimelinesEvidence(input);
+  const reportOut = nestedEvidence ? { ...report, nested_evidence: nestedEvidence } : report;
+  writeFileSync(join(out, "diagnose.json"), `${JSON.stringify(reportOut, null, 2)}\n`, "utf-8");
   writeFileSync(
     join(out, "README.md"),
     reporterReadme(store.version, store.modernStorage, store.nestedTimelines, maskEvidenceFound),
@@ -465,4 +472,218 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
   };
   writeFileSync(join(out, "SANITIZE_REPORT.json"), `${JSON.stringify(sanitize, null, 2)}\n`, "utf-8");
   return sanitize;
+}
+
+// --- Nested-Timelines evidence (issue #50) ----------------------------------
+// #50 (CapCut 7.x is reported to keep the live document at
+// Timelines/<id>/draft_info.json) is stalled on four evidence items:
+// Timelines/project.json, the draft/template/project file tree, the exact app
+// version + OS marker the draft carries, and a root-vs-nested before/after
+// showing whether a successful root write leaves the nested document stale.
+// `diagnose` attaches all four here, read-only. Timeline content enters only
+// as counts and hashes, and the one raw text included (the project.json
+// pointer) goes through the same REDACTORS the bundle files do — the section
+// is privacy-safe by construction, not by review.
+
+export interface NestedFileTreeEntry {
+  path: string;
+  size: number;
+  mtime: string | null;
+}
+
+export interface NestedTrackSummary {
+  type: string;
+  segments: number;
+  texts: number;
+  /** Hash over the track's ordered text contents — proves a text changed
+   * without carrying what it says. */
+  text_hash: string | null;
+}
+
+export interface NestedTrackDelta {
+  track: number;
+  root: NestedTrackSummary | null;
+  nested: NestedTrackSummary | null;
+}
+
+export interface NestedRootComparison {
+  root_file: string;
+  nested_file: string;
+  identical: boolean;
+  root_sha256: string | null;
+  nested_sha256: string | null;
+  root_timeline_hash: string | null;
+  nested_timeline_hash: string | null;
+  /** Which side is mtime-newer when the documents differ; null when identical. */
+  mtime_newer: "root" | "nested" | "equal" | "unknown" | null;
+  root_mtime: string | null;
+  nested_mtime: string | null;
+  track_deltas: NestedTrackDelta[];
+  verdict: string;
+}
+
+export interface NestedTimelinesEvidence {
+  issue: string;
+  note: string;
+  app_version: string | null;
+  os: string | null;
+  /** Raw Timelines/project.json text, passed through the bundle redactors. */
+  timelines_project_json: string | null;
+  redaction_kinds: Record<string, number>;
+  file_tree: NestedFileTreeEntry[];
+  root_vs_nested: NestedRootComparison[];
+}
+
+const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+const EVIDENCE_TREE_NAMES = /^(?:draft_.*\.json|template-2\.tmp|project\.json)$/;
+
+/** Every draft_*.json / template-2.tmp / project.json under the project, with
+ * sizes and mtimes. Symlinks are skipped — nothing outside the project may
+ * enter the report. */
+function collectEvidenceTree(rootDir: string): NestedFileTreeEntry[] {
+  const entries: NestedFileTreeEntry[] = [];
+  const walk = (dir: string, rel: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = join(dir, name);
+      const relPath = rel === "" ? name : `${rel}/${name}`;
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        walk(full, relPath);
+      } else if (EVIDENCE_TREE_NAMES.test(name)) {
+        entries.push({ path: relPath, size: stat.size, mtime: stat.mtime.toISOString() });
+      }
+    }
+  };
+  walk(rootDir, "");
+  return entries.sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
+function summarizeTracks(draft: Draft): NestedTrackSummary[] {
+  const texts = new Map<string, string>();
+  for (const mat of draft.materials.texts ?? []) {
+    if (typeof mat.content === "string") texts.set(mat.id, mat.content);
+  }
+  return draft.tracks.map((track) => {
+    const contents = track.segments
+      .map((segment) => texts.get(segment.material_id))
+      .filter((content): content is string => content !== undefined);
+    return {
+      type: track.type,
+      segments: track.segments.length,
+      texts: contents.length,
+      text_hash: contents.length > 0 ? sha256(JSON.stringify(contents)) : null,
+    };
+  });
+}
+
+function trackDeltas(root: Draft, nested: Draft): NestedTrackDelta[] {
+  const rootTracks = summarizeTracks(root);
+  const nestedTracks = summarizeTracks(nested);
+  const deltas: NestedTrackDelta[] = [];
+  for (let i = 0; i < Math.max(rootTracks.length, nestedTracks.length); i++) {
+    const a = rootTracks[i] ?? null;
+    const b = nestedTracks[i] ?? null;
+    if (JSON.stringify(a) !== JSON.stringify(b)) deltas.push({ track: i, root: a, nested: b });
+  }
+  return deltas;
+}
+
+/**
+ * Build the #50 evidence section for `diagnose` / `diagnose --bundle`, or null
+ * when neither the timelines-nested layout nor any nested Timelines/ document
+ * exists — a normal draft's diagnose report must stay byte-identical.
+ */
+export function buildNestedTimelinesEvidence(input: string): NestedTimelinesEvidence | null {
+  const store = discoverDraftStore(input);
+  if (store.layout !== "timelines-nested" && store.nestedTimelines.length === 0) return null;
+
+  const tally: Record<string, number> = {};
+  const pointerPath = join(store.projectDir, "Timelines", "project.json");
+  let pointer: string | null = null;
+  if (existsSync(pointerPath)) {
+    try {
+      pointer = redact(stripBom(readFileSync(pointerPath, "utf-8")), tally).text;
+    } catch {
+      pointer = null;
+    }
+  }
+
+  const root = store.canonical;
+  const comparisons: NestedRootComparison[] = [];
+  for (const rel of store.nestedTimelines) {
+    if (!/^Timelines\/[^/]+\/draft_(?:info|content)\.json$/.test(rel)) continue;
+    const nested = parseCandidate(join(store.projectDir, ...rel.split("/")));
+    if (!nested.exists) continue;
+    const bothParsed = Boolean(root.draft && nested.draft);
+    const identical = bothParsed ? root.timelineHash === nested.timelineHash : root.sha256 === nested.sha256;
+    const rootMs = root.mtime ? Date.parse(root.mtime) : Number.NaN;
+    const nestedMs = nested.mtime ? Date.parse(nested.mtime) : Number.NaN;
+    const newer = identical
+      ? null
+      : !Number.isFinite(rootMs) || !Number.isFinite(nestedMs)
+        ? "unknown"
+        : rootMs === nestedMs
+          ? "equal"
+          : rootMs > nestedMs
+            ? "root"
+            : "nested";
+    const newerPhrase =
+      newer === "root"
+        ? "the root file is mtime-newer"
+        : newer === "nested"
+          ? "the nested file is mtime-newer"
+          : newer === "equal"
+            ? "their mtimes are equal"
+            : "the mtime order is unknown";
+    comparisons.push({
+      root_file: root.name,
+      nested_file: rel,
+      identical,
+      root_sha256: root.sha256,
+      nested_sha256: nested.sha256,
+      root_timeline_hash: root.draft ? root.timelineHash : null,
+      nested_timeline_hash: nested.draft ? nested.timelineHash : null,
+      mtime_newer: newer,
+      root_mtime: root.mtime,
+      nested_mtime: nested.mtime,
+      track_deltas: !identical && root.draft && nested.draft ? trackDeltas(root.draft, nested.draft) : [],
+      verdict: identical
+        ? `The nested document and the root ${root.name} carry the same timeline. Capture this again immediately ` +
+          "after a CLI write reports success — if they still match, no root-mirror discard can be shown from this project."
+        : `The nested document and the root ${root.name} diverge (${newerPhrase}). Captured immediately after a ` +
+          "root write that reported success, this is the before/after issue #50 needs: a nested document still " +
+          "hashing to the pre-write content that CapCut then opens means the nested pointer is authoritative; a " +
+          "nested document that is only an older snapshot the app never reads means following it would be the regression.",
+    });
+  }
+
+  const info = store.canonical.draft ? detectVersion(store.canonical.draft) : null;
+  return {
+    issue: "https://github.com/renezander030/capcut-cli/issues/50",
+    note:
+      "Nested Timelines/ layout evidence for issue #50, captured read-only: the redacted Timelines/project.json " +
+      "pointer, the draft/template/project file tree with sizes and mtimes, the app version and OS marker the " +
+      "draft carries, and a root-vs-nested content comparison (counts and hashes only). To produce the deciding " +
+      "before/after: run an edit command that reports success, then run `capcut diagnose <project> --bundle " +
+      "<report.json>` again and compare the nested document's hashes.",
+    app_version: info?.app_version ?? null,
+    os: info?.os ?? null,
+    timelines_project_json: pointer,
+    redaction_kinds: tally,
+    file_tree: collectEvidenceTree(store.projectDir),
+    root_vs_nested: comparisons,
+  };
 }

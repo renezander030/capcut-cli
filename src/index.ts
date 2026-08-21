@@ -53,6 +53,7 @@ import {
 } from "./draft.js";
 import type { Category, Namespace } from "./enums.js";
 import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CropRect, CutOptions } from "./factory.js";
+import type { NestedTimelinesEvidence } from "./fixture.js";
 import type { ImportPlan } from "./interchange.js";
 import type { LintOptions } from "./lint.js";
 import type { TextStylePreset } from "./preset.js";
@@ -3749,9 +3750,19 @@ async function cmdDoctor(flags: Flags): Promise<boolean> {
   return report.ok;
 }
 
-function cmdDiagnose(projectPath: string | undefined, flags: Flags): void {
+async function cmdDiagnose(projectPath: string | undefined, flags: Flags): Promise<void> {
   if (!projectPath) die("Usage: capcut diagnose <project> [--bundle <report.json>]");
-  const report = diagnoseDraftStore(projectPath);
+  const base = diagnoseDraftStore(projectPath);
+  // Nested-Timelines evidence (issue #50) is attached only when the structure
+  // exists, so a normal draft's report stays byte-identical. The builder lives
+  // in fixture.ts (lazy-loaded, like the fixture command itself) because the
+  // captured Timelines/project.json goes through the bundle redactors.
+  let report: ReturnType<typeof diagnoseDraftStore> & { nested_evidence?: NestedTimelinesEvidence } = base;
+  if (base.layout === "timelines-nested" || base.nested_timelines.length > 0) {
+    const { buildNestedTimelinesEvidence } = await import("./fixture.js");
+    const evidence = buildNestedTimelinesEvidence(projectPath);
+    if (evidence) report = { ...base, nested_evidence: evidence };
+  }
   if (flags.bundle) {
     writeFileSync(flags.bundle, `${JSON.stringify(report, null, 2)}\n`, "utf-8");
   }
@@ -3765,6 +3776,21 @@ function cmdDiagnose(projectPath: string | undefined, flags: Flags): void {
     for (const candidate of report.candidates) {
       const state = !candidate.exists ? "missing" : candidate.parseable_timeline ? "timeline" : "unreadable";
       console.log(`${candidate.file.padEnd(24)} ${state.padEnd(10)} ${String(candidate.size).padStart(9)} bytes`);
+    }
+    if (report.nested_evidence) {
+      console.log("");
+      console.log("Nested Timelines/ evidence (issue #50) — full redacted detail in the JSON report:");
+      for (const cmp of report.nested_evidence.root_vs_nested) {
+        const order =
+          cmp.mtime_newer === "root" || cmp.mtime_newer === "nested"
+            ? `${cmp.mtime_newer} file is mtime-newer`
+            : `mtime order: ${cmp.mtime_newer}`;
+        console.log(
+          cmp.identical
+            ? `${cmp.nested_file} matches the root ${cmp.root_file}`
+            : `${cmp.nested_file} DIVERGES from the root ${cmp.root_file} (${order})`,
+        );
+      }
     }
     if (flags.bundle) console.log(`\nBundle: ${flags.bundle}`);
   } else {
@@ -5038,7 +5064,7 @@ async function main(): Promise<void> {
 
   // `diagnose` must inspect unreadable/divergent sibling files before loadDraft.
   if (cmd === "diagnose") {
-    cmdDiagnose(projectPath, flags);
+    await cmdDiagnose(projectPath, flags);
     process.exit(0);
   }
 
