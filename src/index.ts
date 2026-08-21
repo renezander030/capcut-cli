@@ -152,6 +152,7 @@ export const COMMANDS = [
   "compile",
   "render",
   "detect-scenes",
+  "detect-silence",
 ] as const;
 
 const HELP = `capcut-cli -- fast edits to CapCut projects
@@ -268,6 +269,32 @@ Analyze:
                --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
                --ffprobe-cmd <p>  ffprobe binary for the video-stream
                                   duration (default ffprobe)
+               --json             Force JSON output (the default; overrides -H)
+  detect-silence <media> [--threshold-db <dB>] [--min-silence <s>] [--pad <s>] [--limit <n>]
+             Detect silence spans in an audio or video file (ffmpeg
+             silencedetect — deterministic, no draft needed). Prints each
+             silence span AND the complementary keep segments (the speech),
+             both in seconds AND microseconds (the draft-native unit), ready
+             to seed an auto-cut: feed the keep segments into "capcut
+             compile" (one clip per segment) or "capcut cut" to drop the
+             dead air. Keep segments span the CONTAINER duration (read via
+             ffprobe; without ffprobe the report falls back to ffmpeg's
+             stderr header and duration_source says so). A silence that runs
+             to the end of the file stays open-ended (end null) when the
+             duration is unknown. Detection only — it never touches a
+             draft. Options:
+               --threshold-db <dB> Noise floor in dBFS; audio at or below
+                                  this level counts as silence (default -30)
+               --min-silence <s>  Shortest silence to report, in seconds
+                                  (default 0.5)
+               --pad <s>          Margin in seconds kept around speech: each
+                                  silence span is shrunk by this on both ends
+                                  so cuts never clip a word mid-syllable
+                                  (default 0.1)
+               --limit <n>        Keep only the <n> longest silences
+               --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
+               --ffprobe-cmd <p>  ffprobe binary for the container duration
+                                  (default ffprobe)
                --json             Force JSON output (the default; overrides -H)
 
 Add:
@@ -907,6 +934,10 @@ interface Flags {
   minGap?: number;
   limit?: number;
   json?: boolean;
+  // detect-silence
+  thresholdDb?: number;
+  minSilence?: number;
+  pad?: number;
   // crop
   ratio?: string;
   rect?: string;
@@ -1289,6 +1320,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.limit = parseInt(args[++i], 10);
     } else if (a === "--json") {
       flags.json = true;
+    } else if (a === "--threshold-db" && i + 1 < args.length) {
+      flags.thresholdDb = parseFloat(args[++i]);
+    } else if (a === "--min-silence" && i + 1 < args.length) {
+      flags.minSilence = parseFloat(args[++i]);
+    } else if (a === "--pad" && i + 1 < args.length) {
+      flags.pad = parseFloat(args[++i]);
     } else if (a === "--ratio" && i + 1 < args.length) {
       flags.ratio = args[++i];
     } else if (a === "--rect" && i + 1 < args.length) {
@@ -4167,6 +4204,8 @@ const SUMMARIES: Record<string, string> = {
   render: "Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render.",
   "detect-scenes":
     "Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut.",
+  "detect-silence":
+    "Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut.",
 };
 
 // `describe` emits a machine-readable tool spec for LLM/agent callers, so they
@@ -4624,6 +4663,65 @@ async function cmdDetectScenes(positional: string[], flags: Flags): Promise<void
   out(report, flags);
 }
 
+async function cmdDetectSilence(positional: string[], flags: Flags): Promise<void> {
+  const { detectSilence } = await import("./silence.js");
+  const { timecode } = await import("./scenes.js");
+  const mediaPath = positional[1];
+  if (!mediaPath) {
+    die(
+      "Missing media. Usage: capcut detect-silence <media> [--threshold-db <dBFS>] [--min-silence <seconds>] [--pad <seconds>] [--limit <n>]",
+    );
+  }
+  const thresholdDb = flags.thresholdDb ?? -30;
+  if (!Number.isFinite(thresholdDb) || thresholdDb > 0) die("--threshold-db must be <= 0 (a dBFS noise floor)");
+  const minSilence = flags.minSilence ?? 0.5;
+  if (!Number.isFinite(minSilence) || minSilence <= 0) die("--min-silence must be > 0 seconds");
+  const pad = flags.pad ?? 0.1;
+  if (!Number.isFinite(pad) || pad < 0) die("--pad must be >= 0 seconds");
+  if (flags.limit !== undefined && (!Number.isFinite(flags.limit) || flags.limit < 1)) {
+    die("--limit must be a positive integer");
+  }
+  const report = detectSilence(mediaPath, {
+    thresholdDb,
+    minSilence,
+    pad,
+    limit: flags.limit,
+    ffmpegCmd: flags.ffmpegCmd,
+    ffprobeCmd: flags.ffprobeCmd,
+  });
+  // --json forces machine output even when a config/alias turned on --human.
+  if (flags.human && !flags.json) {
+    console.log(`Media:     ${report.media}`);
+    const durationNote =
+      report.duration_source === "ffmpeg-header" ? " (ffmpeg header — ffprobe unavailable; centisecond precision)" : "";
+    console.log(
+      `Duration:  ${report.duration === null ? "unknown" : formatDuration(report.duration_us ?? 0)}${durationNote}`,
+    );
+    console.log(
+      `Threshold: ${report.threshold_db} dBFS  (min silence ${report.min_silence}s, pad ${report.pad}s${
+        report.limit ? `, limit ${report.limit}` : ""
+      })`,
+    );
+    console.log(`Silences:  ${report.silences.length}`);
+    for (const [i, s] of report.silences.entries()) {
+      const end = s.end === null ? "end" : timecode(s.end);
+      const dur = s.duration_us === null ? "?" : formatDuration(s.duration_us);
+      console.log(`  ${String(i + 1).padStart(3)}  ${timecode(s.start)} - ${end}  ${dur}`);
+    }
+    console.log(`Keeps:     ${report.keeps.length}`);
+    for (const [i, s] of report.keeps.entries()) {
+      const end = s.end === null ? "end" : timecode(s.end);
+      const dur = s.duration_us === null ? "?" : formatDuration(s.duration_us);
+      console.log(`  ${String(i + 1).padStart(3)}  ${timecode(s.start)} - ${end}  ${dur}`);
+    }
+    console.log(
+      "Next: pipe the keep segments into `capcut compile` (one clip per segment) or `capcut cut` to drop the silences.",
+    );
+    return;
+  }
+  out(report, flags);
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -4846,6 +4944,12 @@ async function main(): Promise<void> {
   // `detect-scenes` analyzes a raw video file for cut points — no draft needed.
   if (cmd === "detect-scenes") {
     await cmdDetectScenes(positional, flags);
+    process.exit(0);
+  }
+
+  // `detect-silence` analyzes a raw media file for silence spans — no draft needed.
+  if (cmd === "detect-silence") {
+    await cmdDetectSilence(positional, flags);
     process.exit(0);
   }
 

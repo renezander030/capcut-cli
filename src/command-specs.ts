@@ -230,6 +230,7 @@ const usages = {
   compile: "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
+  "detect-silence": "capcut detect-silence <media> [options]",
 } as const satisfies Record<string, string>;
 
 export type CommandName = keyof typeof usages;
@@ -599,6 +600,32 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
   ],
+  "detect-silence": [
+    option(
+      "threshold_db",
+      ["--threshold-db"],
+      "number",
+      "Noise floor in dBFS; audio at or below this level counts as silence.",
+      { default: -30 },
+    ),
+    option("min_silence", ["--min-silence"], "number", "Shortest silence to report, in seconds.", { default: 0.5 }),
+    option(
+      "pad",
+      ["--pad"],
+      "number",
+      "Margin in seconds kept around speech: each silence span is shrunk by this on both ends so cuts never clip a word mid-syllable.",
+      { default: 0.1 },
+    ),
+    option("limit", ["--limit"], "number", "Keep only the N longest silences."),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary."),
+    option(
+      "ffprobe_cmd",
+      ["--ffprobe-cmd"],
+      "path",
+      "ffprobe binary for the container duration (falls back to ffmpeg's stderr header without it).",
+    ),
+    option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
+  ],
 };
 optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 
@@ -623,6 +650,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
 //   --into               -> import-timeline (v0.17 append target)
 //   --encoder            -> render (v0.20 proxy video encoder)
+//   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -646,12 +674,15 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--limit",
   "--mask-field",
   "--min-gap",
+  "--min-silence",
   "--new-track",
+  "--pad",
   "--preset",
   "--ratio",
   "--rect",
   "--reset",
   "--threshold",
+  "--threshold-db",
 ]);
 
 /** True when `command` declares `flag` among its command-specific options. */
@@ -728,7 +759,7 @@ const fileOutputs = new Set([
 ]);
 
 function inferType(name: string): ArgumentType {
-  if (/project|file|path|dir|template|audio|video|image|srt|ass|spec|draft/i.test(name)) return "path";
+  if (/project|file|path|dir|template|audio|video|image|media|srt|ass|spec|draft/i.test(name)) return "path";
   if (/^(id|segment-id|resource-id)$/.test(name)) return "id";
   if (/start|end|duration|offset|time/.test(name)) return "time";
   if (/level|multiplier|alpha|value/.test(name)) return "number";
@@ -761,8 +792,10 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
   return commands.map((name) => {
     const usage = usages[name as CommandName] ?? `capcut ${name} <project>`;
     const prerequisites: string[] = [];
-    if (name === "render" || name === "detect-scenes") prerequisites.push("ffmpeg");
-    if (["add-video", "add-audio", "compile", "detect-scenes"].includes(name)) prerequisites.push("ffprobe (optional)");
+    if (["render", "detect-scenes", "detect-silence"].includes(name)) prerequisites.push("ffmpeg");
+    if (["add-video", "add-audio", "compile", "detect-scenes", "detect-silence"].includes(name)) {
+      prerequisites.push("ffprobe (optional)");
+    }
     if (name === "caption") prerequisites.push("whisper CLI");
     if (name === "translate") prerequisites.push("ANTHROPIC_API_KEY or --api-key");
     if (["add-video", "add-audio"].includes(name)) prerequisites.push("network for Wikimedia URLs only");
