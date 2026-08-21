@@ -243,6 +243,7 @@ Preview:
                --fps <n>          Output fps (default draft fps)
                --burn-captions    Draw text-track segments onto the video
                --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
+               --encoder <name>   Video encoder for -c:v (default libx264)
                --dry-run          Print the ffmpeg plan; do not execute
 
 Analyze:
@@ -863,6 +864,7 @@ interface Flags {
   names?: boolean;
   fps?: number;
   ffmpegCmd?: string;
+  encoder?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
   progress?: boolean;
@@ -1235,6 +1237,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.fps = parseFloat(args[++i]);
     } else if (a === "--ffmpeg-cmd" && i + 1 < args.length) {
       flags.ffmpegCmd = args[++i];
+    } else if (a === "--encoder" && i + 1 < args.length) {
+      flags.encoder = args[++i];
     } else if (a === "--burn-captions") {
       flags.burnCaptions = true;
     } else if (a === "--all-video-tracks") {
@@ -4405,6 +4409,7 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     scale: flags.scale,
     fps: flags.fps,
     ffmpegCmd: flags.ffmpegCmd,
+    encoder: flags.encoder,
     burnCaptions: flags.burnCaptions,
     allVideoTracks: flags.allVideoTracks,
     dryRun: isDryRun(),

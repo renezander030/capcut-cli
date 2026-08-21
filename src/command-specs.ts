@@ -564,6 +564,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("scale", ["--scale"], "number", "Proxy scale.", { default: 0.5 }),
     option("fps", ["--fps"], "number", "Output FPS."),
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary."),
+    option(
+      "encoder",
+      ["--encoder"],
+      "string",
+      "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering.",
+    ),
     option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
     option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
@@ -606,6 +612,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
 //   --into               -> import-timeline (v0.17 append target)
+//   --encoder            -> render (v0.20 proxy video encoder)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -615,6 +622,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--color-cycle",
   "--data",
   "--easing",
+  "--encoder",
   "--format",
   "--full",
   "--granularity",

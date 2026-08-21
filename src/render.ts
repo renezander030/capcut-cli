@@ -29,6 +29,7 @@ export interface RenderOptions {
   scale?: number; // proxy scale factor applied to canvas dims (default 0.5)
   fps?: number; // output fps override (default draft.fps or 30)
   ffmpegCmd?: string; // ffmpeg binary (default "ffmpeg")
+  encoder?: string; // -c:v video encoder (default libx264; e.g. h264_videotoolbox/h264_nvenc/h264_qsv)
   burnCaptions?: boolean; // draw text-track segments onto the video
   allVideoTracks?: boolean; // composite overlay video tracks
   dryRun?: boolean; // build the plan, do not execute ffmpeg
@@ -241,6 +242,43 @@ export function filterNamesInGraph(filterComplex: string): string[] {
   }
   flush();
   return [...names].sort();
+}
+
+/**
+ * Encoder names from `ffmpeg -hide_banner -encoders` output. Rows look like
+ * ` V....D libx264              libx264 H.264 / ...`: a six-character
+ * capability column whose first letter is the codec type, then the name. The
+ * legend at the top reuses the column shape (` V..... = Video`), so the name
+ * token must not be `=`. Pure and exported so it can be fed captured output
+ * strings in tests, the same reason parse helpers elsewhere are.
+ */
+export function parseFfmpegEncoders(output: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^ ?[VAS][F.][S.][X.][B.][D.] +([^\s=]+)/);
+    if (match?.[1]) names.add(match[1]);
+  }
+  return names;
+}
+
+/**
+ * The one extra spawn --encoder costs, run only when the flag was given
+ * (renderDraft) — the default libx264 path never pays it. `listed: false`
+ * means the binary would not enumerate its encoders at all; validation is then
+ * skipped so the render still reaches ffmpeg, whose own "Unknown encoder"
+ * error explainFfmpegFailure already maps.
+ */
+export function probeFfmpegEncoders(command = "ffmpeg"): { listed: boolean; encoders: Set<string> } {
+  try {
+    const r = spawnSync(command, ["-hide_banner", "-encoders"], {
+      encoding: "utf-8",
+      timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return { listed: r.status === 0, encoders: parseFfmpegEncoders(`${r.stdout ?? ""}${r.stderr ?? ""}`) };
+  } catch {
+    return { listed: false, encoders: new Set() };
+  }
 }
 
 function findVideoPath(draft: Draft, materialId: string): string | undefined {
@@ -551,7 +589,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     `[${vOut}]`,
     ...(aOut ? ["-map", `[${aOut}]`] : []),
     "-c:v",
-    "libx264",
+    opts.encoder ?? "libx264",
     "-preset",
     "veryfast",
     "-crf",
@@ -607,6 +645,16 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
         "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. " +
         `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
     );
+  }
+  if (opts.encoder) {
+    const { listed, encoders } = probeFfmpegEncoders(opts.ffmpegCmd ?? "ffmpeg");
+    if (listed && !encoders.has(opts.encoder)) {
+      throw new Error(
+        `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' has no '${opts.encoder}' encoder. ` +
+          "Hardware encoders (h264_videotoolbox, h264_nvenc, h264_qsv, ...) exist only in builds compiled for them — " +
+          `'${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -encoders' lists what this build carries. Omit --encoder to use libx264.`,
+      );
+    }
   }
   const fallbackSkipped: Array<{ segmentId: string; reason: string }> = [];
   const effective = { ...opts, out };

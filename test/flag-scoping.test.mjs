@@ -41,6 +41,8 @@ describe("flag scoping — free-text positionals survive release flags (regressi
       "--keep-materials",
       "--full",
       "--bind",
+      "--encoder",
+      "h264_nvenc",
       "--data",
       "rows.jsonl",
       "zzz",
