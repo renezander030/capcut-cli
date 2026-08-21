@@ -11,6 +11,7 @@ import {
   takeAppVersionDrift,
   trackAppVersion,
 } from "./app-versions.js";
+import type { AssEvent, AssStyleDef } from "./ass.js";
 import { stripBom } from "./bom.js";
 import {
   buildCommandSpecs,
@@ -84,6 +85,7 @@ export const COMMANDS = [
   "trim",
   "opacity",
   "export-srt",
+  "export-ass",
   "export-timeline",
   "import-timeline",
   "materials",
@@ -340,6 +342,7 @@ Edit:
              skips the sweep). Recomputes the project duration to the max
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
+  export-ass <project> [--karaoke] [--out <f.ass>]  Export styled subtitles as ASS
   export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
   import-timeline <f.otio> (--out <dir> | --into <project>)  Import an OpenTimelineIO cut
   batch      <project>                          Run multiple edits from stdin (JSONL)
@@ -679,6 +682,20 @@ Subtitles (Phase 3):
              Word timings are real where the draft stores them (caption
              --karaoke word segments); elsewhere they are interpolated within
              each cue, weighted by word character length.
+  export-ass <project> [options]
+             Export subtitles as styled ASS (stdout, or --out): PlayRes from
+             the draft canvas, one [V4+ Styles] line per distinct text
+             styling (font size/colour, bold/italic, alignment, border/
+             shadow/background where mappable), one Dialogue per segment.
+             Multi-range styling (text-ranges, --highlight-words) survives
+             as inline override tags ({\\b1}, {\\c&HBBGGRR&}, {\\fs<n>}).
+             Options:
+               --karaoke      Emit {\\k} word timing per Dialogue. Word
+                              timings follow export-srt --granularity word:
+                              real where stored, else interpolated. The
+                              highlight colour becomes PrimaryColour, the
+                              base colour SecondaryColour.
+               --out <f.ass>  Write to a file and print a JSON summary.
   export-timeline <project> [--out <file.otio>]
              Export video/audio tracks as OpenTimelineIO JSON (stdout, or
              --out): clip order, trims, gaps, and speed (LinearTimeWarp) —
@@ -1854,25 +1871,34 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
   }
 }
 
+// The one walk both subtitle exporters share: per text track, one cue per
+// segment with the material's text and repaired code-unit style ranges, plus
+// the material itself for exporters that carry styling (export-ass).
+function textTrackCues(draft: Draft): Array<Array<SegmentCue & { material: MaterialText }>> {
+  return getTracksByType(draft, "text").map((track) =>
+    track.segments.flatMap((seg) => {
+      const mat = findMaterial(draft.materials.texts, seg.material_id);
+      if (!mat) return [];
+      const t = seg.target_timerange;
+      return [
+        {
+          startUs: t.start,
+          endUs: t.start + t.duration,
+          text: extractText(mat.content),
+          styleRanges: extractCodeUnitStyleRanges(mat.content),
+          material: mat,
+        },
+      ];
+    }),
+  );
+}
+
 async function cmdExportSrt(draft: Draft, flags: Flags): Promise<void> {
   const { collapseKaraokeRuns, cueWords, renderSrt, renderVtt } = await import("./srt.js");
   const granularity = flags.granularity ?? "line";
   const format = flags.format ?? "srt";
-  const textTracks = getTracksByType(draft, "text");
   const cues: SegmentCue[] = [];
-  for (const track of textTracks) {
-    const entries: SegmentCue[] = [];
-    for (const seg of track.segments) {
-      const mat = findMaterial(draft.materials.texts, seg.material_id);
-      if (!mat) continue;
-      const t = seg.target_timerange;
-      entries.push({
-        startUs: t.start,
-        endUs: t.start + t.duration,
-        text: extractText(mat.content),
-        styleRanges: extractCodeUnitStyleRanges(mat.content),
-      });
-    }
+  for (const entries of textTrackCues(draft)) {
     // Word granularity: karaoke runs (one word-timed segment per word) carry
     // real word timings; other cues fall back to length-weighted interpolation.
     if (granularity === "word") cues.push(...collapseKaraokeRuns(entries));
@@ -1886,6 +1912,92 @@ async function cmdExportSrt(draft: Draft, flags: Flags): Promise<void> {
     process.stdout.write(renderSrt(words));
   } else {
     process.stdout.write(renderSrt(cues));
+  }
+}
+
+// Styled ASS export: [Script Info] PlayRes from the draft canvas, one [V4+
+// Styles] line per distinct material styling, one Dialogue per text segment
+// with the material's non-default style ranges as inline overrides. With
+// --karaoke, cues collapse the way `export-srt --granularity word` does and
+// each Dialogue carries {\k} word timing instead of range overrides — the
+// highlight becomes the style's Primary/Secondary colour pair.
+async function cmdExportAss(draft: Draft, flags: Flags): Promise<void> {
+  const { assStyleFromMaterial, renderAss } = await import("./ass.js");
+  const { collapseKaraokeRuns, cueWords } = await import("./srt.js");
+
+  const parts = new Map<string, ReturnType<typeof assStyleFromMaterial>>();
+  const partsOf = (mat: MaterialText) => {
+    let p = parts.get(mat.id);
+    if (!p) {
+      p = assStyleFromMaterial(mat);
+      parts.set(mat.id, p);
+    }
+    return p;
+  };
+  const styles: AssStyleDef[] = [];
+  const styleNames = new Map<string, string>();
+  const styleNameFor = (def: Omit<AssStyleDef, "name">): string => {
+    const signature = JSON.stringify(def);
+    let name = styleNames.get(signature);
+    if (!name) {
+      name = styles.length === 0 ? "Default" : `Default${styles.length + 1}`;
+      styleNames.set(signature, name);
+      styles.push({ ...def, name });
+    }
+    return name;
+  };
+
+  const events: AssEvent[] = [];
+  for (const entries of textTrackCues(draft)) {
+    if (flags.karaoke) {
+      // The track's highlight colour: the first span colour that differs from
+      // its material's base — the paint caption --karaoke moves word to word.
+      let highlight: string | undefined;
+      for (const e of entries) {
+        highlight ??= partsOf(e.material).spans.find((s) => s.color !== undefined)?.color;
+      }
+      for (const cue of collapseKaraokeRuns(entries)) {
+        const rep = entries.find((e) => e.startUs === cue.startUs && e.text === cue.text) ?? entries[0];
+        const base = partsOf(rep.material).style;
+        const def = highlight ? { ...base, color: highlight, secondaryColor: base.color } : base;
+        events.push({
+          startUs: cue.startUs,
+          endUs: cue.endUs,
+          text: cue.text,
+          style: styleNameFor(def),
+          words: cueWords(cue),
+        });
+      }
+    } else {
+      for (const e of entries) {
+        const p = partsOf(e.material);
+        events.push({
+          startUs: e.startUs,
+          endUs: e.endUs,
+          text: e.text,
+          style: styleNameFor(p.style),
+          spans: p.spans.length > 0 ? p.spans : undefined,
+        });
+      }
+    }
+  }
+  events.sort((a, b) => a.startUs - b.startUs);
+
+  const rendered = renderAss({
+    title: draft.name || undefined,
+    playResX: draft.canvas_config?.width || 1920,
+    playResY: draft.canvas_config?.height || 1080,
+    styles,
+    events,
+  });
+  if (flags.out) {
+    writeFileSync(flags.out, rendered, "utf-8");
+    out(
+      { ok: true, out: flags.out, events: events.length, styles: styles.length || 1, karaoke: Boolean(flags.karaoke) },
+      flags,
+    );
+  } else {
+    process.stdout.write(rendered);
   }
 }
 
@@ -3952,6 +4064,7 @@ const SUMMARIES: Record<string, string> = {
   trim: "Trim a segment to a start/duration window.",
   opacity: "Set a segment's opacity (0.0-1.0).",
   "export-srt": "Export subtitles to SRT or WebVTT on stdout, per line or per word.",
+  "export-ass": "Export styled ASS subtitles on stdout or --out, with per-range overrides and --karaoke word timing.",
   "export-timeline":
     "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
   "import-timeline":
@@ -4775,6 +4888,9 @@ async function main(): Promise<void> {
       break;
     case "export-srt":
       await cmdExportSrt(draft, flags);
+      break;
+    case "export-ass":
+      await cmdExportAss(draft, flags);
       break;
     case "export-timeline":
       await cmdExportTimeline(draft, flags);

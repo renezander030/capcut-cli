@@ -164,6 +164,7 @@ const usages = {
   trim: "capcut trim <project> <id> <start> <duration>",
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
+  "export-ass": "capcut export-ass <project> [--karaoke] [--out <file.ass>]",
   "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
   "import-timeline": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
   materials: "capcut materials <project> [--type <type>]",
@@ -407,6 +408,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       default: "line",
     }),
     option("format", ["--format"], "enum", "Subtitle output format.", { values: ["srt", "vtt"], default: "srt" }),
+  ],
+  "export-ass": [
+    option(
+      "karaoke",
+      ["--karaoke"],
+      "boolean",
+      "Emit {\\k} word timing per Dialogue (stored word timings where present, interpolated elsewhere).",
+    ),
+    OUT,
   ],
   "export-timeline": [OUT],
   "import-timeline": [
@@ -706,7 +716,7 @@ const mutating = new Set([
 ]);
 
 const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
-const textOutputs = new Set(["export-srt", "export-timeline", "completions"]);
+const textOutputs = new Set(["export-srt", "export-ass", "export-timeline", "completions"]);
 const fileOutputs = new Set([
   "render",
   "translate",
