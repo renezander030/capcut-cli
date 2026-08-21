@@ -67,6 +67,7 @@ import {
   planTimelineSync,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
+import type { UserEnumEntry } from "./user-enums.js";
 import { assessWriteSafety, detectVersion } from "./version.js";
 import type { WikimediaAsset } from "./wikimedia.js";
 
@@ -382,6 +383,14 @@ Maintenance & inspection:
              harvested ids stop lint-flagging as unknown, and named effects/
              filters/transitions/masks/sfx become writable slugs. Plan by
              default; --apply writes the catalogue (never the draft).
+             --sync (instead of <project>) sweeps every draft the projects
+             listing can see ([--drafts <dir>]) into one merged write;
+             unreadable drafts are skipped with a note, never fatal.
+             --add <kind> <slug> <resource-id> [--effect-id <id>] registers
+             one entry by hand when its witness draft is gone. Writable
+             kinds only — animations/bubbles/fonts stay id-only because a
+             draft cannot disambiguate them; duplicate ids are refused,
+             naming the entry that already owns them.
   prune      <project>                          Remove materials no segment references
   register   <project-dir> [--apply] [--drafts <dir>]  Repair an EXISTING draft's
              registration metadata so the CapCut app lists it again (init only
@@ -925,6 +934,9 @@ interface Flags {
   check?: boolean;
   plan?: boolean;
   apply?: boolean;
+  // harvest-enums library sweep / manual entry
+  sync?: boolean;
+  add?: boolean;
   // compile --data
   data?: string;
   // import-timeline
@@ -1312,6 +1324,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.plan = true;
     } else if (a === "--apply") {
       flags.apply = true;
+    } else if (a === "--sync") {
+      flags.sync = true;
+    } else if (a === "--add") {
+      flags.add = true;
     } else if (a === "--threshold" && i + 1 < args.length) {
       flags.threshold = parseFloat(args[++i]);
     } else if (a === "--min-gap" && i + 1 < args.length) {
@@ -1752,6 +1768,148 @@ async function cmdHarvestEnums(draft: Draft, flags: Flags): Promise<void> {
   }
   const { added, duplicates, total } = mergeUserEnums(cataloguePath, candidates);
   out({ ok: true, applied: true, added, duplicates, total, ...base }, flags);
+  if (!flags.quiet) process.stderr.write(`Catalogue updated: ${cataloguePath} (+${added}, ${total} total)\n`);
+}
+
+// `harvest-enums --sync` runs the same harvest over every draft the library
+// discovery (`projects`) can see, into ONE merged catalogue write. A draft
+// that cannot be read is skipped with a one-line note, never fatal: one
+// broken project must not abort learning from the rest.
+async function cmdHarvestEnumsSync(flags: Flags): Promise<void> {
+  const { draftDirs } = await import("./doctor.js");
+  const { knownEffectIds } = await import("./lint.js");
+  const { allUserEnumIds, harvestDraft, loadUserEnums, mergeUserEnums, userEnumsPath } = await import(
+    "./user-enums.js"
+  );
+  const cataloguePath = userEnumsPath(flags.catalogue);
+  const { error } = loadUserEnums(cataloguePath);
+  // knownEffectIds() folds in the default catalogue only; add the ids from an
+  // overridden --catalogue so re-syncing into it stays idempotent.
+  const knownIds = new Set(knownEffectIds());
+  for (const id of allUserEnumIds(cataloguePath)) knownIds.add(id);
+
+  const roots = flags.drafts ? [{ label: "custom", path: flags.drafts }] : draftDirs();
+  const skipped: Array<{ draft: string; reason: string }> = [];
+  const candidates: UserEnumEntry[] = [];
+  let scanned = 0;
+  let found = 0;
+  let known = 0;
+  for (const root of roots) {
+    if (!existsSync(root.path)) continue;
+    for (const entry of readdirSync(root.path).sort()) {
+      const folder = path.join(root.path, entry);
+      let isDir = false;
+      try {
+        isDir = statSync(folder).isDirectory();
+      } catch {
+        isDir = false;
+      }
+      if (!isDir) continue;
+      const draftFile = ["draft_content.json", "draft_info.json"]
+        .map((f) => path.join(folder, f))
+        .find((p) => existsSync(p));
+      if (!draftFile) continue;
+      try {
+        const { draft } = loadDraft(draftFile);
+        const result = harvestDraft(draft, knownIds);
+        found += result.found;
+        known += result.known;
+        // Feed accepted ids back into the known set: the same store resource
+        // in a later draft counts as already known, not a second candidate.
+        for (const candidate of result.candidates) {
+          candidates.push(candidate);
+          if (candidate.effect_id) knownIds.add(candidate.effect_id);
+          if (candidate.resource_id) knownIds.add(candidate.resource_id);
+        }
+        scanned++;
+      } catch (e) {
+        const reason = (e instanceof Error ? e.message : String(e)).split("\n")[0];
+        skipped.push({ draft: entry, reason });
+        if (!flags.quiet) process.stderr.write(`skipped ${entry}: ${reason}\n`);
+      }
+    }
+  }
+
+  const newByKind: Record<string, number> = {};
+  for (const candidate of candidates) newByKind[candidate.kind] = (newByKind[candidate.kind] ?? 0) + 1;
+  const writable = candidates.filter((candidate) => candidate.slug !== "").length;
+  const base = {
+    catalogue: cataloguePath,
+    catalogue_error: error,
+    drafts_scanned: scanned,
+    drafts_skipped: skipped,
+    found,
+    known,
+    new: candidates,
+    new_by_kind: newByKind,
+    writable_slugs: writable,
+    id_only: candidates.length - writable,
+  };
+  const sweep = `${scanned} drafts${skipped.length > 0 ? ` (${skipped.length} skipped)` : ""}`;
+  if (scanned === 0 && skipped.length === 0 && !flags.quiet) {
+    process.stderr.write(`No drafts found under ${roots.map((root) => root.path).join(", ")}.\n`);
+  }
+  if (!flags.apply) {
+    out({ ok: error === null, applied: false, ...base }, flags);
+    if (!flags.quiet) {
+      process.stderr.write(
+        candidates.length === 0
+          ? `No new resource ids across ${sweep} — every id is already known.\n`
+          : `Would add ${candidates.length} entries (${writable} writable slugs) from ${sweep}. Re-run with --apply to write.\n`,
+      );
+      if (error) process.stderr.write(`WARNING: ${error}\n`);
+    }
+    return;
+  }
+  if (error) {
+    die(
+      `Refusing to rewrite a catalogue that did not parse (${error}). ` +
+        `Fix or remove ${cataloguePath}, then re-run.`,
+    );
+  }
+  if (isDryRun()) {
+    out({ ok: true, applied: false, would_add: candidates.length, ...base }, flags);
+    if (!flags.quiet) process.stderr.write("Dry run — nothing was written.\n");
+    return;
+  }
+  const { added, duplicates, total } = mergeUserEnums(cataloguePath, candidates);
+  out({ ok: true, applied: true, added, duplicates, total, ...base }, flags);
+  if (!flags.quiet) {
+    process.stderr.write(`Catalogue updated from ${sweep}: ${cataloguePath} (+${added}, ${total} total)\n`);
+  }
+}
+
+const HARVEST_ADD_USAGE =
+  "capcut harvest-enums --add <kind> <slug> <resource-id> [--effect-id <id>] [--apply] [--catalogue <path>]";
+
+// `harvest-enums --add` registers one entry whose witness draft is gone — the
+// same validation and catalogue write as a harvest, minus the draft.
+async function cmdHarvestEnumsAdd(positional: string[], flags: Flags): Promise<void> {
+  const { loadUserEnums, mergeUserEnums, planManualEntry, userEnumsPath } = await import("./user-enums.js");
+  if (positional.length !== 4) die(`Usage: ${HARVEST_ADD_USAGE}`);
+  const [, kind, slug, resourceId] = positional;
+  const cataloguePath = userEnumsPath(flags.catalogue);
+  const { error } = loadUserEnums(cataloguePath);
+  // Unlike a plan-mode harvest (which only warns), --add cannot even check
+  // for duplicates against a catalogue that did not parse.
+  if (error) {
+    die(`Refusing to extend a catalogue that did not parse (${error}). Fix or remove ${cataloguePath}, then re-run.`);
+  }
+  const plan = planManualEntry({ kind, slug, resourceId, effectId: flags.effectId }, cataloguePath);
+  if (plan.error !== null) die(plan.error);
+  const base = { catalogue: cataloguePath, entry: plan.entry };
+  if (!flags.apply) {
+    out({ ok: true, applied: false, ...base }, flags);
+    if (!flags.quiet) process.stderr.write(`Would add ${kind}/${slug}. Re-run with --apply to write.\n`);
+    return;
+  }
+  if (isDryRun()) {
+    out({ ok: true, applied: false, ...base }, flags);
+    if (!flags.quiet) process.stderr.write("Dry run — nothing was written.\n");
+    return;
+  }
+  const { added, total } = mergeUserEnums(cataloguePath, [plan.entry]);
+  out({ ok: true, applied: true, added, total, ...base }, flags);
   if (!flags.quiet) process.stderr.write(`Catalogue updated: ${cataloguePath} (+${added}, ${total} total)\n`);
 }
 
@@ -4139,7 +4297,7 @@ const SUMMARIES: Record<string, string> = {
   "import-timeline":
     "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
   "harvest-enums":
-    "Learn store resource ids from an app-authored draft into the per-user catalogue (lint + writable slugs).",
+    "Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add).",
   materials: "List material types and counts; filter with --type.",
   segment: "Full detail for one segment and its material.",
   material: "Full detail for one material.",
@@ -4833,6 +4991,19 @@ async function main(): Promise<void> {
   // `projects` scans the disk for draft folders — no single project needed.
   if (cmd === "projects") {
     await cmdProjects(positional, flags);
+    process.exit(0);
+  }
+
+  // `harvest-enums --sync` sweeps every draft in the library and `--add`
+  // registers an entry whose witness draft is gone — no single project to load.
+  if (cmd === "harvest-enums" && (flags.sync || flags.add)) {
+    if (flags.sync && flags.add) die("--sync and --add are mutually exclusive.");
+    if (flags.sync) {
+      if (projectPath) die("--sync scans the whole library; drop the <project> argument (or drop --sync).");
+      await cmdHarvestEnumsSync(flags);
+    } else {
+      await cmdHarvestEnumsAdd(positional, flags);
+    }
     process.exit(0);
   }
 

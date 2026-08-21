@@ -215,7 +215,8 @@ const usages = {
   describe: "capcut describe",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
-  "harvest-enums": "capcut harvest-enums <project> [--apply] [--catalogue <path>]",
+  "harvest-enums":
+    "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
   fixture: "capcut fixture <project> --out <dir>",
@@ -496,6 +497,10 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "path",
       "User catalogue file (default: ~/.config/capcut-cli/user-enums.json, or $CAPCUT_CLI_USER_ENUMS).",
     ),
+    option("sync", ["--sync"], "boolean", "Harvest every draft in the library (what `projects` lists) in one sweep."),
+    option("drafts", ["--drafts"], "path", "Draft library root for --sync (default: the per-OS CapCut/JianYing dirs)."),
+    option("add", ["--add"], "boolean", "Register one entry by hand: --add <kind> <slug> <resource-id>."),
+    option("effect_id", ["--effect-id"], "string", "Effect id for an --add entry that carries both ids."),
   ],
   relink: [
     option("dir", ["--dir"], "path", "Directory containing replacement files."),
@@ -647,6 +652,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --bind               -> add-effect (v0.15 per-segment attachment)
 //   --mask-field         -> mask (v0.16 explicit mask array variant)
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
+//   --sync, --add        -> harvest-enums (v0.20 library sweep + manual entry)
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
 //   --into               -> import-timeline (v0.17 append target)
 //   --encoder            -> render (v0.20 proxy video encoder)
@@ -654,6 +660,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--add",
   "--apply",
   "--bind",
   "--catalogue",
@@ -681,6 +688,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--ratio",
   "--rect",
   "--reset",
+  "--sync",
   "--threshold",
   "--threshold-db",
 ]);
