@@ -23,8 +23,13 @@ runs:
   steps:
     - name: Install capcut-cli
       shell: bash
-      run: npm install -g "capcut-cli@${{ inputs.version }}"
+      env:
+        VERSION: ${{ inputs.version }}
+      run: npm install -g "capcut-cli@$VERSION"
     - name: Lint draft
       shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        ARGS: ${{ inputs.args }}
       # `lint` exits 0 (clean) / 1 (warnings) / 2 (errors) — exit 2 fails the job.
-      run: capcut lint "${{ inputs.project }}" ${{ inputs.args }} -H
+      run: capcut lint "$PROJECT" $ARGS -H
