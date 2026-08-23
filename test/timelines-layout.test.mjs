@@ -197,7 +197,7 @@ describe("CapCut 7.x nested Timelines/ layout (issue #50, detection-only guard)"
     assert.equal(readFileSync(f.rootPath, "utf-8"), rootBefore, "an explicit nested edit must not touch the root file");
   });
 
-  it("CapCut >= 8.7 stores keep their layout value and stay silent", () => {
+  it("CapCut >= 8.7 stores keep their layout value and write silently", () => {
     const f = nestedProject({ appVersion: "8.7.0", rootName: "draft_content.json" });
     after(f.cleanup);
 
@@ -206,13 +206,16 @@ describe("CapCut 7.x nested Timelines/ layout (issue #50, detection-only guard)"
     assert.equal(store.layout, "content-primary", "the 7.x claim must not relabel >= 8.7 storage");
     assert.deepEqual(store.nestedTimelines, ["Timelines/project.json", `Timelines/${TIMELINE_ID}/draft_info.json`]);
 
+    // Writes stay silent: CapCut creates Timelines/ routinely on modern builds
+    // (issue #60), so a per-write warning would fire for the majority on a
+    // hazard nobody has evidenced. `diagnose` is where the note belongs.
     const r = spawnCli(["set-text", f.dir, "seg-1", "modern edit"]);
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(!/Timelines/.test(r.stderr), "no nested-layout warning on >= 8.7 storage");
+    assert.ok(!/Timelines/.test(r.stderr), "no nested-layout warning on >= 8.7 writes");
     const report = diagnoseDraftStore(f.dir);
     assert.ok(
-      !report.next_actions.some((a) => /discard/.test(a) && /Timelines\//.test(a)),
-      "diagnose must not carry the 7.x discard action on >= 8.7 storage",
+      !report.next_actions.some((a) => /may discard those edits/.test(a)),
+      "diagnose must not carry the 7.x discard claim on >= 8.7 storage",
     );
   });
 
@@ -305,5 +308,77 @@ describe("nested Timelines/ guidance is version-gated (issue #68)", () => {
     assert.match(r.stderr, /WARNING: Nested Timelines\/ layout detected on CapCut 8\.5\.0/);
     assert.match(r.stderr, /issue #68/);
     assert.doesNotMatch(r.stderr, /may\s+be discarded the next time/, "8.5.0 must not get the 7.x risk claim");
+  });
+});
+
+// A >= 8.7 store keeps its content-/info-primary layout value by design, so both
+// the layout-gated action and the layout-gated `version` note fell away — while
+// `diagnose` still attached the redacted nested evidence and `fixture` still
+// bundled it, both keyed off nested_timelines.length rather than the layout.
+// The report was carrying Timelines/ evidence with no line of text saying why.
+describe("nested Timelines/ on >= 8.7 storage is named, not asserted", () => {
+  it("diagnose names the layout claim-free, with the fixture CTA", () => {
+    const f = nestedProject({ appVersion: "9.2.8" });
+    after(f.cleanup);
+
+    const store = discoverDraftStore(f.dir);
+    assert.equal(store.layout, "info-primary", "the layout value stays as it was");
+    assert.equal(store.modernStorage, true);
+
+    const action = diagnoseDraftStore(f.dir).next_actions.find((a) => /Timelines\//.test(a));
+    assert.ok(action, ">= 8.7 nested stores must no longer be silent");
+    assert.match(action, />= 8\.7 storage/);
+    assert.match(action, /capcut fixture/);
+    assert.match(action, /issue #50/);
+    // Claim-free in both directions: neither report transfers across 8.7.
+    assert.doesNotMatch(action, /may discard those edits/, "the 7.x risk must not be asserted");
+    assert.doesNotMatch(action, /should survive the next open/, "the 8.5.0 survival claim must not be asserted");
+  });
+
+  it("version carries the same note alongside the write-guard notes", () => {
+    const f = nestedProject({ appVersion: "9.2.8" });
+    after(f.cleanup);
+
+    const r = spawnCli(["version", f.dir]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const note = r.json.support.notes.find((n) => /Timelines\//.test(n));
+    assert.ok(note, `support.notes must name the layout; got: ${JSON.stringify(r.json.support.notes)}`);
+    assert.match(note, />= 8\.7 storage/);
+  });
+
+  it("the JSON report's nested evidence and the prose note now agree", () => {
+    const f = nestedProject({ appVersion: "9.2.8" });
+    after(f.cleanup);
+
+    const r = spawnCli(["diagnose", f.dir]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.deepEqual(r.json.nested_timelines, ["Timelines/project.json", `Timelines/${TIMELINE_ID}/draft_info.json`]);
+    assert.ok(r.json.nested_evidence, "evidence was already attached on >= 8.7 — that is the half that worked");
+    assert.ok(
+      r.json.next_actions.some((a) => /Timelines\//.test(a)),
+      "and now a next_action explains why the evidence is there",
+    );
+  });
+
+  it("a >= 8.7 store with no Timelines/ directory stays completely silent", () => {
+    const f = nestedProject({ appVersion: "9.2.8", omitTimelines: true });
+    after(f.cleanup);
+
+    const report = diagnoseDraftStore(f.dir);
+    assert.deepEqual(report.nested_timelines, []);
+    assert.ok(!report.next_actions.some((a) => /Timelines\//.test(a)), "no note without the structure");
+
+    const r = spawnCli(["version", f.dir]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(!r.json.support.notes.some((n) => /Timelines\//.test(n)));
+  });
+
+  it("never emits both the layout action and the >= 8.7 note", () => {
+    for (const appVersion of ["7.9.0", "8.5.0", "8.7.0", "9.2.8"]) {
+      const f = nestedProject({ appVersion });
+      after(f.cleanup);
+      const hits = diagnoseDraftStore(f.dir).next_actions.filter((a) => /Timelines\//.test(a));
+      assert.equal(hits.length, 1, `${appVersion} must produce exactly one nested note, got ${hits.length}`);
+    }
   });
 });

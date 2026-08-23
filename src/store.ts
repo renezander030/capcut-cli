@@ -272,6 +272,26 @@ export const NESTED_TIMELINES_ACTION =
   "`capcut fixture <project> --out <dir>`.";
 
 /**
+ * The same structure on >= 8.7 storage, where `layout` deliberately stays at its
+ * content-/info-primary value so the 7.x claim never relabels a modern store.
+ *
+ * `diagnose` already attaches the redacted nested evidence on these stores
+ * (index.ts `cmdDiagnose`, gated on `nested_timelines.length`), and `fixture`
+ * already bundles it, but the human-readable action and the `version` note were
+ * gated on the layout value alone — so a >= 8.7 user got a report carrying
+ * Timelines/ evidence with no line of text saying why it was collected. This is
+ * that line, and it asserts nothing: neither #50's 7.x discard risk nor #68's
+ * 8.5.0 survival observation transfers across the 8.7 storage change.
+ */
+export const NESTED_TIMELINES_MODERN_ACTION =
+  "Timelines/ directory with a nested timeline document, on CapCut >= 8.7 storage. No discard risk is claimed " +
+  "here and none is ruled out: the 7.x report in issue #50 and the 8.5.0 open/close round trip in issue #68 both " +
+  "predate this storage generation, so what the app does with the nested document on >= 8.7 is unevidenced in " +
+  "either direction. Edit commands read and write the project-root files only. If this project opens in your app " +
+  "with a CLI edit intact — or without it — that is the artifact issue #50 has been blocked on: " +
+  "`capcut fixture <project> --out <dir>`.";
+
+/**
  * First app version reported to regenerate the nested mirror FROM the root file
  * rather than the other way round (issue #68).
  *
@@ -871,6 +891,7 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
     );
   }
   if (store.layout === "timelines-nested") actions.push(nestedTimelinesAction(store.version));
+  else if (store.nestedTimelines.length > 0) actions.push(NESTED_TIMELINES_MODERN_ACTION);
   if (running.length > 0) actions.push(`Close ${running.join(" / ")} before editing this managed draft.`);
   if (actions.length === 0)
     actions.push("Storage targets are readable and agree. A normal CLI write will synchronize them.");
