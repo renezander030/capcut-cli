@@ -63,6 +63,7 @@ import {
   diagnoseDraftStore,
   discoverDraftStore,
   editorProcesses,
+  NESTED_TIMELINES_MODERN_ACTION,
   nestedTimelinesAction,
   nestedTimelinesWriteWarning,
   planTimelineSync,
@@ -3390,7 +3391,10 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   // CapCut 7.x nested Timelines/ layout (issue #50): `version` answers "will a
   // write be honored?", and on this layout a root-mirror write may be
   // discarded by the app — name the layout alongside the write-guard notes.
+  // On >= 8.7 storage the layout value stays content-/info-primary by design,
+  // so the same question needs the claim-free note instead of silence.
   if (store.layout === "timelines-nested") v.support.notes.push(nestedTimelinesAction(store.version));
+  else if (store.nestedTimelines.length > 0) v.support.notes.push(NESTED_TIMELINES_MODERN_ACTION);
   if (flags.human) {
     console.log(`App:          ${v.app}${v.app_source !== "unknown" ? ` (${v.app_source})` : ""}`);
     console.log(`Version:      ${v.app_version ?? "(unknown)"}`);
