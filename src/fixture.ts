@@ -9,7 +9,7 @@
 // CapCut 8.7 desktop) can only happen on Windows.
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { keyframePropertyTypes } from "./decorators.js";
@@ -686,4 +686,110 @@ export function buildNestedTimelinesEvidence(input: string): NestedTimelinesEvid
     file_tree: collectEvidenceTree(store.projectDir),
     root_vs_nested: comparisons,
   };
+}
+
+import { userInfo } from "node:os";
+
+// --- `fixture --check`: mechanical redaction verification -------------------
+//
+// The bundle README has always said "review the files yourself before
+// attaching" — and that manual burden is exactly what stalls contributions:
+// the 9.2.8 reporter in issue #50 held the bundle back until confident nothing
+// private leaked. This pass turns the review into a checkable gate: scan every
+// text file in the finished bundle (SANITIZE_REPORT.json and README included —
+// #59's lesson was that scrubbed values re-entered through the report) for the
+// shapes the redactor exists to remove, and fail loudly with file:line
+// pointers. A finding is not proof of a leak — it is a place a human must
+// look — so the excerpt itself is never echoed, only the location and kind.
+
+export interface RedactionFinding {
+  file: string;
+  line: number;
+  kind: "home-path" | "email" | "device-key" | "username";
+}
+
+export interface RedactionCheck {
+  ok: boolean;
+  bundle_dir: string;
+  files_scanned: number;
+  findings: RedactionFinding[];
+}
+
+const CHECK_ALLOWED_EMAIL = "redacted@example.com";
+// The account segment is captured so the redactor's own placeholder can pass:
+// redaction rewrites /home/<name> to /home/USER (same for /Users and
+// C:\Users), keeping the path shape — a bundle built from a home-dir project
+// legitimately contains those placeholder paths, and flagging them would fail
+// every correctly redacted bundle.
+const CHECK_HOME_PATH = /(?:\/Users\/|\/home\/|[A-Za-z]:\\+Users\\+)([A-Za-z0-9._-]{2,})/;
+const CHECK_HOME_PLACEHOLDER = "USER";
+const CHECK_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+// A device key whose value is a non-empty string other than the redactor's
+// "redacted" marker. Numeric tallies in SANITIZE_REPORT.json ("device_id": 2)
+// carry no string value and never match.
+const CHECK_DEVICE_KEY = /"(?:device_id|mac_address|hard_disk_id)"\s*:\s*"(?!redacted")[^"]{4,}"/;
+
+function checkTextFiles(dir: string, prefix = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    const full = join(dir, entry);
+    const rel = prefix.length === 0 ? entry : `${prefix}/${entry}`;
+    let stat: ReturnType<typeof statSync>;
+    try {
+      stat = statSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      files.push(...checkTextFiles(full, rel));
+      continue;
+    }
+    if (/\.(json|md|txt|tmp)$/i.test(entry)) files.push(rel);
+  }
+  return files;
+}
+
+export function verifyBundleRedaction(bundleDir: string): RedactionCheck {
+  const root = resolve(bundleDir);
+  const findings: RedactionFinding[] = [];
+  // The account name only matters when it is distinctive enough to identify —
+  // short names ("a", "dev") would flood the check with coincidences.
+  let username: string | null = null;
+  try {
+    const name = userInfo().username;
+    if (name.length >= 5) username = name;
+  } catch {
+    username = null;
+  }
+  const usernameRe = username
+    ? new RegExp(`(?<![A-Za-z0-9_])${username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "i")
+    : null;
+
+  const files = checkTextFiles(root);
+  for (const rel of files) {
+    let text: string;
+    try {
+      text = readFileSync(join(root, rel), "utf-8");
+    } catch {
+      continue;
+    }
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const home = line.match(CHECK_HOME_PATH);
+      if (home && home[1] !== CHECK_HOME_PLACEHOLDER) {
+        findings.push({ file: rel, line: i + 1, kind: "home-path" });
+      } else if (usernameRe?.test(line)) {
+        findings.push({ file: rel, line: i + 1, kind: "username" });
+      }
+      const emails = line.match(CHECK_EMAIL) ?? [];
+      if (emails.some((email) => email.toLowerCase() !== CHECK_ALLOWED_EMAIL)) {
+        findings.push({ file: rel, line: i + 1, kind: "email" });
+      }
+      if (CHECK_DEVICE_KEY.test(line)) {
+        findings.push({ file: rel, line: i + 1, kind: "device-key" });
+      }
+    }
+  }
+  return { ok: findings.length === 0, bundle_dir: root, files_scanned: files.length, findings };
 }

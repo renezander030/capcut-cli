@@ -6,6 +6,7 @@ import { extractStyleRanges, extractText, findMaterial, getTracksByType } from "
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { copyAssetDeduped, effectCatalogue, filterCatalogue } from "./factory.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
+import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
@@ -615,7 +616,126 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     }
   }
 
+  // Unregistered-media sidecar note (pyCapCut#13), observe-only: newer builds
+  // (reported on CapCut International 9.1.0, macOS) show timeline media as
+  // "file inaccessible" and prompt per-clip relinking when
+  // draft_meta_info.json's draft_materials registers nothing. The registration
+  // WRITE stays deliberately out of scope until a real entry shape is captured
+  // (src/store.ts rationale) — so this is info-severity: it names the hazard
+  // where CI pipelines will actually see it and asks for the one artifact the
+  // write can be built from. It can never fail an exit code.
+  // Gated on media that actually exists on disk: absent media is
+  // missing-file's finding, and the 9.1.0 symptom is precisely media that IS
+  // there and still shows inaccessible in the app.
+  const presentLocalMedia = (["videos", "audios"] as const).some((kind) =>
+    (draft.materials?.[kind] ?? []).some((mat) => {
+      const p = (mat as { path?: unknown }).path;
+      return typeof p === "string" && p.length > 0 && !/^https?:\/\//i.test(p) && fileExists(p);
+    }),
+  );
+  if (opts.draftDir && presentLocalMedia) {
+    const registration = assessMediaRegistrationAt(draft, opts.draftDir);
+    // missing-file stays diagnose's finding: a folder with no sidecar at all
+    // is the ordinary tool-built shape (`register` exists for it), not the
+    // pyCapCut#13 shape where the sidecar is present and registers nothing.
+    if (registration && registration.draft_materials !== "missing-file") {
+      issues.push({
+        severity: "info",
+        code: "media-unregistered",
+        message: registration.note,
+        fixable: false,
+        suggested_command: `capcut fixture ${opts.draftDir} --out <dir>`,
+      });
+    }
+  }
+
   return issues;
+}
+
+export interface PipReport {
+  overlays: number;
+  overlay_keyframes: number;
+  masks_attached: number;
+  masks_orphaned: number;
+  missing_media: string[];
+}
+
+/** PIP + local-mask validation (issue #78, split from #44): the four ways the
+ * discussion-#43 workflow can be silently wrong, as countable facts — the
+ * overlay never landed (overlays), the mask never got attached
+ * (masks_orphaned), the keyframes did not write (overlay_keyframes), the
+ * copied clip points at missing media (missing_media, by path — sourced from
+ * the missing-file issues the ordinary lint walk already found, so the two
+ * never disagree). Overlays are segments on every video track above the
+ * first: the layer order sortTracks maintains and `duplicate` builds. */
+export function buildPipReport(draft: Draft, issues: LintIssue[]): PipReport {
+  const videoTracks = (draft.tracks ?? []).filter((track) => track.type === "video");
+  let overlays = 0;
+  let overlayKeyframes = 0;
+  for (const track of videoTracks.slice(1)) {
+    for (const seg of track.segments ?? []) {
+      overlays++;
+      const lists = (seg as Segment & { common_keyframes?: Array<{ keyframe_list?: unknown[] }> }).common_keyframes;
+      for (const list of lists ?? []) {
+        if (Array.isArray(list?.keyframe_list)) overlayKeyframes += list.keyframe_list.length;
+      }
+    }
+  }
+  const masks = maskAttachment(draft);
+  const missing = new Set<string>();
+  for (const issue of issues) {
+    if (issue.code === "missing-file" && issue.location?.path) missing.add(issue.location.path);
+  }
+  return {
+    overlays,
+    overlay_keyframes: overlayKeyframes,
+    masks_attached: masks.attached.length,
+    masks_orphaned: masks.orphaned.length,
+    missing_media: [...missing],
+  };
+}
+
+/** Mask materials by attachment: a mask is attached when some segment's
+ * extra_material_refs carries its id (how `mask` and the app wire them), and
+ * orphaned otherwise. All three variant arrays are read — attachment is a
+ * different question from which single array the installed build reads
+ * (mask-field-mismatch covers that one). */
+function maskAttachment(draft: Draft): { attached: string[]; orphaned: string[] } {
+  const refs = new Set<string>();
+  for (const { segment } of allSegments(draft)) {
+    for (const ref of segment.extra_material_refs ?? []) refs.add(ref);
+  }
+  const attached: string[] = [];
+  const orphaned: string[] = [];
+  for (const key of ["masks", "common_mask", "common_masks"]) {
+    const arr = (draft.materials as Record<string, unknown> | undefined)?.[key];
+    if (!Array.isArray(arr)) continue;
+    for (const mat of arr) {
+      const id = (mat as { id?: string } | null)?.id;
+      if (!id) continue;
+      (refs.has(id) ? attached : orphaned).push(id);
+    }
+  }
+  return { attached, orphaned };
+}
+
+/** The loud side of the --pip report: one warning per orphaned mask, so the
+ * exit code fails CI exactly when the workflow's mask never got attached.
+ * Emitted only under --pip: the check encodes the PIP workflow's expectation,
+ * and an ordinary draft carrying an unreferenced mask is not necessarily
+ * damaged (the #88 lesson) — but in a pipeline that just tried to attach one,
+ * it is precisely the failure being looked for. */
+export function pipLintIssues(draft: Draft): LintIssue[] {
+  const { orphaned } = maskAttachment(draft);
+  return orphaned.map((id) => ({
+    severity: "warning" as const,
+    code: "mask-orphaned",
+    message:
+      `Mask material ${id} is not referenced by any segment's extra_material_refs, so it will not appear in the app. ` +
+      "Attach it with `capcut mask <project> <segment-id> <slug>` or drop it with `capcut prune <project>`.",
+    fixable: false,
+    location: { material_id: id },
+  }));
 }
 
 // Every effect_id/resource_id the CLI could have written into a draft: the

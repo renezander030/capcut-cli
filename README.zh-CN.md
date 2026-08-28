@@ -12,9 +12,36 @@
 
 [English](./README.md) | 中文
 
-> **隐私 — 若你曾运行过 `capcut fixture`，请升级到 0.18.0。** 在 0.17.2 及更早的所有版本中，该命令生成的分享包会原样带出 CapCut 写入草稿的 `device_id`、`mac_address` 与 `hard_disk_id`：脱敏器只处理了用户主目录路径和电子邮件地址，而 `SANITIZE_REPORT.json` 自身的 `source_dir` / `out_dir` 未经脱敏写入，又把用户名带了回来。由于文档建议的流程正是把该分享包附到公开 issue 上，照做即会公开一个稳定的设备 ID 与 MAC 地址——尽管文件名与报告都称其“已脱敏”。已在 0.18.0 修复（[#59](https://github.com/renezander030/capcut-cli/issues/59)）。**请将更早版本生成的任何分享包视为未脱敏。** `npm install -g capcut-cli@latest`。
+**在终端里创建和编辑真正的 CapCut / 剪映项目 —— 或者交给任何大模型 Agent 来做。**
 
-> **安全提示 —— 请升级到 0.17.1 或更高版本。** 0.17.0 及更早版本在 `export --batch` 中把草稿文件夹名直接拼进要执行的自动化脚本，因此一个精心命名的文件夹可以在 macOS 与 Windows 上执行自己的命令。0.17.1 已修复，同时修复的还有：草稿的字幕颜色可注入 ffmpeg 滤镜参数（`render --burn-captions`）、`compile` 规格的 `name` 可写到草稿存储之外、每次草稿写入使用的临时文件名可被预测，以及 `serve` 把凭据值回显到自己的输出中。两处注入都需要一个并非你本人创建的草稿文件夹或草稿文件，因此影响范围是本地而非远程。升级：`npm install -g capcut-cli@latest`。详见 [更新日志](./CHANGELOG.md)。
+在 CapCut 中打开成果，每条轨道依然可编辑。capcut-cli 直接操作本地草稿存储：JSON 进、JSON 出，没有上传、没有 API、没有 MCP 服务，也没有 HTTP 守护进程。
+
+`原始录音` → `静音感知剪辑 + 样式化字幕` → `可编辑的 CapCut / 剪映草稿`
+
+[**▶ 观看一个带字幕的成片示例（60 秒）**](./media/two-sisters-vietnam-short.mp4)
+
+## 安装并打开你的第一个可编辑草稿
+
+**前置要求：** Node ≥ 18（仅用内置模块，无原生依赖）。可选工具解锁特定命令：Whisper 用于 `caption`，FFmpeg 用于 `render`，ffprobe 用于自动读取媒体元数据，`ANTHROPIC_API_KEY` 用于 `translate`。
+
+```bash
+npm install -g capcut-cli
+```
+
+```bash
+capcut doctor
+capcut quickstart my-first --video clip.mp4 --srt captions.srt
+capcut info ./my-first/ -H
+```
+
+**结果：** 一个真实的本地项目，视频和字幕都在可编辑的轨道上 —— 不是压平后的导出文件。在 CapCut 或剪映中打开它，进行审阅、调整与渲染。发布这一下点击，始终留给人来完成。
+
+有用的话，[给 capcut-cli 加个 Star](https://github.com/renezander030/capcut-cli)，帮助更多剪辑师和 Agent 开发者发现它。
+
+也可以从源码构建：`git clone https://github.com/renezander030/capcut-cli && cd capcut-cli && npm install && npm run build`（然后用 `npm link` 暴露出 `capcut`）。或者不安装，直接运行任意命令：`npx capcut-cli <command>`。
+
+> [!IMPORTANT]
+> **请先升级，不要继续使用旧版本。** 0.17.2 及更早版本生成的 fixture 包，可能带有稳定的设备标识符，必须视为未脱敏处理（[#59](https://github.com/renezander030/capcut-cli/issues/59)）。0.17.0 及更早版本还存在本地命令/过滤器注入路径，以及不安全的临时文件与凭据输出行为。这些问题分别已在 0.18.0 与 0.17.1 中修复。运行 `npm install -g capcut-cli@latest`，完整说明见[更新日志](./CHANGELOG.md)。
 
 > **免责声明：** 本项目为独立的、社区维护的项目，与 CapCut、剪映或字节跳动有限公司（ByteDance Ltd.）**无任何隶属、赞助或背书关系**。"CapCut" 与 "剪映" 为字节跳动有限公司的商标，所有产品名称、徽标与品牌均归各自所有者所有，此处仅用于标识（指称性使用）目的。
 
@@ -28,31 +55,11 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
+## 发布说明
+
+> **v0.21.0 新增：** issue [#50](https://github.com/renezander030/capcut-cli/issues/50) 中 CapCut Mac 9.2.8 嵌套 Timelines 布局的报告有了修复路径——`sync-timelines --nested` 以显式选择的方式把根时间线复制进 `Timelines/<id>/` 文档（每个文档保留自己的 GUID，即讨论串中验证过的解决办法），`fixture --check` 会在你附上诊断包之前机械化地检查是否残留家目录路径、邮箱或设备 ID。每次写入拒绝现在都会标明触发的守卫（`refused [editor-open]` / `[version-boundary]` / `[draft-changed-on-disk]`），粘贴的 stderr 不再有歧义。另有 `catalogue <query>`（按名称在全部内置与采集目录中查 resource_id）、`lint --pip`（画中画+蒙版工作流校验，[#78](https://github.com/renezander030/capcut-cli/issues/78)）、`import-srt --clone-style`（无需先查段 ID 即沿用草稿现有字幕样式）、`relink --stage`（修复后的草稿可随文件夹迁移）、只观察不写入的 `media-unregistered` 提示（pyCapCut#13），以及 version-support 与 jianying-encryption 的中文文档。没有删除任何命令，现有参数含义均未改变。详见[更新日志](./CHANGELOG.md)。
+
 > **v0.20.0 新增：** 字幕样式现在可以双向跨越草稿边界——`export-ass` 写出 `[V4+ Styles]`、逐区间覆盖标签与 `--karaoke` 逐词计时，`import-ass` 则保留内联的粗体/斜体/颜色/字号区间，不再压平为纯文本，并有往返测试兜底。原始录音的处理链路就此闭环：`detect-silence` 找出静音段（`--pad` 留出余量，不会把词切在半个音节上），`tts` 可通过任意本地 TTS 工具（piper、`say`、espeak-ng）把文稿直接配音到音频轨上。`render` 补完了 0.19.0 的快速失败工作——音频滤镜链与视频链一样接受预检（[#91](https://github.com/renezander030/capcut-cli/issues/91)）——并新增 `--encoder` 以启用硬件编码器。另有 `harvest-enums --sync`/`--add` 支持整库扫描与手工登记，`diagnose` 现在能为悬而未决的存储布局问题采集脱敏证据（[#50](https://github.com/renezander030/capcut-cli/issues/50)）。没有删除任何命令，现有参数含义均未改变。详见[更新日志](./CHANGELOG.md)。
-
-> **v0.19.1 新增：** 此前每一处多区间文字高亮都被写到了文本末尾之外。`styles[].range` 存的是 UTF-16 码元（code unit）而非 UTF-16LE 字节，因此 `text-ranges`、`caption --karaoke`、`--highlight-words` 以及任何带 `text_ranges` 的预设，写入的偏移量都是应有值的两倍——普通的 `add-text` 看起来正常，只是因为整段区间会被裁回文本末尾（[#85](https://github.com/renezander030/capcut-cli/issues/85)，由 [@hillimited](https://github.com/hillimited) 在 38 个由 App 创建的草稿上实测得出）。所有读写该偏移量的位置均已修正，`lint --fix` 可修复旧版本写出的草稿（`text-range-doubled`）。详见[更新日志](./CHANGELOG.md)。
-
-## 安装
-
-**前置要求：** Node ≥ 18（仅用内置模块，无原生依赖）。可选工具解锁特定命令：Whisper 用于 `caption`，FFmpeg 用于 `render`，ffprobe 用于自动读取媒体元数据，`ANTHROPIC_API_KEY` 用于 `translate`。
-
-```bash
-npm install -g capcut-cli      # 或：npx capcut-cli <command>
-```
-
-从源码构建：`git clone https://github.com/renezander030/capcut-cli && cd capcut-cli && npm install && npm run build`（再 `npm link` 暴露 `capcut`）。
-
-## 快速上手
-
-```bash
-capcut doctor                                  # 检查 Node、FFmpeg、whisper、草稿目录
-capcut quickstart my-first --video clip.mp4    # 创建 + 加素材 + lint，并打印“在 CapCut 中打开”的步骤
-capcut info ./my-first/                         # 查看草稿（加 -H 显示表格）
-```
-
-然后在 CapCut 中打开项目审阅并渲染。所有短视频平台都禁止自动上传，所以最后的发布按钮由你来点。
-
-**剪映（国内版）用户：** 版本须知（6.0+ 加密）、草稿目录位置与 `--jianying` 命名空间，见 **[剪映快速上手](./docs/quickstart.zh-CN.md)**。
 
 ## 常用命令
 
@@ -95,7 +102,7 @@ CapCut / 剪映把每个项目存为本地 JSON。capcut-cli 加载这个存储�
 - [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md) —— 每个命令与参数（[英文原版](./docs/command-reference.md)）
 - [docs/quickstart.zh-CN.md](./docs/quickstart.zh-CN.md) —— 剪映快速上手：版本须知、草稿目录、`--jianying` 命名空间
 - [examples/](./examples/) —— 端到端示例（配音对齐、serve 自动化、批量字幕修正）
-- [docs/version-support.md](./docs/version-support.md) · [docs/jianying-encryption.md](./docs/jianying-encryption.md)
+- [docs/version-support.zh-CN.md](./docs/version-support.zh-CN.md)（[英文原版](./docs/version-support.md)）· [docs/jianying-encryption.zh-CN.md](./docs/jianying-encryption.zh-CN.md)（[英文原版](./docs/jianying-encryption.md)）
 - [CHANGELOG.md](./CHANGELOG.md) · [Releases](https://github.com/renezander030/capcut-cli/releases) —— 更新内容
 - [draftcat](https://github.com/renezander030/draftcat) —— 姊妹项目：受治理的 AI 流水线（Go, MIT），同样单二进制、无需 API
 

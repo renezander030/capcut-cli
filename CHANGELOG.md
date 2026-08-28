@@ -4,6 +4,111 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-08-28
+
+One thread runs through most of this release: the issue-[#50](https://github.com/renezander030/capcut-cli/issues/50)
+cluster finally got movement. The CapCut Mac 9.2.8 report confirmed the nested
+`Timelines/<id>/` documents as the file the app actually reads on that build,
+with a hand-verified workaround — this release mechanizes that workaround as an
+explicit opt-in repair, makes the fixture bundle that issue is still waiting on
+mechanically checkable for private data, and tags every write refusal with a
+stable gate id so the next pasted stderr line cannot be misread. Around it:
+ecosystem-mined portability and discovery work (`catalogue`, `relink --stage`,
+the `media-unregistered` note), the PIP + local-mask validation issue
+[#78](https://github.com/renezander030/capcut-cli/issues/78) asked for, id-free
+caption styling on import, and Chinese docs parity. No command was removed. The
+only existing-output changes are additive JSON fields, the `refused [gate-id]:`
+prefix on refusal messages, and `sync-timelines`' applied summary naming the
+actual canonical file instead of hardcoding `draft_content.json`.
+
+### Added
+
+- **`sync-timelines --nested` — the issue [#50](https://github.com/renezander030/capcut-cli/issues/50) repair, as an explicit opt-in** — on
+  CapCut International for Mac 9.2.8 the nested `Timelines/<main_timeline_id>/draft_info.json` is authoritative and
+  root-file writes are silently discarded; the reporter's hand-verified fix was copying the CLI-written root file over
+  the nested documents, keeping the timeline id. `--nested` does exactly that: the plan additionally covers every
+  `Timelines/<id>/` timeline document plus its same-directory `template-2.tmp`, in the same canonical → mirror
+  direction, behind the same newer-mirror refusal (`--force-write` to override), with each nested document keeping its
+  own GUID and comparing by id-normalized timeline hash. `Timelines/project.json` — the pointer that names the active
+  timeline — is never touched, and nothing changes without the flag: a default run that sees nested documents says so
+  and points at the opt-in instead of reporting "in sync" about files it never read. PR #51's canonical-read flip
+  stays rejected pending a field artifact; this changes which files an explicit repair can *write*, never which file
+  any command *reads*. Fork-proven demand: the most-diverged community fork shipped its own `sync-timelines` repair.
+- **`lint --pip` — validation for the PIP + local-mask workflow ([#78](https://github.com/renezander030/capcut-cli/issues/78))** — the discussion-#43 build
+  (duplicate a clip onto an upper layer, mask the copy) has four ways to be silently wrong: the overlay never landed,
+  the mask never got attached, the keyframes did not write, the copy points at missing media. `--pip` reports the
+  counts (`overlays`, `overlay_keyframes`, `masks_attached`, `masks_orphaned`, `missing_media` — by path, not just a
+  count) in the JSON and `-H` outputs, and raises a `mask-orphaned` warning per never-attached mask so the exit code
+  fails CI exactly as the issue's acceptance criteria ask. Gated behind the flag deliberately: an ordinary draft
+  carrying an unreferenced mask is not necessarily damaged (the [#88](https://github.com/renezander030/capcut-cli/issues/88) lesson), but in a pipeline that just tried
+  to attach one it is precisely the failure being looked for.
+- **`catalogue <query>` — name → resource_id in one call** — the ecosystem's most repeated resource pain is hand-
+  extracting effect ids from the app when a display name is all you have (pyJianYingDraft#174 has no extraction path
+  for encrypted-era resources; pyCapCut#12's static tables miss newer ids). `catalogue` searches every bundled table,
+  the filters/bubbles starter catalogues, and the `harvest-enums` user catalogue at once — exact matches first, then
+  prefix, then substring, `--kind <category>` to narrow, `--limit` to cap, and each row labelled `bundled` or `user`.
+  Pasting a resource id answers the reverse question ("what is this id?") — ids match exactly, never fuzzily.
+- **`import-srt` / `import-ass` `--clone-style` — keep the draft's caption look without hunting a segment id** —
+  `--style-ref <id>` already copied styling from an existing segment, but agents and one-liners had to query `texts`
+  first to find the id. `--clone-style` resolves it: the newest text segment on the target track (any text track as
+  fallback), then rides the `--style-ref` machinery unchanged. An explicit `--style-ref` wins; a draft with no text
+  segment fails fast with guidance instead of importing unstyled cues.
+- **`relink --stage` — portable repair** — `relink` rewrote paths but left the draft depending on files outside its
+  folder, which is exactly what black-screens a draft the moment the folder moves machines
+  (pyJianYingDraft#177's Mac-sandbox "content corrupted" case). With `--stage`, each video/audio file this run
+  relinks is copied into `assets/<kind>/` via the same content-hash-deduplicating path `add-video`/`add-audio` use,
+  and the material points at the copy. Only files the run actually relinked are staged; `--dry-run` skips the copy —
+  a file copy is a side effect no draft write can roll back.
+- **`lint` `media-unregistered` — observe-only sidecar note (pyCapCut#13)** — CapCut International 9.1.0 on macOS is
+  reported to show timeline media as "file inaccessible" and demand per-clip relinking when `draft_meta_info.json`'s
+  `draft_materials` registers nothing, even with valid paths in the timeline. The registration *write* stays
+  deliberately out of scope — no real entry shape has been captured yet — so lint now names the hazard where CI will
+  actually see it: info severity (never fails an exit code), only when the sidecar exists, provably registers
+  nothing, and the referenced media is actually present on disk, with the `capcut fixture` ask attached — the one
+  artifact the write could be built from.
+- **`fixture --check` — mechanical redaction verification** — the bundle README has always ended with "review the
+  files yourself", and that burden is measurably what stalls contributions: the 9.2.8 reporter in
+  [#50](https://github.com/renezander030/capcut-cli/issues/50) held the bundle back until confident nothing private
+  leaked. `--check` scans every text file in the finished bundle — `SANITIZE_REPORT.json` and the README included,
+  the [#59](https://github.com/renezander030/capcut-cli/issues/59) lesson — for residual home-path shapes, emails
+  (the redactor's `redacted@example.com` placeholder excepted), unredacted `device_id`/`mac_address`/`hard_disk_id`
+  values, and the machine's account name, reporting `file:line` and `kind` per finding (never the leaked value
+  itself) and exiting non-zero on any. `capcut fixture <bundle-dir> --check` re-checks an existing bundle without
+  rebuilding.
+- **Chinese docs parity** — `README.zh-CN.md` caught up with the English README's restructure (#97), and
+  `docs/version-support.zh-CN.md` + `docs/jianying-encryption.zh-CN.md` now exist alongside the quickstart and
+  command-reference translations — the version-support and encryption stories were previously invisible to the
+  project's largest user segment.
+
+### Changed
+
+- **Write refusals name their gate** — a refusal now reads `refused [editor-open]: …`, `refused [version-boundary]: …`,
+  `refused [draft-changed-on-disk]: …` (and `sync-timelines --apply`'s `refused [mirror-newer]: …`). Motivated by a
+  [#50](https://github.com/renezander030/capcut-cli/issues/50) side report where "CapCut is running" was quoted with
+  no CapCut process alive: two of the three write gates mention `--force-write`, so a paraphrased report could not
+  identify which gate fired. The tag is stable and greppable; the message text after it is unchanged.
+- **`sync-timelines --apply`'s summary names the plan's canonical** — the applied line hardcoded
+  `Reconciled from draft_content.json:` even on the draft_info-primary layout, where the canonical is
+  `draft_info.json`. It now prints the file the repair actually read from.
+
+### Fixed
+
+- **The pre-commit test gate could pass on a red suite** — `npm test --silent 2>&1 | tail -20` reports the *pipeline's*
+  exit status, which is `tail`'s, so `set -e` never saw a test failure and a failing suite could commit silently
+  (plain `sh` has no `pipefail`). The hook now captures the run to a file and propagates the real status, printing the
+  last 40 lines on failure.
+- **`action.yml` passed composite-action inputs through shell interpolation** — inputs are now passed via `env`
+  ([#94](https://github.com/renezander030/capcut-cli/issues/94)); shipped on master since 2026-08-23, first release
+  here.
+- **9.x stores got nested-Timelines evidence with no explanation** — `diagnose` attached the redacted
+  `nested_evidence` block on ≥ 8.7 storage and `fixture` bundled the nested documents, but the human-readable
+  next-action and the `version` note were gated on the layout value, which stops at 8.7 by design — so a 9.x user got
+  a report carrying `Timelines/` evidence with no line of prose saying why it was collected
+  ([#95](https://github.com/renezander030/capcut-cli/issues/95),
+  [#96](https://github.com/renezander030/capcut-cli/pull/96)); shipped on master since 2026-08-23, first release
+  here. The note asserts neither the 7.x discard finding nor the 8.5.0 survival finding — both predate the 8.7
+  storage change.
+
 ## [0.20.0] — 2026-08-21
 
 Two threads run through this release. Subtitles now carry their styling across

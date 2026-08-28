@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.19.1",
+  "version": "0.21.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -203,6 +203,15 @@
           "type": "boolean",
           "required": false,
           "description": "Skip ffprobe media checks (VFR / unreadable media)."
+        },
+        {
+          "name": "pip",
+          "flags": [
+            "--pip"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Validate the PIP + local-mask workflow (issue #78): report overlay / overlay-keyframe / mask-attachment counts and missing media by path, and fail the exit code on an orphaned (never-attached) mask."
         },
         {
           "name": "ffprobe_cmd",
@@ -2884,6 +2893,15 @@
           "description": "Copy styling from this text segment."
         },
         {
+          "name": "clone_style",
+          "flags": [
+            "--clone-style"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Copy styling from the draft's newest existing caption (target track first, any text track as fallback) — --style-ref without having to look the segment id up. An explicit --style-ref wins."
+        },
+        {
           "name": "time_offset",
           "flags": [
             "--time-offset"
@@ -3216,6 +3234,15 @@
           "type": "id",
           "required": false,
           "description": "Copy styling from this text segment."
+        },
+        {
+          "name": "clone_style",
+          "flags": [
+            "--clone-style"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Copy styling from the draft's newest existing caption (target track first, any text track as fallback) — --style-ref without having to look the segment id up. An explicit --style-ref wins."
         },
         {
           "name": "time_offset",
@@ -4045,7 +4072,7 @@
     {
       "name": "relink",
       "summary": "Repair broken media paths (--dir or --from/--to).",
-      "usage": "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",
+      "usage": "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>) [--stage]",
       "positionals": [
         {
           "name": "project",
@@ -4085,6 +4112,15 @@
           "type": "path",
           "required": false,
           "description": "New path prefix."
+        },
+        {
+          "name": "stage",
+          "flags": [
+            "--stage"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Copy each file this run relinks into the draft's assets/<kind>/ and point the material at the copy, so the repaired draft is portable (video/audio only; skipped under --dry-run — a copy is a side effect no draft write rolls back)."
         }
       ],
       "mutates": true,
@@ -4382,6 +4418,75 @@
       }
     },
     {
+      "name": "catalogue",
+      "summary": "Find a resource id by name across every category, harvested entries included.",
+      "usage": "capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]",
+      "positionals": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "n",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "kind",
+          "flags": [
+            "--kind"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "Search only this category (default: all categories, filters and bubbles included).",
+          "values": [
+            "transitions",
+            "masks",
+            "image_intros",
+            "image_outros",
+            "image_combos",
+            "text_intros",
+            "text_outros",
+            "text_loop_anims",
+            "scene_effects",
+            "character_effects",
+            "audio_effects",
+            "fonts",
+            "filters",
+            "bubbles"
+          ]
+        },
+        {
+          "name": "limit",
+          "flags": [
+            "--limit"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Keep only the N best matches.",
+          "default": 20
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [],
+      "output": {
+        "type": "array",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "harvest-enums",
       "summary": "Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add).",
       "usage": "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
@@ -4532,7 +4637,7 @@
     {
       "name": "fixture",
       "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
-      "usage": "capcut fixture <project> --out <dir>",
+      "usage": "capcut fixture <project> --out <dir> [--check]",
       "positionals": [
         {
           "name": "project",
@@ -4549,6 +4654,15 @@
           "type": "path",
           "required": false,
           "description": "Output directory for the sanitized bundle."
+        },
+        {
+          "name": "check",
+          "flags": [
+            "--check"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Scan the finished bundle (SANITIZE_REPORT.json and README included) for residual home paths, emails, device ids and the account name, reporting file:line per finding and exiting non-zero on any. With only a bundle directory as the argument, re-checks an existing bundle without rebuilding."
         }
       ],
       "mutates": false,
@@ -4565,7 +4679,7 @@
     {
       "name": "sync-timelines",
       "summary": "Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors).",
-      "usage": "capcut sync-timelines <project-dir> [--apply]",
+      "usage": "capcut sync-timelines <project-dir> [--nested] [--apply]",
       "positionals": [
         {
           "name": "project-dir",
@@ -4582,6 +4696,15 @@
           "type": "boolean",
           "required": false,
           "description": "Rewrite only the drifted mirror files from draft_content.json (default: print the plan only)."
+        },
+        {
+          "name": "nested",
+          "flags": [
+            "--nested"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Also reconcile the nested Timelines/<id>/ documents (draft_info.json, draft_content.json, template-2.tmp), each keeping its own GUID — the workaround verified on CapCut Mac 9.2.8 in issue #50, as an explicit opt-in. Timelines/project.json is never touched."
         }
       ],
       "mutates": true,

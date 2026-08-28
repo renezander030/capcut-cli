@@ -259,7 +259,8 @@ export const NESTED_TIMELINES_WRITE_WARNING =
   "Timelines/<id>/draft_info.json and to regenerate the project-root files from it, so this root-mirror edit may " +
   "be discarded the next time the project opens. The CLI still writes the root files only — no verified fixture " +
   "for the nested layout exists yet. If you have such a project, contribute a bundle: " +
-  "`capcut fixture <project> --out <dir>`.";
+  "`capcut fixture <project> --out <dir>`. To copy this edit into the nested documents explicitly, run " +
+  "`capcut sync-timelines <project> --nested --apply` (opt-in repair).";
 
 /** The `diagnose` next_action / `version` note naming the layout — same shape
  * as the draft_info-primary action below (name the layout, state the risk,
@@ -268,8 +269,9 @@ export const NESTED_TIMELINES_ACTION =
   "Timelines/ directory with a nested timeline document: CapCut 7.x is reported to keep the live document at " +
   "Timelines/<id>/draft_info.json, with the project-root file a regenerated mirror (issue #50). Edit commands " +
   "still read and write the project-root files, so CapCut 7.x may discard those edits on the next open. " +
-  "Evidence for this layout is report-only — if you have such a project, contribute a bundle: " +
-  "`capcut fixture <project> --out <dir>`.";
+  "`capcut sync-timelines <project> --nested --apply` copies the root timeline into the nested documents as an " +
+  "explicit opt-in repair. Evidence for this layout is report-only — if you have such a project, contribute a " +
+  "bundle: `capcut fixture <project> --out <dir>`.";
 
 /**
  * The same structure on >= 8.7 storage, where `layout` deliberately stays at its
@@ -287,7 +289,9 @@ export const NESTED_TIMELINES_MODERN_ACTION =
   "Timelines/ directory with a nested timeline document, on CapCut >= 8.7 storage. No discard risk is claimed " +
   "here and none is ruled out: the 7.x report in issue #50 and the 8.5.0 open/close round trip in issue #68 both " +
   "predate this storage generation, so what the app does with the nested document on >= 8.7 is unevidenced in " +
-  "either direction. Edit commands read and write the project-root files only. If this project opens in your app " +
+  "either direction. Edit commands read and write the project-root files only; " +
+  "`capcut sync-timelines <project> --nested --apply` copies the root timeline into the nested documents as an " +
+  "explicit opt-in repair. If this project opens in your app " +
   "with a CLI edit intact — or without it — that is the artifact issue #50 has been blocked on: " +
   "`capcut fixture <project> --out <dir>`.";
 
@@ -611,6 +615,10 @@ export interface TimelineSyncTarget {
   timeline_hash: string | null;
   guid: string | null;
   guid_drifted: boolean;
+  /** Set on Timelines/<id>/ documents included by the --nested opt-in. These
+   * keep their own GUID on repair: the verified 9.2.8 workaround in issue #50
+   * writes the timeline id into the nested document, not the root draft id. */
+  nested?: boolean;
   tracks?: number;
   segments?: number;
 }
@@ -640,6 +648,12 @@ export interface TimelineSyncPlan {
   targets: TimelineSyncTarget[];
   drifted: string[];
   unreconcilable: TimelineSyncUnreconcilable[];
+  /** Count of Timelines/<id>/ documents on disk that --nested would cover —
+   * reported even when the run did not include them, so the plan can point at
+   * the opt-in instead of silently ignoring the nested layout (issue #50). */
+  nested_available: number;
+  /** Whether this plan was computed with the --nested opt-in. */
+  nested_included: boolean;
 }
 
 export interface TimelineSyncResult {
@@ -647,6 +661,10 @@ export interface TimelineSyncResult {
   canonicalDraft: Draft;
   canonicalCandidate: DraftCandidate;
   driftedCandidates: DraftCandidate[];
+  /** Drifted Timelines/<id>/ documents (--nested only). Each carries the GUID
+   * the rewrite must keep: the nested document's own timeline id, per the
+   * verified issue-#50 workaround — never the canonical root draft id. */
+  nestedDriftedCandidates: Array<{ candidate: DraftCandidate; keepGuid: string | null }>;
 }
 
 function syncTarget(candidate: DraftCandidate, state: TimelineSyncTarget["state"], guidDrifted: boolean) {
@@ -663,6 +681,46 @@ function syncTarget(candidate: DraftCandidate, state: TimelineSyncTarget["state"
   };
 }
 
+// Nested sync targets probed inside each Timelines/<id>/ directory: the
+// timeline documents detection already knows, plus the same-directory
+// template-2.tmp mirror the 9.2.8 report names (issue #50). project.json is
+// the pointer file and is never a sync target — the repair must not rewrite
+// which timeline the app considers active.
+const NESTED_SYNC_FILES = [...NESTED_TIMELINE_FILES, "template-2.tmp"] as const;
+
+function nestedSyncDocPaths(projectDir: string): string[] {
+  const timelinesDir = join(projectDir, "Timelines");
+  let entries: string[];
+  try {
+    if (!statSync(timelinesDir).isDirectory()) return [];
+    entries = readdirSync(timelinesDir).sort();
+  } catch {
+    return [];
+  }
+  const rel: string[] = [];
+  for (const entry of entries) {
+    const entryDir = join(timelinesDir, entry);
+    try {
+      if (!statSync(entryDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    for (const name of NESTED_SYNC_FILES) {
+      if (existsSync(join(entryDir, name))) rel.push(`Timelines/${entry}/${name}`);
+    }
+  }
+  return rel;
+}
+
+/** Timeline hash with the draft id normalized away. Nested Timelines/<id>/
+ * documents keep their own GUID on repair (issue #50's verified workaround
+ * writes the timeline id), so their sync state must compare timeline content,
+ * not identity — otherwise a correctly repaired nested document would report
+ * drifted forever. */
+function timelineHashWithoutId(draft: Draft): string {
+  return hash(JSON.stringify({ ...draft, id: "" }));
+}
+
 /**
  * Plan for `sync-timelines` (issue #39, symptom #35): draft_content.json is
  * canonical (draft_info.json on the draft_info-primary Mac layout — see
@@ -677,8 +735,17 @@ function syncTarget(candidate: DraftCandidate, state: TimelineSyncTarget["state"
  * project directory or its draft_content.json path; any other explicitly
  * named file is rejected so the plan and the write always cover the same
  * target set.
+ *
+ * With `nested: true` (the --nested opt-in, issue #50) the plan additionally
+ * covers every Timelines/<id>/ timeline document plus its template-2.tmp
+ * mirror, in the same canonical -> mirror direction and behind the same
+ * newer-mirror refusal. Nested documents keep their own GUID on rewrite and
+ * compare by id-normalized timeline hash; Timelines/project.json is never a
+ * target. This is the 9.2.8 workaround verified in issue #50, mechanized —
+ * it does not change which file any command reads (PR #51's canonical flip
+ * stays rejected pending a field artifact).
  */
-export function planTimelineSync(input: string): TimelineSyncResult {
+export function planTimelineSync(input: string, opts: { nested?: boolean } = {}): TimelineSyncResult {
   const resolved = resolve(input);
   if (existsSync(resolved) && statSync(resolved).isFile() && basename(resolved) !== "draft_content.json") {
     throw new Error(
@@ -746,6 +813,47 @@ export function planTimelineSync(input: string): TimelineSyncResult {
     }
   }
 
+  // Nested Timelines/<id>/ documents (issue #50), behind the --nested opt-in.
+  // Same direction (canonical -> mirror) and same newer-mirror hazard gate as
+  // the root mirrors; the differences are that nested documents keep their own
+  // GUID on rewrite (the verified 9.2.8 workaround writes the timeline id) and
+  // therefore compare by id-normalized timeline hash.
+  const nestedDocs = nestedSyncDocPaths(store.projectDir);
+  const nestedDriftedCandidates: TimelineSyncResult["nestedDriftedCandidates"] = [];
+  if (opts.nested === true) {
+    const canonicalContentHash = timelineHashWithoutId(canonicalDraft);
+    for (const rel of nestedDocs) {
+      const parsed = parseCandidate(join(store.projectDir, rel));
+      if (!parsed.exists) continue;
+      // Display and write under the project-relative name so nested rows never
+      // collide with the root files they mirror.
+      const candidate = { ...parsed, name: rel } as DraftCandidate;
+      if (!parsed.parseable || !parsed.draft) {
+        unreconcilable.push({
+          file: rel,
+          reason: parsed.error ?? "no readable timeline",
+          workaround:
+            "The CLI cannot reconcile this nested document. Build a redacted bundle with `capcut fixture <project> --out <dir>` " +
+            "and attach it to issue #50 so support for this storage layout can be added.",
+        });
+        continue;
+      }
+      const inSync = timelineHashWithoutId(parsed.draft) === canonicalContentHash;
+      targets.push({
+        ...syncTarget(candidate, inSync ? "in_sync" : "drifted", parsed.draft.id !== canonicalDraft.id),
+        nested: true,
+      });
+      if (!inSync) {
+        drifted.push(rel);
+        nestedDriftedCandidates.push({ candidate, keepGuid: parsed.draft.id ?? null });
+        const mirrorMtime = parsed.mtime ? Date.parse(parsed.mtime) : Number.NaN;
+        if (Number.isFinite(canonicalMtime) && Number.isFinite(mirrorMtime) && mirrorMtime > canonicalMtime) {
+          newerMirrors.push(rel);
+        }
+      }
+    }
+  }
+
   return {
     plan: {
       project_dir: store.projectDir,
@@ -761,10 +869,13 @@ export function planTimelineSync(input: string): TimelineSyncResult {
       targets,
       drifted,
       unreconcilable,
+      nested_available: nestedDocs.length,
+      nested_included: opts.nested === true,
     },
     canonicalDraft,
     canonicalCandidate: canonical,
     driftedCandidates,
+    nestedDriftedCandidates,
   };
 }
 
@@ -813,11 +924,24 @@ function draftMaterialsAllEmpty(value: unknown): boolean {
  * is not provably empty.
  */
 function assessMediaRegistration(store: DraftStore): MediaRegistrationNote | null {
-  const referenced = store.canonical.draft ? referencedLocalMedia(store.canonical.draft) : 0;
-  if (referenced === 0) return null;
   const meta = store.candidates.find((candidate) => candidate.name === "draft_meta_info.json");
+  return assessMediaRegistrationRaw(store.canonical.draft, {
+    exists: meta?.exists ?? false,
+    raw: meta?.raw ?? null,
+  });
+}
+
+/** The sidecar-note core, decoupled from store discovery so `lint` can run the
+ * same observation from a draft + project dir (pyCapCut#13 reports the symptom
+ * landing in CI-shaped pipelines, where diagnose is never run). */
+export function assessMediaRegistrationRaw(
+  draft: Draft | null,
+  meta: { exists: boolean; raw: string | null },
+): MediaRegistrationNote | null {
+  const referenced = draft ? referencedLocalMedia(draft) : 0;
+  if (referenced === 0) return null;
   let state: MediaRegistrationNote["draft_materials"];
-  if (!meta?.exists) {
+  if (!meta.exists) {
     state = "missing-file";
   } else {
     if (meta.raw === null) return null;
@@ -851,6 +975,19 @@ function assessMediaRegistration(store: DraftStore): MediaRegistrationNote | nul
       "`capcut fixture <project> --out <dir>` on it. The sanitized bundle includes draft_meta_info.json and is " +
       "the evidence a registration write can be built from.",
   };
+}
+
+/** File-reading form of the sidecar note for callers that hold a draft and its
+ * project directory rather than a discovered store (lint's media-unregistered
+ * check). Unreadable sidecars return null, same as the store form. */
+export function assessMediaRegistrationAt(draft: Draft, projectDir: string): MediaRegistrationNote | null {
+  const metaPath = join(projectDir, "draft_meta_info.json");
+  if (!existsSync(metaPath)) return assessMediaRegistrationRaw(draft, { exists: false, raw: null });
+  try {
+    return assessMediaRegistrationRaw(draft, { exists: true, raw: stripBom(readFileSync(metaPath, "utf-8")) });
+  } catch {
+    return null;
+  }
 }
 
 export function diagnoseDraftStore(input: string): DraftStoreReport {

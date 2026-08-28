@@ -89,6 +89,13 @@ const TRACK_NAME = option("track_name", ["--track-name"], "string", "Target trac
 const OUT = option("out", ["--out"], "path", "Output path.");
 const FFPROBE = option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary.");
 const STYLE_REF = option("style_ref", ["--style-ref"], "id", "Copy styling from this text segment.");
+const CLONE_STYLE = option(
+  "clone_style",
+  ["--clone-style"],
+  "boolean",
+  "Copy styling from the draft's newest existing caption (target track first, any text track as fallback) — " +
+    "--style-ref without having to look the segment id up. An explicit --style-ref wins.",
+);
 const PRESET = option(
   "preset",
   ["--preset"],
@@ -207,7 +214,7 @@ const usages = {
   prune: "capcut prune <project>",
   register: "capcut register <project-dir> [--apply] [--drafts <dir>]",
   rename: "capcut rename <project> <new-name> [--drafts <dir>]",
-  relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",
+  relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>) [--stage]",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
   diff: "capcut diff <project-a> <project-b>",
@@ -216,12 +223,13 @@ const usages = {
   describe: "capcut describe",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
+  catalogue: "capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]",
   "harvest-enums":
     "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
-  fixture: "capcut fixture <project> --out <dir>",
-  "sync-timelines": "capcut sync-timelines <project-dir> [--apply]",
+  fixture: "capcut fixture <project> --out <dir> [--check]",
+  "sync-timelines": "capcut sync-timelines <project-dir> [--nested] [--apply]",
   restore: "capcut restore <project> [--step <number> | --list]",
   serve: "capcut serve [--queue <path>] [options]",
   decrypt: "capcut decrypt <project-or-file>",
@@ -255,6 +263,13 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("no_check_paths", ["--no-check-paths"], "boolean", "Skip local media path checks."),
     option("fix", ["--fix"], "boolean", "Mechanically repair fixable issues and write the draft."),
     option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
+    option(
+      "pip",
+      ["--pip"],
+      "boolean",
+      "Validate the PIP + local-mask workflow (issue #78): report overlay / overlay-keyframe / mask-attachment " +
+        "counts and missing media by path, and fail the exit code on an orphaned (never-attached) mask.",
+    ),
     FFPROBE,
   ],
   segments: [TRACK],
@@ -450,6 +465,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   "import-srt": [
     TRACK_NAME,
     STYLE_REF,
+    CLONE_STYLE,
     option("time_offset", ["--time-offset"], "time", "Shift imported cues."),
     ...TEXT_STYLE,
     ...KEYWORD_EMPHASIS,
@@ -457,6 +473,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   "import-ass": [
     TRACK_NAME,
     STYLE_REF,
+    CLONE_STYLE,
     option("time_offset", ["--time-offset"], "time", "Shift imported cues."),
     ...TEXT_STYLE,
   ],
@@ -505,6 +522,33 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
   rename: [option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one.")],
+  catalogue: [
+    option(
+      "kind",
+      ["--kind"],
+      "enum",
+      "Search only this category (default: all categories, filters and bubbles included).",
+      {
+        values: [
+          "transitions",
+          "masks",
+          "image_intros",
+          "image_outros",
+          "image_combos",
+          "text_intros",
+          "text_outros",
+          "text_loop_anims",
+          "scene_effects",
+          "character_effects",
+          "audio_effects",
+          "fonts",
+          "filters",
+          "bubbles",
+        ],
+      },
+    ),
+    option("limit", ["--limit"], "number", "Keep only the N best matches.", { default: 20 }),
+  ],
   "harvest-enums": [
     option("apply", ["--apply"], "boolean", "Write the new entries into the user catalogue (default: plan only)."),
     option(
@@ -522,6 +566,14 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("dir", ["--dir"], "path", "Directory containing replacement files."),
     option("from", ["--from"], "path", "Old path prefix."),
     option("to", ["--to"], "path", "New path prefix."),
+    option(
+      "stage",
+      ["--stage"],
+      "boolean",
+      "Copy each file this run relinks into the draft's assets/<kind>/ and point the material at the copy, so the " +
+        "repaired draft is portable (video/audio only; skipped under --dry-run — a copy is a side effect no draft " +
+        "write rolls back).",
+    ),
   ],
   timeline: [option("cols", ["--cols"], "number", "Timeline columns.", { default: 60 })],
   projects: [
@@ -530,13 +582,31 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   concat: [OUT],
   diagnose: [option("bundle", ["--bundle"], "path", "Write a redacted JSON diagnostic bundle.")],
-  fixture: [option("out", ["--out"], "path", "Output directory for the sanitized bundle.")],
+  fixture: [
+    option("out", ["--out"], "path", "Output directory for the sanitized bundle."),
+    option(
+      "check",
+      ["--check"],
+      "boolean",
+      "Scan the finished bundle (SANITIZE_REPORT.json and README included) for residual home paths, emails, " +
+        "device ids and the account name, reporting file:line per finding and exiting non-zero on any. " +
+        "With only a bundle directory as the argument, re-checks an existing bundle without rebuilding.",
+    ),
+  ],
   "sync-timelines": [
     option(
       "apply",
       ["--apply"],
       "boolean",
       "Rewrite only the drifted mirror files from draft_content.json (default: print the plan only).",
+    ),
+    option(
+      "nested",
+      ["--nested"],
+      "boolean",
+      "Also reconcile the nested Timelines/<id>/ documents (draft_info.json, draft_content.json, template-2.tmp), " +
+        "each keeping its own GUID — the workaround verified on CapCut Mac 9.2.8 in issue #50, as an explicit opt-in. " +
+        "Timelines/project.json is never touched.",
     ),
   ],
   "replace-media": [
@@ -674,6 +744,11 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --encoder            -> render (v0.20 proxy video encoder)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
+//   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
+//   --pip                -> lint (v0.21 PIP + mask validation report)
+//   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
+//   --clone-style        -> import-srt, import-ass (v0.21 id-free style preservation)
+//   --stage              -> relink (v0.21 stage relinked media into the draft)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -681,6 +756,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--apply",
   "--bind",
   "--catalogue",
+  "--clone-style",
   "--color-cycle",
   "--data",
   "--easing",
@@ -695,12 +771,16 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keep-track",
   "--keyword-color",
   "--keyword-size",
+  "--kind",
   "--limit",
   "--mask-field",
   "--min-gap",
   "--min-silence",
+  "--nested",
   "--new-track",
   "--pad",
+  "--pip",
+  "--stage",
   "--preset",
   "--ratio",
   "--rect",
@@ -775,7 +855,7 @@ const mutating = new Set([
   "compile",
 ]);
 
-const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
+const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "catalogue", "templates"]);
 const textOutputs = new Set(["export-srt", "export-ass", "export-timeline", "completions"]);
 const fileOutputs = new Set([
   "render",

@@ -142,6 +142,7 @@ export const COMMANDS = [
   "describe",
   "completions",
   "enums",
+  "catalogue",
   "harvest-enums",
   "doctor",
   "diagnose",
@@ -805,6 +806,16 @@ interface Flags {
   volume?: number;
   template?: string;
   drafts?: string;
+  // sync-timelines
+  nested?: boolean;
+  // lint
+  pip?: boolean;
+  // catalogue
+  kind?: string;
+  // import-srt / import-ass
+  cloneStyle?: boolean;
+  // relink
+  stage?: boolean;
   // keyframe
   easing?: string;
   // Phase 1 decorators
@@ -1351,6 +1362,16 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.plan = true;
     } else if (a === "--apply") {
       flags.apply = true;
+    } else if (a === "--nested") {
+      flags.nested = true;
+    } else if (a === "--pip") {
+      flags.pip = true;
+    } else if (a === "--kind" && i + 1 < args.length) {
+      flags.kind = args[++i];
+    } else if (a === "--clone-style") {
+      flags.cloneStyle = true;
+    } else if (a === "--stage") {
+      flags.stage = true;
     } else if (a === "--sync") {
       flags.sync = true;
     } else if (a === "--add") {
@@ -3187,6 +3208,36 @@ async function cmdEnums(flags: Flags): Promise<void> {
   }
 }
 
+async function cmdCatalogue(query: string | undefined, flags: Flags): Promise<void> {
+  const { SEARCHABLE_CATEGORIES, searchCatalogue } = await import("./catalogue.js");
+  if (!query) die("Usage: capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]");
+  if (flags.kind && !SEARCHABLE_CATEGORIES.includes(flags.kind)) {
+    die(`Unknown --kind "${flags.kind}". Categories: ${SEARCHABLE_CATEGORIES.join(", ")}`);
+  }
+  const matches = searchCatalogue(query, {
+    namespace: flags.jianying ? "jianying" : "capcut",
+    kind: flags.kind,
+    limit: flags.limit ?? 20,
+  });
+  if (flags.human) {
+    if (matches.length === 0) {
+      console.log(`No catalogue entries match "${query}".`);
+      return;
+    }
+    console.log(
+      "Category            Slug                              Name                    Resource ID           Source",
+    );
+    for (const m of matches) {
+      console.log(
+        `${m.category.padEnd(19)} ${(m.slug || "(non-ascii)").padEnd(33)} ${(m.name ?? m.member).slice(0, 22).padEnd(23)} ${(m.resource_id ?? "").padEnd(21)} ${m.source}`,
+      );
+    }
+    process.stderr.write(`\n${matches.length} match(es)\n`);
+  } else {
+    out(matches, flags);
+  }
+}
+
 // --- v0.14: keyword emphasis + colour cycling (caption, import-srt) ---
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -3271,6 +3322,30 @@ async function importCuesToDraft(
   const { buildEmphasisRanges, setTextRanges, setTextStyle } = await import("./decorators.js");
   const { addText, copyTextStyle } = await import("./factory.js");
   const offsetUs = flags.timeOffset ? parseTimeInput(flags.timeOffset) : 0;
+
+  // --clone-style (fork parity): keep the draft's existing caption look
+  // without hunting for a segment id first. Resolves to the newest text
+  // segment on the target track (falling back to any text track) and then
+  // rides the --style-ref machinery unchanged; an explicit --style-ref wins.
+  if (flags.cloneStyle && !flags.styleRef) {
+    const textSegments = (trackFilter?: string): Segment[] =>
+      draft.tracks
+        .filter((t) => t.type === "text" && (trackFilter === undefined || t.name === trackFilter))
+        .flatMap((t) => t.segments);
+    const targetTrack = flags.trackName ?? "subtitle";
+    const preferred = textSegments(targetTrack);
+    const pool = preferred.length > 0 ? preferred : textSegments();
+    if (pool.length === 0) {
+      die(
+        "--clone-style needs an existing text segment to copy from, and this draft has none. " +
+          "Style one caption first (add-text / text-style), or pass --style-ref <id>.",
+      );
+    }
+    const source = pool.reduce((a, b) =>
+      (b.target_timerange?.start ?? 0) >= (a.target_timerange?.start ?? 0) ? b : a,
+    );
+    flags.styleRef = source.id;
+  }
 
   // Resolve the style-ref segment once, before writing anything, so a bad ref
   // fails fast instead of halfway through a 200-cue import.
@@ -3420,7 +3495,8 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
 }
 
 async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ exitCode: number }> {
-  const { DEFAULT_LINT_OPTIONS, fixDraft, lintDraft, lintExitCode, summarize } = await import("./lint.js");
+  const { DEFAULT_LINT_OPTIONS, buildPipReport, fixDraft, lintDraft, lintExitCode, pipLintIssues, summarize } =
+    await import("./lint.js");
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -3436,11 +3512,26 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     dryRun: isDryRun(),
   };
 
+  // The --pip report (issue #78): counts for the PIP + local-mask workflow's
+  // silent failure modes, printed alongside the ordinary issues in both output
+  // modes. The loud side (mask-orphaned warnings) joins the issue list so the
+  // exit code fails CI when the mask never got attached.
+  const printPipHuman = (report: ReturnType<typeof buildPipReport> | null): void => {
+    if (!report) return;
+    console.log(
+      `pip: ${report.overlays} overlay(s) · ${report.overlay_keyframes} overlay keyframe(s) · ` +
+        `${report.masks_attached} mask(s) attached · ${report.masks_orphaned} orphaned`,
+    );
+    for (const missing of report.missing_media) console.log(`pip: missing media ${missing}`);
+  };
+
   if (flags.fix) {
     const { fixed, remaining } = fixDraft(draft, opts);
     // Only write if we actually repaired something. --dry-run (global) is
     // honored by saveDraft, which leaves the file and its .bak untouched.
     if (fixed.length > 0) saveDraft(filePath, draft);
+    const pipReport = flags.pip ? buildPipReport(draft, remaining) : null;
+    if (flags.pip) remaining.push(...pipLintIssues(draft));
     const summary = summarize(remaining);
     const exitCode = lintExitCode(summary);
     if (flags.human) {
@@ -3461,13 +3552,25 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
           `${fixed.length} fixed · ${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`,
         );
       }
+      printPipHuman(pipReport);
     } else {
-      out({ ok: summary.errors === 0, fixed, summary, issues: remaining }, flags);
+      out(
+        {
+          ok: summary.errors === 0,
+          fixed,
+          summary,
+          issues: remaining,
+          ...(pipReport ? { pip_report: pipReport } : {}),
+        },
+        flags,
+      );
     }
     return { exitCode };
   }
 
   const issues = lintDraft(draft, opts);
+  const pipReport = flags.pip ? buildPipReport(draft, issues) : null;
+  if (flags.pip) issues.push(...pipLintIssues(draft));
   const summary = summarize(issues);
   const exitCode = lintExitCode(summary);
   if (flags.human) {
@@ -3482,8 +3585,9 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
       console.log("");
       console.log(`${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`);
     }
+    printPipHuman(pipReport);
   } else {
-    out({ ok: summary.errors === 0, summary, issues }, flags);
+    out({ ok: summary.errors === 0, summary, issues, ...(pipReport ? { pip_report: pipReport } : {}) }, flags);
   }
   return { exitCode };
 }
@@ -3963,8 +4067,11 @@ async function cmdRename(positional: string[], flags: Flags): Promise<number> {
 // --force-write. Plan-only by default; --apply writes. Returns the exit code:
 // 0 ok, 1 via die(), 2 when a mirror exists that the CLI cannot reconcile.
 function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number {
-  if (!projectPath) die("Usage: capcut sync-timelines <project-dir> [--apply] [--force-write]");
-  const { plan, canonicalDraft, canonicalCandidate, driftedCandidates } = planTimelineSync(projectPath);
+  if (!projectPath) die("Usage: capcut sync-timelines <project-dir> [--nested] [--apply] [--force-write]");
+  const { plan, canonicalDraft, canonicalCandidate, driftedCandidates, nestedDriftedCandidates } = planTimelineSync(
+    projectPath,
+    { nested: flags.nested === true },
+  );
 
   const warnUnreconcilable = (): void => {
     if (flags.quiet) return;
@@ -3986,6 +4093,17 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   const noteCanonical = (): void => {
     if (!flags.quiet && plan.canonical_note) process.stderr.write(`NOTE: ${plan.canonical_note}\n`);
   };
+  // Never let the nested layout pass silently (issue #50): when Timelines/<id>/
+  // documents exist and this run did not include them, say so and point at the
+  // opt-in instead of reporting "in sync" about files the plan never looked at.
+  const noteNestedSkipped = (): void => {
+    if (!flags.quiet && !plan.nested_included && plan.nested_available > 0) {
+      process.stderr.write(
+        `NOTE: ${plan.nested_available} nested Timelines/ document(s) present but not included in this repair — ` +
+          "pass --nested to reconcile them too (issue #50).\n",
+      );
+    }
+  };
 
   if (plan.in_sync) {
     const ok = plan.unreconcilable.length === 0;
@@ -3995,6 +4113,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     out({ ok, applied: false, message, ...plan, in_sync: ok }, flags);
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     noteCanonical();
+    noteNestedSkipped();
     warnUnreconcilable();
     return ok ? 0 : 2;
   }
@@ -4006,9 +4125,18 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       const canonicalTarget = plan.targets.find((target) => target.state === "canonical");
       process.stderr.write(`plan: canonical ${plan.canonical} (mtime ${canonicalTarget?.mtime})\n`);
       noteCanonical();
+      noteNestedSkipped();
       for (const target of plan.targets) {
         if (target.state !== "drifted") continue;
-        const guidNote = target.guid_drifted ? ` [stale GUID ${target.guid} -> canonical]` : "";
+        // Nested documents keep their own GUID on rewrite (issue #50's verified
+        // workaround); only root mirrors get reconciled to the canonical id.
+        const guidNote = target.nested
+          ? target.guid_drifted
+            ? ` [keeps its own GUID ${target.guid}]`
+            : ""
+          : target.guid_drifted
+            ? ` [stale GUID ${target.guid} -> canonical]`
+            : "";
         process.stderr.write(
           `plan: rewrite ${target.file} (envelope: ${target.envelope}, mtime ${target.mtime})${guidNote}\n`,
         );
@@ -4026,13 +4154,13 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     const running = editorProcesses();
     if (running.length > 0) {
       die(
-        `${running.join(" / ")} is running. Close the editor before repairing this draft, ` +
+        `refused [editor-open]: ${running.join(" / ")} is running. Close the editor before repairing this draft, ` +
           "or pass --force-write if you accept that the app may overwrite the change.",
       );
     }
     if (plan.canonical_stale) {
       die(
-        `${staleCanonicalWarning()} Back up the project, review the plan (capcut sync-timelines ${projectPath}), ` +
+        `refused [mirror-newer]: ${staleCanonicalWarning()} Back up the project, review the plan (capcut sync-timelines ${projectPath}), ` +
           `and pass --force-write only if ${plan.canonical} is really the timeline you want to keep.`,
       );
     }
@@ -4090,8 +4218,24 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
 
   // Optimistic concurrency: neither the canonical source nor a mirror we are
   // about to rewrite may have changed on disk between the plan read and now.
-  if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates]);
+  const nestedCandidates = nestedDriftedCandidates.map((entry) => entry.candidate);
+  if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates, ...nestedCandidates]);
   commitDraftTargets(driftedCandidates, canonicalDraft);
+  // Nested documents keep their own GUID (issue #50's verified 9.2.8 workaround
+  // writes the timeline id into the nested document): commit per GUID group so
+  // each rewrite carries the id the app expects to find there.
+  const nestedGroups = new Map<string | null, typeof nestedCandidates>();
+  for (const entry of nestedDriftedCandidates) {
+    const group = nestedGroups.get(entry.keepGuid) ?? [];
+    group.push(entry.candidate);
+    nestedGroups.set(entry.keepGuid, group);
+  }
+  for (const [guid, group] of nestedGroups) {
+    commitDraftTargets(
+      group,
+      guid === null || guid === canonicalDraft.id ? canonicalDraft : { ...canonicalDraft, id: guid },
+    );
+  }
 
   // App auto-upgrade tripwire: --apply writes outside saveDraft, so it runs
   // the same warn-only last-seen comparison (the JSON result below picks the
@@ -4102,7 +4246,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     if (track.drift) process.stderr.write(`WARNING: ${formatAppVersionDriftWarning(track.drift)}\n`);
   }
 
-  const verify = planTimelineSync(projectPath);
+  const verify = planTimelineSync(projectPath, { nested: flags.nested === true });
   if (!verify.plan.in_sync) {
     die(
       `sync-timelines wrote the targets but they still diverge (${verify.plan.drifted.join(", ")}). ` +
@@ -4125,7 +4269,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     },
     flags,
   );
-  if (!flags.quiet) process.stderr.write(`Reconciled from draft_content.json: ${plan.drifted.join(", ")}\n`);
+  if (!flags.quiet) process.stderr.write(`Reconciled from ${plan.canonical}: ${plan.drifted.join(", ")}\n`);
+  noteNestedSkipped();
   warnUnreconcilable();
   return ok ? 0 : 2;
 }
@@ -4243,22 +4388,25 @@ async function cmdPrune(draft: Draft, filePath: string, flags: Flags): Promise<v
 //   --dir <d>          for each material whose path is missing, look for a file
 //                      with the same basename in <d> and repoint to it.
 //   --from <p> --to <q> prefix-replace on every material path.
-function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
+async function cmdRelink(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   if (!flags.dir && !(flags.from && flags.to)) {
-    die("Usage: capcut relink <project> --dir <folder>  |  --from <oldPrefix> --to <newPrefix>");
+    die("Usage: capcut relink <project> (--dir <folder> | --from <oldPrefix> --to <newPrefix>) [--stage]");
   }
+  const { copyAssetDeduped } = await import("./factory.js");
   const dirIndex = new Map<string, string>();
   if (flags.dir) {
     if (!existsSync(flags.dir)) die(`--dir not found: ${flags.dir}`);
     for (const f of readdirSync(flags.dir)) dirIndex.set(path.basename(f), path.join(flags.dir as string, f));
   }
-  const relinked: Array<{ id: string; from: string; to: string }> = [];
+  const draftDir = path.dirname(path.resolve(filePath));
+  const relinked: Array<{ id: string; from: string; to: string; staged: boolean }> = [];
   let missing = 0;
   let ok = 0;
-  for (const arr of Object.values(draft.materials)) {
+  let staged = 0;
+  for (const [kind, arr] of Object.entries(draft.materials)) {
     if (!Array.isArray(arr)) continue;
     for (const m of arr) {
-      const mat = m as { id?: string; path?: unknown };
+      const mat = m as { id?: string; path?: unknown; material_name?: unknown; name?: unknown };
       if (typeof mat.path !== "string" || mat.path === "") continue;
       let p = mat.path;
       let changed = false;
@@ -4273,8 +4421,39 @@ function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
           changed = true;
         }
       }
+      // --stage: copy the file this run just relinked into assets/<kind>/ and
+      // point the material at the copy — the repaired draft leaves portable
+      // (pyJianYingDraft#177: a draft whose media lives outside the project
+      // folder black-screens when the folder moves machines). Same
+      // copyAssetDeduped path add-video/add-audio use, so re-runs are no-ops.
+      // A file copy is a side effect no draft write rolls back, so --dry-run
+      // skips the copy and the plan keeps the resolved external path.
+      let didStage = false;
+      if (
+        changed &&
+        flags.stage &&
+        !isDryRun() &&
+        (kind === "videos" || kind === "audios") &&
+        existsSync(p) &&
+        !path.resolve(p).startsWith(draftDir + path.sep)
+      ) {
+        const assetKind = kind === "audios" ? "audio" : "video";
+        const destPath = copyAssetDeduped(
+          p,
+          path.resolve(draftDir, "assets", assetKind),
+          assetKind === "audio" ? "audio.mp3" : "media",
+        );
+        p = destPath;
+        didStage = true;
+        staged++;
+        // Keep the display-name fields tracking the staged file, the
+        // replace-media convention — only visible when de-collision renamed.
+        const filename = path.basename(destPath);
+        if ("material_name" in mat) mat.material_name = filename;
+        if ("name" in mat) mat.name = filename;
+      }
       if (changed && p !== mat.path) {
-        relinked.push({ id: mat.id ?? "", from: mat.path, to: p });
+        relinked.push({ id: mat.id ?? "", from: mat.path, to: p, staged: didStage });
         mat.path = p;
       }
       if (existsSync(p)) ok++;
@@ -4282,7 +4461,7 @@ function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
     }
   }
   if (relinked.length > 0) saveDraft(filePath, draft);
-  out({ ok: true, relinked: relinked.length, still_missing: missing, present: ok, changes: relinked }, flags);
+  out({ ok: true, relinked: relinked.length, staged, still_missing: missing, present: ok, changes: relinked }, flags);
 }
 
 // `replace-media` swaps a segment's source file in place (placeholder > final),
@@ -4465,6 +4644,7 @@ const SUMMARIES: Record<string, string> = {
   "add-sfx": "Add a sound effect on a dedicated track.",
   chroma: "Green-screen / chroma key a video segment, or --off.",
   enums: "List enum slugs (transitions, masks, effects, ...) by category.",
+  catalogue: "Find a resource id by name across every category, harvested entries included.",
   doctor: "Environment preflight (Node, whisper, API key, project dir).",
   diagnose: "Inspect canonical draft files, divergence, and editor-write safety.",
   "sync-timelines":
@@ -5061,6 +5241,12 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // `catalogue` is the cross-category search over the same tables — no project needed.
+  if (cmd === "catalogue") {
+    await cmdCatalogue(positional[1], flags);
+    process.exit(0);
+  }
+
   // `doctor` inspects the environment, not a draft — no project needed.
   if (cmd === "doctor") {
     process.exit((await cmdDoctor(flags)) ? 0 : 1);
@@ -5074,17 +5260,44 @@ async function main(): Promise<void> {
 
   // `fixture` reads raw (possibly modern-storage) files and writes a redacted bundle — no loadDraft.
   if (cmd === "fixture") {
-    if (!projectPath) die("Usage: capcut fixture <project> --out <dir>");
-    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir>");
-    const { sanitizeDraftBundle } = await import("./fixture.js");
+    const { sanitizeDraftBundle, verifyBundleRedaction } = await import("./fixture.js");
+    const printCheck = (check: ReturnType<typeof verifyBundleRedaction>): void => {
+      if (flags.quiet) return;
+      for (const finding of check.findings) {
+        process.stderr.write(`LEAK ${finding.kind} ${finding.file}:${finding.line}\n`);
+      }
+      process.stderr.write(
+        check.ok
+          ? `Redaction check passed (${check.files_scanned} files scanned).\n`
+          : `Redaction check FAILED: ${check.findings.length} finding(s) to review before sharing.\n`,
+      );
+    };
+    // Verify-only mode: the positional is a finished bundle, not a project —
+    // re-check it any time without rebuilding (issue #50's hesitant-reporter
+    // case: confidence, on demand, before attaching).
+    if (flags.check && !flags.out && projectPath && existsSync(path.join(projectPath, "SANITIZE_REPORT.json"))) {
+      const check = verifyBundleRedaction(projectPath);
+      out(check, flags);
+      printCheck(check);
+      process.exit(check.ok ? 0 : 1);
+    }
+    if (!projectPath) {
+      die("Usage: capcut fixture <project> --out <dir> [--check]  |  capcut fixture <bundle-dir> --check");
+    }
+    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--check]");
     const report = sanitizeDraftBundle(projectPath, flags.out);
-    out(report, flags);
+    // Scan the real output path from the flag: report.out_dir is itself
+    // redacted (a home-dir project reports /home/USER/…), so it is display
+    // data, not a filesystem path.
+    const check = flags.check ? verifyBundleRedaction(path.resolve(flags.out)) : null;
+    out(check ? { ...report, ok: report.ok && check.ok, redaction_check: check } : report, flags);
     if (!flags.quiet) {
       const total = Object.values(report.redaction_kinds).reduce((a, b) => a + b, 0);
       process.stderr.write(`Sanitized bundle: ${report.out_dir} (${report.files.length} files, ${total} redactions)\n`);
       process.stderr.write(`Review the files, then attach the folder to issue #35.\n`);
     }
-    process.exit(0);
+    if (check) printCheck(check);
+    process.exit(check && !check.ok ? 1 : 0);
   }
 
   // `register` reads draft_content.json directly — no loadDraft: the draft may
@@ -5265,7 +5478,7 @@ async function main(): Promise<void> {
       await cmdPrune(draft, filePath, flags);
       break;
     case "relink":
-      cmdRelink(draft, filePath, flags);
+      await cmdRelink(draft, filePath, flags);
       break;
     case "replace-media":
       requireArgs(positional, 4, "capcut replace-media <project> <segment-id> <new-file> [--retime]");

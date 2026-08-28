@@ -278,8 +278,12 @@ export function assertTargetsUnchangedOnDisk(targets: DraftCandidate[]): void {
     // that is otherwise untouched does not read as a concurrent change.
     const current = stripBom(readFileSync(target.path, "utf-8"));
     if (current !== target.raw) {
+      // The [gate-id] prefix is load-bearing (issue #50): refusal reports
+      // arrive paraphrased ("it said something was running"), and two of the
+      // three gates mention --force-write, so a stable greppable tag is what
+      // makes the next quoted stderr line unambiguous about WHICH gate fired.
       throw new Error(
-        `Draft changed on disk after it was loaded: ${target.name}. ` +
+        `refused [draft-changed-on-disk]: Draft changed on disk after it was loaded: ${target.name}. ` +
           "Reload and retry, or pass --force-write to overwrite intentionally.",
       );
     }
@@ -363,8 +367,10 @@ export function saveDraft(
   if (!forceWrite && isManagedDraftPath(filePath)) {
     const running = editorProcesses();
     if (running.length > 0) {
+      // Tagged like the other write gates (issue #50: a report of this exact
+      // message could not be told apart from the version boundary's refusal).
       throw new Error(
-        `${running.join(" / ")} is running. Close the editor before writing this managed draft, ` +
+        `refused [editor-open]: ${running.join(" / ")} is running. Close the editor before writing this managed draft, ` +
           "or pass --force-write if you accept that the app may overwrite the change.",
       );
     }
@@ -383,7 +389,9 @@ export function saveDraft(
   // mirrors diverged.
   if (options.skipVersionGuard !== true) {
     const safety = assessWriteSafety(draft, store.version);
-    if (safety.action === "refuse" && !forceWrite) throw new Error(safety.reasons.join("\n"));
+    if (safety.action === "refuse" && !forceWrite) {
+      throw new Error(`refused [version-boundary]: ${safety.reasons.join("\n")}`);
+    }
     if (safety.action === "warn" || (safety.action === "refuse" && forceWrite)) {
       process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
     }
