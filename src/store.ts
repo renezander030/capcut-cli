@@ -924,11 +924,24 @@ function draftMaterialsAllEmpty(value: unknown): boolean {
  * is not provably empty.
  */
 function assessMediaRegistration(store: DraftStore): MediaRegistrationNote | null {
-  const referenced = store.canonical.draft ? referencedLocalMedia(store.canonical.draft) : 0;
-  if (referenced === 0) return null;
   const meta = store.candidates.find((candidate) => candidate.name === "draft_meta_info.json");
+  return assessMediaRegistrationRaw(store.canonical.draft, {
+    exists: meta?.exists ?? false,
+    raw: meta?.raw ?? null,
+  });
+}
+
+/** The sidecar-note core, decoupled from store discovery so `lint` can run the
+ * same observation from a draft + project dir (pyCapCut#13 reports the symptom
+ * landing in CI-shaped pipelines, where diagnose is never run). */
+export function assessMediaRegistrationRaw(
+  draft: Draft | null,
+  meta: { exists: boolean; raw: string | null },
+): MediaRegistrationNote | null {
+  const referenced = draft ? referencedLocalMedia(draft) : 0;
+  if (referenced === 0) return null;
   let state: MediaRegistrationNote["draft_materials"];
-  if (!meta?.exists) {
+  if (!meta.exists) {
     state = "missing-file";
   } else {
     if (meta.raw === null) return null;
@@ -962,6 +975,19 @@ function assessMediaRegistration(store: DraftStore): MediaRegistrationNote | nul
       "`capcut fixture <project> --out <dir>` on it. The sanitized bundle includes draft_meta_info.json and is " +
       "the evidence a registration write can be built from.",
   };
+}
+
+/** File-reading form of the sidecar note for callers that hold a draft and its
+ * project directory rather than a discovered store (lint's media-unregistered
+ * check). Unreadable sidecars return null, same as the store form. */
+export function assessMediaRegistrationAt(draft: Draft, projectDir: string): MediaRegistrationNote | null {
+  const metaPath = join(projectDir, "draft_meta_info.json");
+  if (!existsSync(metaPath)) return assessMediaRegistrationRaw(draft, { exists: false, raw: null });
+  try {
+    return assessMediaRegistrationRaw(draft, { exists: true, raw: stripBom(readFileSync(metaPath, "utf-8")) });
+  } catch {
+    return null;
+  }
 }
 
 export function diagnoseDraftStore(input: string): DraftStoreReport {

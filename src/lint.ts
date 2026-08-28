@@ -6,6 +6,7 @@ import { extractStyleRanges, extractText, findMaterial, getTracksByType } from "
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { copyAssetDeduped, effectCatalogue, filterCatalogue } from "./factory.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
+import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
@@ -612,6 +613,39 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           fixable: FIXABLE_CODES.has("mask-field-mismatch"),
         });
       }
+    }
+  }
+
+  // Unregistered-media sidecar note (pyCapCut#13), observe-only: newer builds
+  // (reported on CapCut International 9.1.0, macOS) show timeline media as
+  // "file inaccessible" and prompt per-clip relinking when
+  // draft_meta_info.json's draft_materials registers nothing. The registration
+  // WRITE stays deliberately out of scope until a real entry shape is captured
+  // (src/store.ts rationale) — so this is info-severity: it names the hazard
+  // where CI pipelines will actually see it and asks for the one artifact the
+  // write can be built from. It can never fail an exit code.
+  // Gated on media that actually exists on disk: absent media is
+  // missing-file's finding, and the 9.1.0 symptom is precisely media that IS
+  // there and still shows inaccessible in the app.
+  const presentLocalMedia = (["videos", "audios"] as const).some((kind) =>
+    (draft.materials?.[kind] ?? []).some((mat) => {
+      const p = (mat as { path?: unknown }).path;
+      return typeof p === "string" && p.length > 0 && !/^https?:\/\//i.test(p) && fileExists(p);
+    }),
+  );
+  if (opts.draftDir && presentLocalMedia) {
+    const registration = assessMediaRegistrationAt(draft, opts.draftDir);
+    // missing-file stays diagnose's finding: a folder with no sidecar at all
+    // is the ordinary tool-built shape (`register` exists for it), not the
+    // pyCapCut#13 shape where the sidecar is present and registers nothing.
+    if (registration && registration.draft_materials !== "missing-file") {
+      issues.push({
+        severity: "info",
+        code: "media-unregistered",
+        message: registration.note,
+        fixable: false,
+        suggested_command: `capcut fixture ${opts.draftDir} --out <dir>`,
+      });
     }
   }
 
