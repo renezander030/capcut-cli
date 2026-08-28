@@ -716,8 +716,13 @@ export interface RedactionCheck {
 }
 
 const CHECK_ALLOWED_EMAIL = "redacted@example.com";
-const CHECK_HOME_PATH =
-  /(?:\/Users\/[A-Za-z0-9._-]{2,}|\/home\/[A-Za-z0-9._-]{2,}|[A-Za-z]:\\+Users\\+[A-Za-z0-9._-]{2,})/;
+// The account segment is captured so the redactor's own placeholder can pass:
+// redaction rewrites /home/<name> to /home/USER (same for /Users and
+// C:\Users), keeping the path shape — a bundle built from a home-dir project
+// legitimately contains those placeholder paths, and flagging them would fail
+// every correctly redacted bundle.
+const CHECK_HOME_PATH = /(?:\/Users\/|\/home\/|[A-Za-z]:\\+Users\\+)([A-Za-z0-9._-]{2,})/;
+const CHECK_HOME_PLACEHOLDER = "USER";
 const CHECK_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 // A device key whose value is a non-empty string other than the redactor's
 // "redacted" marker. Numeric tallies in SANITIZE_REPORT.json ("device_id": 2)
@@ -771,7 +776,8 @@ export function verifyBundleRedaction(bundleDir: string): RedactionCheck {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (CHECK_HOME_PATH.test(line)) {
+      const home = line.match(CHECK_HOME_PATH);
+      if (home && home[1] !== CHECK_HOME_PLACEHOLDER) {
         findings.push({ file: rel, line: i + 1, kind: "home-path" });
       } else if (usernameRe?.test(line)) {
         findings.push({ file: rel, line: i + 1, kind: "username" });

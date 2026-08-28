@@ -5286,7 +5286,10 @@ async function main(): Promise<void> {
     }
     if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--check]");
     const report = sanitizeDraftBundle(projectPath, flags.out);
-    const check = flags.check ? verifyBundleRedaction(report.out_dir) : null;
+    // Scan the real output path from the flag: report.out_dir is itself
+    // redacted (a home-dir project reports /home/USER/…), so it is display
+    // data, not a filesystem path.
+    const check = flags.check ? verifyBundleRedaction(path.resolve(flags.out)) : null;
     out(check ? { ...report, ok: report.ok && check.ok, redaction_check: check } : report, flags);
     if (!flags.quiet) {
       const total = Object.values(report.redaction_kinds).reduce((a, b) => a + b, 0);

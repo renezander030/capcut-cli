@@ -70,4 +70,24 @@ describe("fixture --check (redaction verification)", () => {
     assert.ok(kinds.includes("device-key"));
     assert.ok(!r.json.findings.some((f) => f.file === "clean.json"), "redacted placeholders must not be flagged");
   });
+
+  it("allows the redactor's own USER home-path placeholder but flags a real account name", () => {
+    const p = project();
+    after(p.cleanup);
+    const out = join(p.dir, "bundle");
+    assert.equal(spawnCli(["fixture", p.dir, "--out", out]).status, 0);
+    // What a correctly redacted report looks like when the project lives under
+    // a home directory (and what every Windows/macOS temp dir produces).
+    writeFileSync(
+      join(out, "placeholder.json"),
+      JSON.stringify({ a: "/home/USER/drafts/p", b: "/Users/USER/x", c: "C:\\Users\\USER\\y" }),
+    );
+    const clean = spawnCli(["fixture", out, "--check"]);
+    assert.equal(clean.status, 0, `placeholder paths are the redactor working — stderr: ${clean.stderr}`);
+
+    writeFileSync(join(out, "real.json"), JSON.stringify({ a: "/home/hansmustermann/drafts/p" }));
+    const dirty = spawnCli(["fixture", out, "--check"]);
+    assert.equal(dirty.status, 1);
+    assert.ok(dirty.json.findings.some((f) => f.file === "real.json" && f.kind === "home-path"));
+  });
 });
