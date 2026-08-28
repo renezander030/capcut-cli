@@ -805,6 +805,8 @@ interface Flags {
   volume?: number;
   template?: string;
   drafts?: string;
+  // sync-timelines
+  nested?: boolean;
   // keyframe
   easing?: string;
   // Phase 1 decorators
@@ -1351,6 +1353,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.plan = true;
     } else if (a === "--apply") {
       flags.apply = true;
+    } else if (a === "--nested") {
+      flags.nested = true;
     } else if (a === "--sync") {
       flags.sync = true;
     } else if (a === "--add") {
@@ -3963,8 +3967,11 @@ async function cmdRename(positional: string[], flags: Flags): Promise<number> {
 // --force-write. Plan-only by default; --apply writes. Returns the exit code:
 // 0 ok, 1 via die(), 2 when a mirror exists that the CLI cannot reconcile.
 function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number {
-  if (!projectPath) die("Usage: capcut sync-timelines <project-dir> [--apply] [--force-write]");
-  const { plan, canonicalDraft, canonicalCandidate, driftedCandidates } = planTimelineSync(projectPath);
+  if (!projectPath) die("Usage: capcut sync-timelines <project-dir> [--nested] [--apply] [--force-write]");
+  const { plan, canonicalDraft, canonicalCandidate, driftedCandidates, nestedDriftedCandidates } = planTimelineSync(
+    projectPath,
+    { nested: flags.nested === true },
+  );
 
   const warnUnreconcilable = (): void => {
     if (flags.quiet) return;
@@ -3986,6 +3993,17 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   const noteCanonical = (): void => {
     if (!flags.quiet && plan.canonical_note) process.stderr.write(`NOTE: ${plan.canonical_note}\n`);
   };
+  // Never let the nested layout pass silently (issue #50): when Timelines/<id>/
+  // documents exist and this run did not include them, say so and point at the
+  // opt-in instead of reporting "in sync" about files the plan never looked at.
+  const noteNestedSkipped = (): void => {
+    if (!flags.quiet && !plan.nested_included && plan.nested_available > 0) {
+      process.stderr.write(
+        `NOTE: ${plan.nested_available} nested Timelines/ document(s) present but not included in this repair — ` +
+          "pass --nested to reconcile them too (issue #50).\n",
+      );
+    }
+  };
 
   if (plan.in_sync) {
     const ok = plan.unreconcilable.length === 0;
@@ -3995,6 +4013,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     out({ ok, applied: false, message, ...plan, in_sync: ok }, flags);
     if (!flags.quiet) process.stderr.write(`${message}\n`);
     noteCanonical();
+    noteNestedSkipped();
     warnUnreconcilable();
     return ok ? 0 : 2;
   }
@@ -4006,9 +4025,18 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
       const canonicalTarget = plan.targets.find((target) => target.state === "canonical");
       process.stderr.write(`plan: canonical ${plan.canonical} (mtime ${canonicalTarget?.mtime})\n`);
       noteCanonical();
+      noteNestedSkipped();
       for (const target of plan.targets) {
         if (target.state !== "drifted") continue;
-        const guidNote = target.guid_drifted ? ` [stale GUID ${target.guid} -> canonical]` : "";
+        // Nested documents keep their own GUID on rewrite (issue #50's verified
+        // workaround); only root mirrors get reconciled to the canonical id.
+        const guidNote = target.nested
+          ? target.guid_drifted
+            ? ` [keeps its own GUID ${target.guid}]`
+            : ""
+          : target.guid_drifted
+            ? ` [stale GUID ${target.guid} -> canonical]`
+            : "";
         process.stderr.write(
           `plan: rewrite ${target.file} (envelope: ${target.envelope}, mtime ${target.mtime})${guidNote}\n`,
         );
@@ -4090,8 +4118,24 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
 
   // Optimistic concurrency: neither the canonical source nor a mirror we are
   // about to rewrite may have changed on disk between the plan read and now.
-  if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates]);
+  const nestedCandidates = nestedDriftedCandidates.map((entry) => entry.candidate);
+  if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates, ...nestedCandidates]);
   commitDraftTargets(driftedCandidates, canonicalDraft);
+  // Nested documents keep their own GUID (issue #50's verified 9.2.8 workaround
+  // writes the timeline id into the nested document): commit per GUID group so
+  // each rewrite carries the id the app expects to find there.
+  const nestedGroups = new Map<string | null, typeof nestedCandidates>();
+  for (const entry of nestedDriftedCandidates) {
+    const group = nestedGroups.get(entry.keepGuid) ?? [];
+    group.push(entry.candidate);
+    nestedGroups.set(entry.keepGuid, group);
+  }
+  for (const [guid, group] of nestedGroups) {
+    commitDraftTargets(
+      group,
+      guid === null || guid === canonicalDraft.id ? canonicalDraft : { ...canonicalDraft, id: guid },
+    );
+  }
 
   // App auto-upgrade tripwire: --apply writes outside saveDraft, so it runs
   // the same warn-only last-seen comparison (the JSON result below picks the
@@ -4102,7 +4146,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     if (track.drift) process.stderr.write(`WARNING: ${formatAppVersionDriftWarning(track.drift)}\n`);
   }
 
-  const verify = planTimelineSync(projectPath);
+  const verify = planTimelineSync(projectPath, { nested: flags.nested === true });
   if (!verify.plan.in_sync) {
     die(
       `sync-timelines wrote the targets but they still diverge (${verify.plan.drifted.join(", ")}). ` +
@@ -4125,7 +4169,8 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     },
     flags,
   );
-  if (!flags.quiet) process.stderr.write(`Reconciled from draft_content.json: ${plan.drifted.join(", ")}\n`);
+  if (!flags.quiet) process.stderr.write(`Reconciled from ${plan.canonical}: ${plan.drifted.join(", ")}\n`);
+  noteNestedSkipped();
   warnUnreconcilable();
   return ok ? 0 : 2;
 }

@@ -221,7 +221,7 @@ const usages = {
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
   fixture: "capcut fixture <project> --out <dir>",
-  "sync-timelines": "capcut sync-timelines <project-dir> [--apply]",
+  "sync-timelines": "capcut sync-timelines <project-dir> [--nested] [--apply]",
   restore: "capcut restore <project> [--step <number> | --list]",
   serve: "capcut serve [--queue <path>] [options]",
   decrypt: "capcut decrypt <project-or-file>",
@@ -537,6 +537,14 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       ["--apply"],
       "boolean",
       "Rewrite only the drifted mirror files from draft_content.json (default: print the plan only).",
+    ),
+    option(
+      "nested",
+      ["--nested"],
+      "boolean",
+      "Also reconcile the nested Timelines/<id>/ documents (draft_info.json, draft_content.json, template-2.tmp), " +
+        "each keeping its own GUID — the workaround verified on CapCut Mac 9.2.8 in issue #50, as an explicit opt-in. " +
+        "Timelines/project.json is never touched.",
     ),
   ],
   "replace-media": [
