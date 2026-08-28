@@ -214,7 +214,7 @@ const usages = {
   prune: "capcut prune <project>",
   register: "capcut register <project-dir> [--apply] [--drafts <dir>]",
   rename: "capcut rename <project> <new-name> [--drafts <dir>]",
-  relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>)",
+  relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>) [--stage]",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
   diff: "capcut diff <project-a> <project-b>",
@@ -228,7 +228,7 @@ const usages = {
     "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
-  fixture: "capcut fixture <project> --out <dir>",
+  fixture: "capcut fixture <project> --out <dir> [--check]",
   "sync-timelines": "capcut sync-timelines <project-dir> [--nested] [--apply]",
   restore: "capcut restore <project> [--step <number> | --list]",
   serve: "capcut serve [--queue <path>] [options]",
@@ -566,6 +566,14 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("dir", ["--dir"], "path", "Directory containing replacement files."),
     option("from", ["--from"], "path", "Old path prefix."),
     option("to", ["--to"], "path", "New path prefix."),
+    option(
+      "stage",
+      ["--stage"],
+      "boolean",
+      "Copy each file this run relinks into the draft's assets/<kind>/ and point the material at the copy, so the " +
+        "repaired draft is portable (video/audio only; skipped under --dry-run — a copy is a side effect no draft " +
+        "write rolls back).",
+    ),
   ],
   timeline: [option("cols", ["--cols"], "number", "Timeline columns.", { default: 60 })],
   projects: [
@@ -574,7 +582,17 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   concat: [OUT],
   diagnose: [option("bundle", ["--bundle"], "path", "Write a redacted JSON diagnostic bundle.")],
-  fixture: [option("out", ["--out"], "path", "Output directory for the sanitized bundle.")],
+  fixture: [
+    option("out", ["--out"], "path", "Output directory for the sanitized bundle."),
+    option(
+      "check",
+      ["--check"],
+      "boolean",
+      "Scan the finished bundle (SANITIZE_REPORT.json and README included) for residual home paths, emails, " +
+        "device ids and the account name, reporting file:line per finding and exiting non-zero on any. " +
+        "With only a bundle directory as the argument, re-checks an existing bundle without rebuilding.",
+    ),
+  ],
   "sync-timelines": [
     option(
       "apply",
@@ -730,7 +748,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --pip                -> lint (v0.21 PIP + mask validation report)
 //   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
 //   --clone-style        -> import-srt, import-ass (v0.21 id-free style preservation)
-//   --stage              -> add-video, add-audio, replace-media, quickstart, relink (v0.21 media staging)
+//   --stage              -> relink (v0.21 stage relinked media into the draft)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([

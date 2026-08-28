@@ -813,6 +813,8 @@ interface Flags {
   kind?: string;
   // import-srt / import-ass
   cloneStyle?: boolean;
+  // relink
+  stage?: boolean;
   // keyframe
   easing?: string;
   // Phase 1 decorators
@@ -1367,6 +1369,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.kind = args[++i];
     } else if (a === "--clone-style") {
       flags.cloneStyle = true;
+    } else if (a === "--stage") {
+      flags.stage = true;
     } else if (a === "--sync") {
       flags.sync = true;
     } else if (a === "--add") {
@@ -4149,13 +4153,13 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
     const running = editorProcesses();
     if (running.length > 0) {
       die(
-        `${running.join(" / ")} is running. Close the editor before repairing this draft, ` +
+        `refused [editor-open]: ${running.join(" / ")} is running. Close the editor before repairing this draft, ` +
           "or pass --force-write if you accept that the app may overwrite the change.",
       );
     }
     if (plan.canonical_stale) {
       die(
-        `${staleCanonicalWarning()} Back up the project, review the plan (capcut sync-timelines ${projectPath}), ` +
+        `refused [mirror-newer]: ${staleCanonicalWarning()} Back up the project, review the plan (capcut sync-timelines ${projectPath}), ` +
           `and pass --force-write only if ${plan.canonical} is really the timeline you want to keep.`,
       );
     }
@@ -4383,22 +4387,25 @@ async function cmdPrune(draft: Draft, filePath: string, flags: Flags): Promise<v
 //   --dir <d>          for each material whose path is missing, look for a file
 //                      with the same basename in <d> and repoint to it.
 //   --from <p> --to <q> prefix-replace on every material path.
-function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
+async function cmdRelink(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   if (!flags.dir && !(flags.from && flags.to)) {
-    die("Usage: capcut relink <project> --dir <folder>  |  --from <oldPrefix> --to <newPrefix>");
+    die("Usage: capcut relink <project> (--dir <folder> | --from <oldPrefix> --to <newPrefix>) [--stage]");
   }
+  const { copyAssetDeduped } = await import("./factory.js");
   const dirIndex = new Map<string, string>();
   if (flags.dir) {
     if (!existsSync(flags.dir)) die(`--dir not found: ${flags.dir}`);
     for (const f of readdirSync(flags.dir)) dirIndex.set(path.basename(f), path.join(flags.dir as string, f));
   }
-  const relinked: Array<{ id: string; from: string; to: string }> = [];
+  const draftDir = path.dirname(path.resolve(filePath));
+  const relinked: Array<{ id: string; from: string; to: string; staged: boolean }> = [];
   let missing = 0;
   let ok = 0;
-  for (const arr of Object.values(draft.materials)) {
+  let staged = 0;
+  for (const [kind, arr] of Object.entries(draft.materials)) {
     if (!Array.isArray(arr)) continue;
     for (const m of arr) {
-      const mat = m as { id?: string; path?: unknown };
+      const mat = m as { id?: string; path?: unknown; material_name?: unknown; name?: unknown };
       if (typeof mat.path !== "string" || mat.path === "") continue;
       let p = mat.path;
       let changed = false;
@@ -4413,8 +4420,39 @@ function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
           changed = true;
         }
       }
+      // --stage: copy the file this run just relinked into assets/<kind>/ and
+      // point the material at the copy — the repaired draft leaves portable
+      // (pyJianYingDraft#177: a draft whose media lives outside the project
+      // folder black-screens when the folder moves machines). Same
+      // copyAssetDeduped path add-video/add-audio use, so re-runs are no-ops.
+      // A file copy is a side effect no draft write rolls back, so --dry-run
+      // skips the copy and the plan keeps the resolved external path.
+      let didStage = false;
+      if (
+        changed &&
+        flags.stage &&
+        !isDryRun() &&
+        (kind === "videos" || kind === "audios") &&
+        existsSync(p) &&
+        !path.resolve(p).startsWith(draftDir + path.sep)
+      ) {
+        const assetKind = kind === "audios" ? "audio" : "video";
+        const destPath = copyAssetDeduped(
+          p,
+          path.resolve(draftDir, "assets", assetKind),
+          assetKind === "audio" ? "audio.mp3" : "media",
+        );
+        p = destPath;
+        didStage = true;
+        staged++;
+        // Keep the display-name fields tracking the staged file, the
+        // replace-media convention — only visible when de-collision renamed.
+        const filename = path.basename(destPath);
+        if ("material_name" in mat) mat.material_name = filename;
+        if ("name" in mat) mat.name = filename;
+      }
       if (changed && p !== mat.path) {
-        relinked.push({ id: mat.id ?? "", from: mat.path, to: p });
+        relinked.push({ id: mat.id ?? "", from: mat.path, to: p, staged: didStage });
         mat.path = p;
       }
       if (existsSync(p)) ok++;
@@ -4422,7 +4460,7 @@ function cmdRelink(draft: Draft, filePath: string, flags: Flags): void {
     }
   }
   if (relinked.length > 0) saveDraft(filePath, draft);
-  out({ ok: true, relinked: relinked.length, still_missing: missing, present: ok, changes: relinked }, flags);
+  out({ ok: true, relinked: relinked.length, staged, still_missing: missing, present: ok, changes: relinked }, flags);
 }
 
 // `replace-media` swaps a segment's source file in place (placeholder > final),
@@ -5220,17 +5258,41 @@ async function main(): Promise<void> {
 
   // `fixture` reads raw (possibly modern-storage) files and writes a redacted bundle — no loadDraft.
   if (cmd === "fixture") {
-    if (!projectPath) die("Usage: capcut fixture <project> --out <dir>");
-    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir>");
-    const { sanitizeDraftBundle } = await import("./fixture.js");
+    const { sanitizeDraftBundle, verifyBundleRedaction } = await import("./fixture.js");
+    const printCheck = (check: ReturnType<typeof verifyBundleRedaction>): void => {
+      if (flags.quiet) return;
+      for (const finding of check.findings) {
+        process.stderr.write(`LEAK ${finding.kind} ${finding.file}:${finding.line}\n`);
+      }
+      process.stderr.write(
+        check.ok
+          ? `Redaction check passed (${check.files_scanned} files scanned).\n`
+          : `Redaction check FAILED: ${check.findings.length} finding(s) to review before sharing.\n`,
+      );
+    };
+    // Verify-only mode: the positional is a finished bundle, not a project —
+    // re-check it any time without rebuilding (issue #50's hesitant-reporter
+    // case: confidence, on demand, before attaching).
+    if (flags.check && !flags.out && projectPath && existsSync(path.join(projectPath, "SANITIZE_REPORT.json"))) {
+      const check = verifyBundleRedaction(projectPath);
+      out(check, flags);
+      printCheck(check);
+      process.exit(check.ok ? 0 : 1);
+    }
+    if (!projectPath) {
+      die("Usage: capcut fixture <project> --out <dir> [--check]  |  capcut fixture <bundle-dir> --check");
+    }
+    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--check]");
     const report = sanitizeDraftBundle(projectPath, flags.out);
-    out(report, flags);
+    const check = flags.check ? verifyBundleRedaction(report.out_dir) : null;
+    out(check ? { ...report, ok: report.ok && check.ok, redaction_check: check } : report, flags);
     if (!flags.quiet) {
       const total = Object.values(report.redaction_kinds).reduce((a, b) => a + b, 0);
       process.stderr.write(`Sanitized bundle: ${report.out_dir} (${report.files.length} files, ${total} redactions)\n`);
       process.stderr.write(`Review the files, then attach the folder to issue #35.\n`);
     }
-    process.exit(0);
+    if (check) printCheck(check);
+    process.exit(check && !check.ok ? 1 : 0);
   }
 
   // `register` reads draft_content.json directly — no loadDraft: the draft may
@@ -5411,7 +5473,7 @@ async function main(): Promise<void> {
       await cmdPrune(draft, filePath, flags);
       break;
     case "relink":
-      cmdRelink(draft, filePath, flags);
+      await cmdRelink(draft, filePath, flags);
       break;
     case "replace-media":
       requireArgs(positional, 4, "capcut replace-media <project> <segment-id> <new-file> [--retime]");
