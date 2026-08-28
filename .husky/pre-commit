@@ -14,4 +14,16 @@ npx --no-install lint-staged
 # 2. Unit tests. `npm test` rebuilds dist/ first so it matches src/ — without
 #    the rebuild, test:fast runs against a stale build and can pass-or-fail on
 #    code that isn't what's being committed.
-npm test --silent 2>&1 | tail -20
+#    Captured to a file, not piped into tail: a pipeline's exit status is the
+#    LAST command's, so `npm test | tail` reported tail's success and let a red
+#    suite commit silently (sh has no pipefail; set -e never saw the failure).
+test_log="$(mktemp)"
+if npm test --silent >"$test_log" 2>&1; then
+  tail -20 "$test_log"
+  rm -f "$test_log"
+else
+  tail -40 "$test_log"
+  rm -f "$test_log"
+  echo "pre-commit: npm test failed — commit aborted" >&2
+  exit 1
+fi
