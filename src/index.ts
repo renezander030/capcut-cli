@@ -807,6 +807,8 @@ interface Flags {
   drafts?: string;
   // sync-timelines
   nested?: boolean;
+  // lint
+  pip?: boolean;
   // keyframe
   easing?: string;
   // Phase 1 decorators
@@ -1355,6 +1357,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.apply = true;
     } else if (a === "--nested") {
       flags.nested = true;
+    } else if (a === "--pip") {
+      flags.pip = true;
     } else if (a === "--sync") {
       flags.sync = true;
     } else if (a === "--add") {
@@ -3424,7 +3428,8 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
 }
 
 async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ exitCode: number }> {
-  const { DEFAULT_LINT_OPTIONS, fixDraft, lintDraft, lintExitCode, summarize } = await import("./lint.js");
+  const { DEFAULT_LINT_OPTIONS, buildPipReport, fixDraft, lintDraft, lintExitCode, pipLintIssues, summarize } =
+    await import("./lint.js");
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -3440,11 +3445,26 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     dryRun: isDryRun(),
   };
 
+  // The --pip report (issue #78): counts for the PIP + local-mask workflow's
+  // silent failure modes, printed alongside the ordinary issues in both output
+  // modes. The loud side (mask-orphaned warnings) joins the issue list so the
+  // exit code fails CI when the mask never got attached.
+  const printPipHuman = (report: ReturnType<typeof buildPipReport> | null): void => {
+    if (!report) return;
+    console.log(
+      `pip: ${report.overlays} overlay(s) · ${report.overlay_keyframes} overlay keyframe(s) · ` +
+        `${report.masks_attached} mask(s) attached · ${report.masks_orphaned} orphaned`,
+    );
+    for (const missing of report.missing_media) console.log(`pip: missing media ${missing}`);
+  };
+
   if (flags.fix) {
     const { fixed, remaining } = fixDraft(draft, opts);
     // Only write if we actually repaired something. --dry-run (global) is
     // honored by saveDraft, which leaves the file and its .bak untouched.
     if (fixed.length > 0) saveDraft(filePath, draft);
+    const pipReport = flags.pip ? buildPipReport(draft, remaining) : null;
+    if (flags.pip) remaining.push(...pipLintIssues(draft));
     const summary = summarize(remaining);
     const exitCode = lintExitCode(summary);
     if (flags.human) {
@@ -3465,13 +3485,25 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
           `${fixed.length} fixed · ${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`,
         );
       }
+      printPipHuman(pipReport);
     } else {
-      out({ ok: summary.errors === 0, fixed, summary, issues: remaining }, flags);
+      out(
+        {
+          ok: summary.errors === 0,
+          fixed,
+          summary,
+          issues: remaining,
+          ...(pipReport ? { pip_report: pipReport } : {}),
+        },
+        flags,
+      );
     }
     return { exitCode };
   }
 
   const issues = lintDraft(draft, opts);
+  const pipReport = flags.pip ? buildPipReport(draft, issues) : null;
+  if (flags.pip) issues.push(...pipLintIssues(draft));
   const summary = summarize(issues);
   const exitCode = lintExitCode(summary);
   if (flags.human) {
@@ -3486,8 +3518,9 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
       console.log("");
       console.log(`${summary.errors} errors · ${summary.warnings} warnings · ${summary.info} info`);
     }
+    printPipHuman(pipReport);
   } else {
-    out({ ok: summary.errors === 0, summary, issues }, flags);
+    out({ ok: summary.errors === 0, summary, issues, ...(pipReport ? { pip_report: pipReport } : {}) }, flags);
   }
   return { exitCode };
 }

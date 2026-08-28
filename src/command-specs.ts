@@ -255,6 +255,13 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("no_check_paths", ["--no-check-paths"], "boolean", "Skip local media path checks."),
     option("fix", ["--fix"], "boolean", "Mechanically repair fixable issues and write the draft."),
     option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
+    option(
+      "pip",
+      ["--pip"],
+      "boolean",
+      "Validate the PIP + local-mask workflow (issue #78): report overlay / overlay-keyframe / mask-attachment " +
+        "counts and missing media by path, and fail the exit code on an orphaned (never-attached) mask.",
+    ),
     FFPROBE,
   ],
   segments: [TRACK],
@@ -682,6 +689,9 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --encoder            -> render (v0.20 proxy video encoder)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
+//   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
+//   --pip                -> lint (v0.21 PIP + mask validation report)
+//   --stage              -> add-video, add-audio, replace-media, quickstart, relink (v0.21 media staging)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -707,8 +717,11 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--mask-field",
   "--min-gap",
   "--min-silence",
+  "--nested",
   "--new-track",
   "--pad",
+  "--pip",
+  "--stage",
   "--preset",
   "--ratio",
   "--rect",
