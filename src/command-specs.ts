@@ -216,6 +216,7 @@ const usages = {
   describe: "capcut describe",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
+  catalogue: "capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]",
   "harvest-enums":
     "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor",
@@ -512,6 +513,33 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
   rename: [option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one.")],
+  catalogue: [
+    option(
+      "kind",
+      ["--kind"],
+      "enum",
+      "Search only this category (default: all categories, filters and bubbles included).",
+      {
+        values: [
+          "transitions",
+          "masks",
+          "image_intros",
+          "image_outros",
+          "image_combos",
+          "text_intros",
+          "text_outros",
+          "text_loop_anims",
+          "scene_effects",
+          "character_effects",
+          "audio_effects",
+          "fonts",
+          "filters",
+          "bubbles",
+        ],
+      },
+    ),
+    option("limit", ["--limit"], "number", "Keep only the N best matches.", { default: 20 }),
+  ],
   "harvest-enums": [
     option("apply", ["--apply"], "boolean", "Write the new entries into the user catalogue (default: plan only)."),
     option(
@@ -691,6 +719,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
 //   --pip                -> lint (v0.21 PIP + mask validation report)
+//   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
 //   --stage              -> add-video, add-audio, replace-media, quickstart, relink (v0.21 media staging)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
@@ -713,6 +742,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keep-track",
   "--keyword-color",
   "--keyword-size",
+  "--kind",
   "--limit",
   "--mask-field",
   "--min-gap",
@@ -796,7 +826,7 @@ const mutating = new Set([
   "compile",
 ]);
 
-const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "templates"]);
+const arrayOutputs = new Set(["tracks", "segments", "texts", "materials", "enums", "catalogue", "templates"]);
 const textOutputs = new Set(["export-srt", "export-ass", "export-timeline", "completions"]);
 const fileOutputs = new Set([
   "render",

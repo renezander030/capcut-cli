@@ -809,6 +809,8 @@ interface Flags {
   nested?: boolean;
   // lint
   pip?: boolean;
+  // catalogue
+  kind?: string;
   // keyframe
   easing?: string;
   // Phase 1 decorators
@@ -1359,6 +1361,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.nested = true;
     } else if (a === "--pip") {
       flags.pip = true;
+    } else if (a === "--kind" && i + 1 < args.length) {
+      flags.kind = args[++i];
     } else if (a === "--sync") {
       flags.sync = true;
     } else if (a === "--add") {
@@ -3192,6 +3196,36 @@ async function cmdEnums(flags: Flags): Promise<void> {
     process.stderr.write(`\n${entries.length} ${flags.enumCategory} (${ns})\n`);
   } else {
     out(entries, flags);
+  }
+}
+
+async function cmdCatalogue(query: string | undefined, flags: Flags): Promise<void> {
+  const { SEARCHABLE_CATEGORIES, searchCatalogue } = await import("./catalogue.js");
+  if (!query) die("Usage: capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]");
+  if (flags.kind && !SEARCHABLE_CATEGORIES.includes(flags.kind)) {
+    die(`Unknown --kind "${flags.kind}". Categories: ${SEARCHABLE_CATEGORIES.join(", ")}`);
+  }
+  const matches = searchCatalogue(query, {
+    namespace: flags.jianying ? "jianying" : "capcut",
+    kind: flags.kind,
+    limit: flags.limit ?? 20,
+  });
+  if (flags.human) {
+    if (matches.length === 0) {
+      console.log(`No catalogue entries match "${query}".`);
+      return;
+    }
+    console.log(
+      "Category            Slug                              Name                    Resource ID           Source",
+    );
+    for (const m of matches) {
+      console.log(
+        `${m.category.padEnd(19)} ${(m.slug || "(non-ascii)").padEnd(33)} ${(m.name ?? m.member).slice(0, 22).padEnd(23)} ${(m.resource_id ?? "").padEnd(21)} ${m.source}`,
+      );
+    }
+    process.stderr.write(`\n${matches.length} match(es)\n`);
+  } else {
+    out(matches, flags);
   }
 }
 
@@ -5136,6 +5170,12 @@ async function main(): Promise<void> {
   // `enums` is a pure lookup — no project needed.
   if (cmd === "enums") {
     await cmdEnums(flags);
+    process.exit(0);
+  }
+
+  // `catalogue` is the cross-category search over the same tables — no project needed.
+  if (cmd === "catalogue") {
+    await cmdCatalogue(positional[1], flags);
     process.exit(0);
   }
 
