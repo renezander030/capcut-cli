@@ -811,6 +811,8 @@ interface Flags {
   pip?: boolean;
   // catalogue
   kind?: string;
+  // import-srt / import-ass
+  cloneStyle?: boolean;
   // keyframe
   easing?: string;
   // Phase 1 decorators
@@ -1363,6 +1365,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.pip = true;
     } else if (a === "--kind" && i + 1 < args.length) {
       flags.kind = args[++i];
+    } else if (a === "--clone-style") {
+      flags.cloneStyle = true;
     } else if (a === "--sync") {
       flags.sync = true;
     } else if (a === "--add") {
@@ -3313,6 +3317,30 @@ async function importCuesToDraft(
   const { buildEmphasisRanges, setTextRanges, setTextStyle } = await import("./decorators.js");
   const { addText, copyTextStyle } = await import("./factory.js");
   const offsetUs = flags.timeOffset ? parseTimeInput(flags.timeOffset) : 0;
+
+  // --clone-style (fork parity): keep the draft's existing caption look
+  // without hunting for a segment id first. Resolves to the newest text
+  // segment on the target track (falling back to any text track) and then
+  // rides the --style-ref machinery unchanged; an explicit --style-ref wins.
+  if (flags.cloneStyle && !flags.styleRef) {
+    const textSegments = (trackFilter?: string): Segment[] =>
+      draft.tracks
+        .filter((t) => t.type === "text" && (trackFilter === undefined || t.name === trackFilter))
+        .flatMap((t) => t.segments);
+    const targetTrack = flags.trackName ?? "subtitle";
+    const preferred = textSegments(targetTrack);
+    const pool = preferred.length > 0 ? preferred : textSegments();
+    if (pool.length === 0) {
+      die(
+        "--clone-style needs an existing text segment to copy from, and this draft has none. " +
+          "Style one caption first (add-text / text-style), or pass --style-ref <id>.",
+      );
+    }
+    const source = pool.reduce((a, b) =>
+      (b.target_timerange?.start ?? 0) >= (a.target_timerange?.start ?? 0) ? b : a,
+    );
+    flags.styleRef = source.id;
+  }
 
   // Resolve the style-ref segment once, before writing anything, so a bad ref
   // fails fast instead of halfway through a 200-cue import.

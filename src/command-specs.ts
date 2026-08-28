@@ -89,6 +89,13 @@ const TRACK_NAME = option("track_name", ["--track-name"], "string", "Target trac
 const OUT = option("out", ["--out"], "path", "Output path.");
 const FFPROBE = option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary.");
 const STYLE_REF = option("style_ref", ["--style-ref"], "id", "Copy styling from this text segment.");
+const CLONE_STYLE = option(
+  "clone_style",
+  ["--clone-style"],
+  "boolean",
+  "Copy styling from the draft's newest existing caption (target track first, any text track as fallback) — " +
+    "--style-ref without having to look the segment id up. An explicit --style-ref wins.",
+);
 const PRESET = option(
   "preset",
   ["--preset"],
@@ -458,6 +465,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   "import-srt": [
     TRACK_NAME,
     STYLE_REF,
+    CLONE_STYLE,
     option("time_offset", ["--time-offset"], "time", "Shift imported cues."),
     ...TEXT_STYLE,
     ...KEYWORD_EMPHASIS,
@@ -465,6 +473,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   "import-ass": [
     TRACK_NAME,
     STYLE_REF,
+    CLONE_STYLE,
     option("time_offset", ["--time-offset"], "time", "Shift imported cues."),
     ...TEXT_STYLE,
   ],
@@ -720,6 +729,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
 //   --pip                -> lint (v0.21 PIP + mask validation report)
 //   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
+//   --clone-style        -> import-srt, import-ass (v0.21 id-free style preservation)
 //   --stage              -> add-video, add-audio, replace-media, quickstart, relink (v0.21 media staging)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
@@ -728,6 +738,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--apply",
   "--bind",
   "--catalogue",
+  "--clone-style",
   "--color-cycle",
   "--data",
   "--easing",
