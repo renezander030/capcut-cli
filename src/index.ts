@@ -142,6 +142,7 @@ export const COMMANDS = [
   "describe",
   "completions",
   "enums",
+  "catalogue",
   "harvest-enums",
   "doctor",
   "diagnose",
@@ -4643,6 +4644,7 @@ const SUMMARIES: Record<string, string> = {
   "add-sfx": "Add a sound effect on a dedicated track.",
   chroma: "Green-screen / chroma key a video segment, or --off.",
   enums: "List enum slugs (transitions, masks, effects, ...) by category.",
+  catalogue: "Find a resource id by name across every category, harvested entries included.",
   doctor: "Environment preflight (Node, whisper, API key, project dir).",
   diagnose: "Inspect canonical draft files, divergence, and editor-write safety.",
   "sync-timelines":
