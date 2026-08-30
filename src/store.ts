@@ -549,15 +549,34 @@ export function editorProcesses(): string[] {
   try {
     if (platform() === "win32") {
       const result = spawnSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf-8", timeout: 3000 });
-      const output = result.stdout ?? "";
-      return ["CapCut.exe", "JianyingPro.exe"].filter((name) => output.toLowerCase().includes(name.toLowerCase()));
+      return matchEditorProcesses(result.stdout ?? "", "win32");
     }
     const result = spawnSync("ps", ["-axo", "comm="], { encoding: "utf-8", timeout: 3000 });
-    const output = result.stdout ?? "";
-    return ["CapCut", "JianyingPro"].filter((name) => output.toLowerCase().includes(name.toLowerCase()));
+    return matchEditorProcesses(result.stdout ?? "", "posix");
   } catch {
     return [];
   }
+}
+
+/**
+ * Match a raw process listing against the editor executables, one process per
+ * line — never as a substring of the joined listing: npm rewrites its own
+ * process title to the full command line (`npm exec capcut-cli@0.21.0 …`), so
+ * a substring test detects the CLI itself and refuses every write under npx
+ * (#99). The comparison is the exact basename, not the whole line, because
+ * macOS `ps -o comm=` prints the executable's full bundle path; on Windows the
+ * image name is the first quoted field of a `tasklist /FO CSV` row.
+ */
+export function matchEditorProcesses(listing: string, flavor: "win32" | "posix"): string[] {
+  const names = flavor === "win32" ? ["CapCut.exe", "JianyingPro.exe"] : ["CapCut", "JianyingPro"];
+  const seen = new Set<string>();
+  for (const raw of listing.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const executable = flavor === "win32" ? (line.match(/^"([^"]*)"/)?.[1] ?? line) : (line.split("/").pop() ?? line);
+    seen.add(executable.toLowerCase());
+  }
+  return names.filter((name) => seen.has(name.toLowerCase()));
 }
 
 export function isManagedDraftPath(path: string): boolean {
