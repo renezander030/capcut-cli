@@ -4,6 +4,22 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-08-30
+
+### Fixed
+
+- **`refused [editor-open]` on every write under `npx` / `npm exec`, with CapCut closed
+  ([#99](https://github.com/renezander030/capcut-cli/issues/99))** — `editorProcesses()` substring-matched the
+  joined process listing, and npm rewrites its own process title to the full command line — which contains
+  `capcut-cli` — so the CLI detected itself as a running editor and the README's zero-install path could never
+  complete a write. Process names are now compared per process, by exact basename, case-insensitively (macOS
+  `ps -o comm=` prints the executable's full bundle path, so whole-line equality would have broken real
+  detection). The Windows branch had the same substring shape and now compares the exact `tasklist` image name,
+  which also stops an image merely *containing* `capcut.exe` from tripping the guard. Pinned by the reporter's
+  fixture: a listing whose only `capcut` is an `npm exec capcut-cli@0.21.0 …` title returns nothing, while the
+  full CapCut bundle path still detects. Diagnosis, scope table and fix direction all came with the report —
+  thanks [@hansuk94](https://github.com/hansuk94).
+
 ## [0.21.0] — 2026-08-28
 
 One thread runs through most of this release: the issue-[#50](https://github.com/renezander030/capcut-cli/issues/50)
