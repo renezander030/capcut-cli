@@ -20,6 +20,9 @@ Open the result in CapCut with every track still editable. capcut-cli works dire
 
 [**▶ Watch a captioned output example (60 seconds)**](./media/two-sisters-vietnam-short.mp4)
 
+> [!TIP]
+> **New: an optional Wasm sandbox for agents.** Run `inspect`, `diff`, and `lint-portable` through MCP as an isolated WebAssembly Component. It has zero host imports—no filesystem, network, environment, or process access—and the standard CLI/npm install stays unchanged. [**Build it and inspect the security model →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
+
 ## Install and open your first editable draft
 
 **Prerequisites:** Node ≥ 18 (built-ins only — no native modules). Optional tools unlock specific commands: Whisper for `caption`, FFmpeg for `render`, ffprobe for automatic media metadata, and `ANTHROPIC_API_KEY` for `translate`.
@@ -49,7 +52,7 @@ Build from source instead: `git clone https://github.com/renezander030/capcut-cl
 
 JSON in, JSON out: every command reads and writes the local draft store directly, with no MCP server or HTTP daemon. On newer CapCut versions it detects and synchronizes every readable timeline target instead of assuming `draft_content.json` is the only source of truth. That gives any model (Claude, DeepSeek, GLM, Kimi) a deterministic boundary for inspection, building, subtitles, captions, translation, and long-form cuts.
 
-**Use it three ways:**
+**Use it four ways:**
 
 - **CLI** — `npm install -g capcut-cli`, then `capcut <command> <project>`
 - **Library** — `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"` (typed, zero-dep)
