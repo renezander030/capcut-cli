@@ -54,6 +54,17 @@ JSON in, JSON out: every command reads and writes the local draft store directly
 - **CLI** — `npm install -g capcut-cli`, then `capcut <command> <project>`
 - **Library** — `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"` (typed, zero-dep)
 - **Queue runner** — `capcut serve` reads JSONL jobs from stdin, for [n8n / Make / Coze](./examples/serve-automation.md)
+- **Agent sandbox (experimental)** — build [`capcut-core.wasm`](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core) for three read-only MCP tools with zero filesystem, network, environment, clock, random, stdio, or process imports
+
+### Capability-free Wasm tools for agents
+
+The experimental [`wasm/capcut-core`](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core) source package moves the deterministic, JSON-in/JSON-out boundary into a WebAssembly Component:
+
+- `inspect` matches `capcut info` for valid drafts.
+- `diff` matches `capcut diff` for structural changes.
+- `lint-portable` runs an explicit, parity-tested subset of `capcut lint` that needs no host files or media probing.
+
+The host reads a draft and passes its JSON as tool input. The component itself has no ambient capabilities, and CI proves the built world has zero imports before exercising all three functions through [Wassette](https://github.com/microsoft/wassette) over MCP. From a source checkout, build it with `npm --prefix wasm/capcut-core ci && npm run wasm:verify`; setup and security details are in the [component README](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme).
 
 ## Release notes
 

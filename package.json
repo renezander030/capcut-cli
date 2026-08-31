@@ -47,6 +47,7 @@
     "lint:fix": "biome check --write src/ test/",
     "format": "biome format --write src/ test/",
     "docs:commands": "npm run build && node scripts/generate-command-docs.mjs",
+    "wasm:verify": "npm run build && npm --prefix wasm/capcut-core run verify",
     "prepare": "husky"
   },
   "lint-staged": {

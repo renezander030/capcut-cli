@@ -1,0 +1,22 @@
+{
+  "name": "@capcut-cli/capcut-core-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capability-free WebAssembly Component for deterministic CapCut draft inspection",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"require('node:fs').mkdirSync('dist',{recursive:true})\" && jco componentize ./component.js --wit ./wit --disable all -o ./dist/capcut-core.wasm",
+    "test": "node --test test/*.test.mjs",
+    "verify:component": "node scripts/verify-component.mjs",
+    "verify:mcp": "node scripts/mcp-e2e.mjs",
+    "verify": "npm run build && npm test && npm run verify:component"
+  },
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "0.19.3",
+    "@bytecodealliance/jco": "1.17.9"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
