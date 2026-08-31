@@ -21,7 +21,11 @@ Open the result in CapCut with every track still editable. capcut-cli works dire
 [**▶ Watch a captioned output example (60 seconds)**](./media/two-sisters-vietnam-short.mp4)
 
 > [!TIP]
-> **New: an optional Wasm sandbox for agents.** Run `inspect`, `diff`, and `lint-portable` through MCP as an isolated WebAssembly Component. It has zero host imports—no filesystem, network, environment, or process access—and the standard CLI/npm install stays unchanged. [**Build it and inspect the security model →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
+> **New: give an AI agent useful draft analysis—not your shell, filesystem, or network.**
+>
+> The optional `capcut-core.wasm` is a read-only function bundle. You explicitly pass draft JSON in, and it can only answer three questions: What's in this draft? What changed between two drafts? Does it have common structure or caption problems? It declares zero host imports, so the component cannot open files, use the network, read environment variables or secrets, launch processes, or alter your project.
+>
+> **Why use it?** An agent running the full CLI may inherit its host's permissions, while a container is only as restricted as its runtime configuration. Here the narrow boundary is part of the component and CI verifies it. Keep using the normal CLI for editing, rendering, and complete linting—Wasm is experimental, entirely opt-in, and changes nothing for existing users. [**See the setup and security model →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
 
 ## Install and open your first editable draft
 
