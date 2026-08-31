@@ -104,6 +104,32 @@ export function atLeast(version: string | null, wanted: string): boolean {
   return true;
 }
 
+/**
+ * Whether a version string carries a pre-release marker — `9.2.8-beta4` and
+ * `8.4.0-beta6` are both real CapCut builds seen on issue #50 — as opposed to a
+ * plain numeric release like `8.5.0`.
+ *
+ * `versionTuple` parses per dot-segment with `parseInt`, so `8.5.0-beta1` yields
+ * `[8, 5, 0]` and compares *equal* to the 8.5.0 release. `atLeast` keeps that
+ * numeric behaviour deliberately: for a hazard gate it is the safe direction, so
+ * a beta still trips a known-broken range instead of slipping under it.
+ *
+ * It is the wrong direction for a gate that *grants* reassurance, which is what
+ * issue #102 is about — a pre-release would inherit an evidence-derived promise
+ * ("the app regenerates the nested document from the root file, so your edit
+ * survives") drawn from a release build it may not resemble. Callers on that
+ * side require a release build via this predicate, so a pre-release resolves
+ * toward caution in both directions rather than only the convenient one.
+ */
+export function isPreRelease(version: string | null): boolean {
+  if (version === null) return false;
+  const trimmed = version.trim();
+  // Anything that does not start with a digit is not a version string we can
+  // reason about; absence of a marker is reported rather than a guess.
+  if (!/^\d/.test(trimmed)) return false;
+  return !/^\d+(?:\.\d+)*$/.test(trimmed);
+}
+
 /** Top-level `version` integer: absent in CLI-created and both committed
  * fixtures, so absence is normal and never penalized. */
 function schemaInt(draft: Draft): number | null {
@@ -251,6 +277,14 @@ export function detectVersion(draft: Draft): VersionInfo {
     support.notes.push(
       "Mask materials are split across variant arrays (`masks`/`common_mask`/`common_masks`) — the app reads only " +
         "one; consolidate with `capcut migrate --from <ver> --to <ver>` (lint reports which arrays are populated)",
+    );
+  }
+  if (isPreRelease(app_version)) {
+    // Surface the marker the version comparison drops, so a bug report carries
+    // the distinction instead of it being flattened before anyone reads it (#102).
+    support.notes.push(
+      `${app_version} is a pre-release build — version comparisons treat it as ${versionTuple(app_version).join(".")}, ` +
+        "and guidance derived from release-build evidence is withheld rather than extended to it",
     );
   }
   if (app_source === "lv" && app_version && !app_version.startsWith("5.9")) {
