@@ -21,11 +21,17 @@ Open the result in CapCut with every track still editable. capcut-cli works dire
 [**▶ Watch a captioned output example (60 seconds)**](./media/two-sisters-vietnam-short.mp4)
 
 > [!TIP]
-> **New: give an AI agent useful draft analysis—not your shell, filesystem, or network.**
+> **Using an AI assistant with capcut-cli? Give it a safer “look, don’t touch” mode.**
 >
-> The optional `capcut-core.wasm` is a read-only function bundle. You explicitly pass draft JSON in, and it can only answer three questions: What's in this draft? What changed between two drafts? Does it have common structure or caption problems? It declares zero host imports, so the component cannot open files, use the network, read environment variables or secrets, launch processes, or alter your project.
+> The optional Wasm tool lets an AI:
 >
-> **Why use it?** An agent running the full CLI may inherit its host's permissions, while a container is only as restricted as its runtime configuration. Here the narrow boundary is part of the component and CI verifies it. Keep using the normal CLI for editing, rendering, and complete linting—Wasm is experimental, entirely opt-in, and changes nothing for existing users. [**See the setup and security model →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
+> - describe what is inside a CapCut project;
+> - show what changed between two versions; and
+> - spot common timeline and caption problems.
+>
+> It can examine only the project information you hand to it. It cannot browse your files, go online, read passwords or API keys, open other apps, or change the project.
+>
+> **Use it when** you want an AI to review a draft with the least possible access. **Skip it when** you are using capcut-cli yourself or want the AI to edit or render—the normal CLI still does those jobs. This feature is experimental, optional, and changes nothing unless you set it up. [**Technical details and setup →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
 
 ## Install and open your first editable draft
 
