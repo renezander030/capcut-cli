@@ -5,7 +5,7 @@ import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
-import { assessWriteSafety, atLeast } from "./version.js";
+import { assessWriteSafety, atLeast, isPreRelease } from "./version.js";
 
 const STANDARD_FILES = ["draft_content.json", "draft_info.json", "draft_meta_info.json", "template-2.tmp"] as const;
 
@@ -312,12 +312,38 @@ export const NESTED_TIMELINES_MODERN_ACTION =
  */
 const NESTED_MIRROR_FROM_ROOT_SINCE = "8.5.0";
 
+/**
+ * A pre-release at or above the boundary gets neither the 8.5.0 reassurance nor
+ * the 7.x caution: #68's round trip was run on a release build, and the only
+ * >= 8.5 discard report on #50 comes from a pre-release (CapCut 9.2.8-beta4).
+ * Extending a release-build promise across that gap is issue #102.
+ */
 function nestedMirrorIsSafe(appVersion: string | null): boolean {
-  return appVersion !== null && atLeast(appVersion, NESTED_MIRROR_FROM_ROOT_SINCE);
+  return appVersion !== null && !isPreRelease(appVersion) && atLeast(appVersion, NESTED_MIRROR_FROM_ROOT_SINCE);
+}
+
+/** True when the version clears the boundary numerically but is a pre-release,
+ * so the 7.x text would be as wrong for it as the 8.5.0 reassurance (#68, #102). */
+function nestedMirrorIsUnevidencedPreRelease(appVersion: string | null): boolean {
+  return appVersion !== null && isPreRelease(appVersion) && atLeast(appVersion, NESTED_MIRROR_FROM_ROOT_SINCE);
+}
+
+function preReleaseNestedNote(appVersion: string): string {
+  return (
+    `CapCut ${appVersion} is a pre-release build, so neither report on file applies to it (issue #102): the ` +
+    "regenerate-from-root round trip in issue #68 was observed on a release build, and the only discard report " +
+    "above that boundary in issue #50 came from a pre-release (9.2.8-beta4). Edit commands read and write the " +
+    "project-root files only, so treat a root edit as unverified here and check it survives the next open. " +
+    "`capcut sync-timelines <project> --nested --apply` copies the root timeline into the nested documents as an " +
+    "explicit opt-in repair, and `capcut fixture <project> --out <dir>` produces the bundle issue #50 needs."
+  );
 }
 
 /** Version-gated form of NESTED_TIMELINES_WRITE_WARNING (issue #68). */
 export function nestedTimelinesWriteWarning(appVersion: string | null): string {
+  if (nestedMirrorIsUnevidencedPreRelease(appVersion)) {
+    return `Nested Timelines/ layout detected. ${preReleaseNestedNote(appVersion as string)}`;
+  }
   if (!nestedMirrorIsSafe(appVersion)) return NESTED_TIMELINES_WRITE_WARNING;
   return (
     `Nested Timelines/ layout detected on CapCut ${appVersion} (issue #68): on this version the app is reported ` +
@@ -328,6 +354,9 @@ export function nestedTimelinesWriteWarning(appVersion: string | null): string {
 
 /** Version-gated form of NESTED_TIMELINES_ACTION (issue #68). */
 export function nestedTimelinesAction(appVersion: string | null): string {
+  if (nestedMirrorIsUnevidencedPreRelease(appVersion)) {
+    return `Timelines/ directory with a nested timeline document. ${preReleaseNestedNote(appVersion as string)}`;
+  }
   if (!nestedMirrorIsSafe(appVersion)) return NESTED_TIMELINES_ACTION;
   return (
     `Timelines/ directory with a nested timeline document, on CapCut ${appVersion}: this version is reported to ` +
