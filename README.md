@@ -21,7 +21,17 @@ Open the result in CapCut with every track still editable. capcut-cli works dire
 [**▶ Watch a captioned output example (60 seconds)**](./media/two-sisters-vietnam-short.mp4)
 
 > [!TIP]
-> **New: an optional Wasm sandbox for agents.** Run `inspect`, `diff`, and `lint-portable` through MCP as an isolated WebAssembly Component. It has zero host imports—no filesystem, network, environment, or process access—and the standard CLI/npm install stays unchanged. [**Build it and inspect the security model →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
+> **Using an AI assistant with capcut-cli? Give it a safer “look, don’t touch” mode.**
+>
+> The optional Wasm tool lets an AI:
+>
+> - describe what is inside a CapCut project;
+> - show what changed between two versions; and
+> - spot common timeline and caption problems.
+>
+> It can examine only the project information you hand to it. It cannot browse your files, go online, read passwords or API keys, open other apps, or change the project.
+>
+> **Use it when** you want an AI to review a draft with the least possible access. **Skip it when** you are using capcut-cli yourself or want the AI to edit or render—the normal CLI still does those jobs. This feature is experimental, optional, and changes nothing unless you set it up. [**Technical details and setup →**](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core#readme)
 
 ## Install and open your first editable draft
 
