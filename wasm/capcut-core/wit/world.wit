@@ -1,0 +1,25 @@
+package renezander:capcut-core;
+
+/// Pure, read-only CapCut and JianYing draft analysis.
+///
+/// Drafts cross the boundary as JSON strings. The component imports no host
+/// capabilities, so it cannot read files, open sockets, inspect environment
+/// variables, launch processes, or access clocks and randomness.
+interface capcut-core {
+    /// Return the same project summary as `capcut info` for a valid draft.
+    inspect: func(draft-json: string) -> result<string, string>;
+
+    /// Run the documented portable subset of `capcut lint`.
+    ///
+    /// This deliberately excludes checks that need host files, media probing,
+    /// bundled catalogues, or version-specific store metadata.
+    lint-portable: func(draft-json: string) -> result<string, string>;
+
+    /// Return the same structural change report as `capcut diff`.
+    diff: func(before-json: string, after-json: string) -> result<string, string>;
+}
+
+/// A capability-free WebAssembly Component for agent-safe draft analysis.
+world capcut-core-component {
+    export capcut-core;
+}

@@ -35,6 +35,48 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+  wasm-component:
+    runs-on: ubuntu-latest
+    name: capability-free Wasm component
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            wasm/capcut-core/package-lock.json
+      - run: npm ci
+      - run: npm --prefix wasm/capcut-core ci
+      - run: npm --prefix wasm/capcut-core audit --audit-level=high
+      - run: npm run wasm:verify
+      - name: Write artifact checksum
+        run: cd dist && sha256sum capcut-core.wasm > capcut-core.wasm.sha256
+        working-directory: wasm/capcut-core
+      - name: Install checksum-pinned Wassette 0.7.0
+        shell: bash
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/wassette.tar.gz" \
+            https://github.com/microsoft/wassette/releases/download/v0.7.0/wassette_0.7.0_linux_amd64.tar.gz
+          echo "c030964b92a1fb9862fc59b8c318099eba501f83a798b822cb9a394fb0f85f20  $RUNNER_TEMP/wassette.tar.gz" \
+            | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/wassette"
+          tar -xzf "$RUNNER_TEMP/wassette.tar.gz" -C "$RUNNER_TEMP/wassette"
+      - name: Exercise all tools through MCP
+        run: npm --prefix wasm/capcut-core run verify:mcp
+        env:
+          WASSETTE_BIN: ${{ runner.temp }}/wassette/wassette
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capcut-core-wasm
+          path: |
+            wasm/capcut-core/dist/capcut-core.wasm
+            wasm/capcut-core/dist/capcut-core.wasm.sha256
+            wasm/capcut-core/THIRD_PARTY_NOTICES.md
+            LICENSE
+          if-no-files-found: error
+
   platform-smoke:
     strategy:
       fail-fast: false
