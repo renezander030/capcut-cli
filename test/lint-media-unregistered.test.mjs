@@ -58,8 +58,8 @@ describe("lint media-unregistered (pyCapCut#13, observe-only)", () => {
     const issue = r.json.issues.find((i) => i.code === "media-unregistered");
     assert.ok(issue, "the empty sidecar must be surfaced");
     assert.equal(issue.severity, "info");
-    assert.equal(issue.fixable, false, "the registration write is deliberately out of scope");
-    assert.match(issue.suggested_command, /capcut fixture/);
+    assert.equal(issue.fixable, false, "a sidecar write is register's job, not lint --fix's");
+    assert.match(issue.suggested_command, /capcut register .* --materials --apply/);
   });
 
   it("stays silent when draft_materials is not provably empty", () => {

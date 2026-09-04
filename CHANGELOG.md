@@ -4,6 +4,96 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-09-04
+
+Nine items, each mined from a pain users are hitting now — this repo's own
+threads, the forks ahead of it, the downstream projects that build on it
+(vertir, qcut, OpenChatCut) and the neighbouring CapCut/JianYing libraries —
+and each checked against what the CLI already did before it was built. The
+cross-repo intersection was thin this cycle (the repo is mature; most hot
+ecosystem pains are already shipped here), so the list leans on Tier-1
+evidence: the sidecar registration is the one item with a concrete, reproduced
+app failure behind it; the OTIO, script-alignment and retake items ride
+long-standing asks in neighbouring tools; the last four are ergonomics the
+downstream integrators and the most-diverged fork had to build for themselves.
+No command was removed, no existing flag changed meaning, and every existing
+JSON output keeps its shape — new fields appear only when the new flag is used.
+
+### Added
+
+- **`register --materials` — the CapCut 9.1 "file inaccessible" fix ([pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13))** —
+  newer builds decide which media is imported from draft_meta_info.json's `draft_materials`, not from the timeline's
+  paths, so every tool-built draft (this CLI's included: the sidecar's groups were always empty) opened with each clip
+  shown as inaccessible and a relink prompt. v0.21 could only observe the empty state (`media-unregistered`);
+  `--materials` writes the registration: one type-0 entry per distinct local file, matched by `file_Path`, shape per
+  pyCapCut PR [#14](https://github.com/GuanYixuan/pyCapCut/pull/14) (verified by its author against the 9.1.0 prompt;
+  photos get the 5 s nominal duration, audio registers as `music`). It folds into register's own sidecar write — a
+  missing sidecar is recreated and registered in one write, one `.bak`, one changed-on-disk check — merges rather than
+  replaces (app-written entries untouched), and re-runs are no-ops. `lint`'s `media-unregistered` note and `diagnose`
+  now name the command instead of asking for a fixture first; an app-authored 9.1 sidecar is still welcome as ground
+  truth (`docs/draft-schema/00-overview.md` records what is measured and what is inferred).
+- **`export-timeline --captions markers` + caption import in `import-timeline`** — OTIO has had no title/subtitle
+  schema since the request was opened in 2017 ([OpenTimelineIO#62](https://github.com/AcademySoftwareFoundation/OpenTimelineIO/issues/62),
+  [#805](https://github.com/AcademySoftwareFoundation/OpenTimelineIO/issues/805) still WIP), so the export dropped every
+  text track. With `--captions markers` each cue becomes a `Marker.1` on the Stack — name = cue text, `marked_range` =
+  cue timing, `metadata.capcut.kind = "caption"` plus the text and track name, and Resolve's own `Resolve_OTIO.Note` so
+  the text shows in its marker panel — which Resolve/Premiere import as timeline markers. `import-timeline` turns
+  flagged caption markers back into text segments on the recorded track name (de-collided like the clip tracks) and
+  reports any foreign timeline marker instead of dropping it. Default stays `skip`, so today's documents are
+  byte-identical; the skip note now points at the flag.
+- **`caption --script <file>` — whisper's timing, your wording** — names, product terms and punctuation are what speech
+  recognition gets wrong most, and the pipelines that most want burned-in captions already have the script
+  (neo9su/autoclipvideo#174, baizhiheizi/enjoy_player#540 both ask for word timing on a KNOWN text). The script and the
+  recognised words are aligned globally (Needleman–Wunsch on normalised tokens, with a near-miss term so
+  "chanel"/"channel" pair with each other rather than with a neighbour); every script word inherits its recognised
+  word's start/end, unheard words are spread across the gap between timed neighbours. Each non-empty script line is a
+  cue (split only past `--max-chars`); with `--karaoke` the timed script words group as usual. The result's `script`
+  block reports matched / substituted / inserted / dropped words and the match ratio; below 50 % it warns that the
+  script probably belongs to other audio.
+- **`detect-retakes` — the repeat the silence pass cannot see** — talking-head recordings are full of second attempts;
+  the one ecosystem tool that tried (mrbuslov/capcut-ai-editor, [PR #3](https://github.com/mrbuslov/capcut-ai-editor/pull/3))
+  shows the failure to design against: its sentence-similarity pass matched unrelated sentences 27 minutes apart and
+  collapsed a 29-minute recording to 1:47. Three explicit guards here: a `--window` (later take must start within 60 s
+  of the earlier one ending), `--min-words` (cues under 4 normalised words never count — "okay so" repeats constantly),
+  and a `--similarity` floor on the word sequences (2·LCS/(a+b), default 0.8, so a rephrased sentence is not a repeat).
+  The later take is the keeper; earlier spans become cuts, merged where they touch, with the complementary keep spans
+  in seconds and microseconds — the detect-silence shape, so `cut`/`compile` consume it unchanged. Reads the draft's
+  text tracks (or one `--track-name`) or `--srt <file>` with no draft; never writes.
+- **`render --soft-captions`** — a toggleable `mov_text` subtitle stream in the proxy instead of (or as well as) pixels
+  burned in (munimtechnologies/munim-ffmpeg#3, home-lang/home-os#86 — "soft subtitle muxing"). The cues are written
+  as `<preview>.srt` next to the output (players auto-load it by name anyway) and muxed as stream `0:s:0`; a build
+  without the `mov_text` encoder skips with a note like the drawtext fallback. The plan drops `-shortest` only when a
+  subtitle stream is muxed, because ffmpeg would otherwise end the file at the last cue.
+- **Keyframe property aliases** — `scale` (= `uniform_scale`), `x`, `y`, `opacity` are accepted by `keyframe`,
+  `keyframe --batch` and compile's keyframe op and stored under the canonical `property_type`; the two downstream IR
+  compilers built on this CLI (FullFran/vertir's PROP_MAP, Quriosity-agent/qcut's spec.py) had each re-implemented the
+  same translation table. `describe`/`--help` list both forms; the error for an unknown name lists the aliases.
+- **`keyframe --easing hold`** — the step easing the same integrators carried in their IR and had to degrade to linear
+  because CapCut always interpolates. The step is emulated the way an editor does it by hand: a helper keyframe with
+  the held value one frame before the NEXT keyframe on that property, so the whole ramp happens inside one frame.
+  Works in `--batch` even when the held keyframe is named before its pair; a hold with no later keyframe, or one whose
+  neighbour already carries the value, is reported (`hold_keyframes`, warnings) rather than invented. The schema docs
+  list a `"Hold"` curveType, but no app-authored draft carries it, so the CLI does not write an unverified encoding.
+- **`matting <project> <segment-id> [--off]` — smart matting / "Remove background" / 智能抠像** — writes `flag: 3`
+  (smart portrait matting) on the segment's VIDEO MATERIAL and leaves the cache fields at their empty defaults for the
+  app to fill on next open; `--off` writes the documented flag-0 object back, keeping any app-authored cache. Encoding
+  per the pyJianYingDraft contributor PRs [#183](https://github.com/GuanYixuan/pyJianYingDraft/pull/183)/[#184](https://github.com/GuanYixuan/pyJianYingDraft/pull/184)
+  (built twice, never merged); provenance recorded in `docs/draft-schema/02-materials.md`. Per material: segments
+  sharing the material are reported as `shared_segments`.
+- **`init` / `quickstart` `--ratio 9:16` (or `--width/--height`)** — the bundled template is 1920×1080, so a portrait
+  short needed a `compile` spec or a second step; the most-diverged community fork shipped `init --width/--height` for
+  exactly this. Presets at CapCut's native sizes (`16:9`, `9:16`, `1:1`, `4:3`, `3:4`); explicit width+height win over
+  the preset's size and keep its label (or get `"original"`). The canvas is stamped into every timeline file the
+  template ships, so the mirrors never disagree; without the flags the template canvas is kept and the output carries
+  `canvas: null`.
+
+### Changed
+
+- `lint`'s `media-unregistered` issue suggests `capcut register <project> --materials --apply` (it used to ask for a
+  `fixture` bundle); still info-severity and `fixable: false` — a sidecar write is register's job, not `lint --fix`'s.
+- `diagnose`'s media-registration note names the same repair.
+- `export-timeline` reports text tracks as skipped with a pointer to `--captions markers` as well as `export-srt`.
+
 ## [0.21.1] — 2026-08-30
 
 ### Fixed

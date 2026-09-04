@@ -46,6 +46,21 @@ CapCut stores still images in the same array as video clips. The discriminator i
 }
 ```
 
+**`matting` — smart matting / "Remove background" / 智能抠像 (v0.22).** The
+object above is the OFF state every app-authored video material carries.
+`capcut matting <project> <segment-id>` writes `flag: 3` — "smart portrait
+matting" — and leaves the cache fields at their empty defaults; the app fills
+`path` (its matting cache) and the brush/eraser corrections itself on first
+open. `--off` writes `flag: 0` back and keeps whatever cache fields are there
+(never deletes the key). Provenance: the on-state encoding comes from the
+pyJianYingDraft contributor PRs [#183](https://github.com/GuanYixuan/pyJianYingDraft/pull/183)
+/ [#184](https://github.com/GuanYixuan/pyJianYingDraft/pull/184) (KyonXuan,
+2026-05, unmerged), which also add `has_use_quick_eraser` on newer builds — the
+CLI writes it alongside the brush flag. No app-authored flag-3 material is
+committed here yet; `capcut fixture` on a draft where the app did the cutout
+would confirm the shape. Matting is per MATERIAL: segments sharing one material
+(the command reports them as `shared_segments`) change together.
+
 For images: `type: "photo"`, `duration: 10800000000` (3 hours, conventionally), and `width/height` reflect the image dimensions.
 
 Files added via `add-video` / `add-audio` are copied into `<draft>/assets/<kind>/` and the material's `path` is set to a relative or absolute path that CapCut can resolve.

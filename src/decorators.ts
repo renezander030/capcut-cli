@@ -23,6 +23,38 @@ export function keyframeProperties(): string[] {
   return Object.keys(PROPERTY_MAP);
 }
 
+// IR-style property names. Every downstream integrator that drives keyframes
+// from its own intermediate representation ends up re-implementing the same
+// four-line translation table (vertir's PROP_MAP, qcut's spec.py: scale →
+// uniform_scale, x/y → position_x/y, opacity → alpha). Accept the aliases
+// wherever a property name is read — `keyframe`, `keyframe --batch`, compile's
+// keyframe op — and store under the canonical name, so `lists`, `describe` and
+// the on-disk property_type stay unambiguous. `scale` deliberately means the
+// UNIFORM scale (the IR meaning), never scale_x/scale_y.
+const PROPERTY_ALIASES: Record<string, string> = {
+  scale: "uniform_scale",
+  x: "position_x",
+  y: "position_y",
+  opacity: "alpha",
+};
+
+export function keyframePropertyAliases(): Record<string, string> {
+  return { ...PROPERTY_ALIASES };
+}
+
+/** Canonical property name for `name`, resolving aliases; throws on anything else. */
+export function resolveKeyframeProperty(name: string): string {
+  const key = String(name).trim();
+  if (Object.hasOwn(PROPERTY_MAP, key)) return key;
+  if (Object.hasOwn(PROPERTY_ALIASES, key)) return PROPERTY_ALIASES[key];
+  const aliases = Object.entries(PROPERTY_ALIASES)
+    .map(([alias, canonical]) => `${alias}=${canonical}`)
+    .join(", ");
+  throw new Error(
+    `Unsupported keyframe property: ${name}. Supported: ${Object.keys(PROPERTY_MAP).join(", ")} (aliases: ${aliases})`,
+  );
+}
+
 /**
  * The on-disk `property_type` identifiers the keyframe machinery knows how to
  * write. Used by the `fixture` mask-keyframe harvest (#44) to split the
@@ -43,14 +75,23 @@ export function keyframePropertyTypes(): string[] {
 // test-fixtures/oracles/cubic-out-triplet-frame-aligned.json): control.x
 // matches CapCut exactly on frame-aligned intervals and within ±1μs otherwise;
 // control.y within 1 ULP.
-export type EasingName = "linear" | "ease-in" | "ease-out" | "ease-in-out";
+//
+// "hold" is not a CapCut curve at all: the app always interpolates between two
+// keyframes, so a step (keep this value, then jump at the next keyframe) has no
+// native encoding — downstream IRs that carry one (qcut's EASE_MAP, vertir)
+// used to degrade it to linear and get a ramp the author never asked for. The
+// step is emulated the way an editor does it by hand: a helper keyframe one
+// frame before the NEXT keyframe, carrying the held value, so the whole ramp
+// happens inside a single frame. See applyHolds.
+export type EasingName = "linear" | "ease-in" | "ease-out" | "ease-in-out" | "hold";
+type CurveEasing = Exclude<EasingName, "linear" | "hold">;
 
 interface EasingProfile {
   startRightXRatio: number; // × interval → segment-start keyframe's right_control.x
   endLeftXRatio: number; // × interval → segment-end keyframe's left_control.x
 }
 
-const EASING_PROFILES: Record<Exclude<EasingName, "linear">, EasingProfile> = {
+const EASING_PROFILES: Record<CurveEasing, EasingProfile> = {
   "ease-in": { startRightXRatio: 0.42, endLeftXRatio: 0 },
   "ease-out": { startRightXRatio: 0.32, endLeftXRatio: -0.4 },
   "ease-in-out": { startRightXRatio: 0.42, endLeftXRatio: -0.42 },
@@ -62,7 +103,7 @@ const EASING_PROFILES: Record<Exclude<EasingName, "linear">, EasingProfile> = {
 const EASE_OUT_RIGHT_Y_RATIO = 0.94;
 
 export function keyframeEasings(): string[] {
-  return ["linear", ...Object.keys(EASING_PROFILES)];
+  return ["linear", ...Object.keys(EASING_PROFILES), "hold"];
 }
 
 // Exported so compile's spec validation pre-flights the exact same check
@@ -72,16 +113,14 @@ export function keyframeEasings(): string[] {
 // an inherited function whose ratios are undefined and NaN-corrupt the draft.
 export function resolveEasing(easing: string | undefined): EasingName {
   if (easing === undefined) return "linear";
-  if (easing !== "linear" && !Object.hasOwn(EASING_PROFILES, easing)) {
+  if (easing !== "linear" && easing !== "hold" && !Object.hasOwn(EASING_PROFILES, easing)) {
     throw new Error(`Unsupported keyframe easing: ${easing}. Supported: ${keyframeEasings().join(", ")}`);
   }
   return easing as EasingName;
 }
 
-export function parseKeyframeValue(property: string, value: string): number {
-  if (!Object.hasOwn(PROPERTY_MAP, property)) {
-    throw new Error(`Unsupported keyframe property: ${property}. Supported: ${Object.keys(PROPERTY_MAP).join(", ")}`);
-  }
+export function parseKeyframeValue(propertyOrAlias: string, value: string): number {
+  const property = resolveKeyframeProperty(propertyOrAlias);
   const v = value.trim();
   if (property === "position_x" || property === "position_y") {
     const n = parseFloat(v);
@@ -202,7 +241,7 @@ function clearFacingHandles(list: KeyframeEntry[], timeOffset: number): void {
 // stamping FreeCurveInOut with zero-length handles would write a curve-type
 // marker its handles contradict. The stamp happens later instead, when the
 // pair's second keyframe is inserted with an easing and retro-updates this one.
-function applyEasing(list: KeyframeEntry[], entry: KeyframeEntry, easing: Exclude<EasingName, "linear">): boolean {
+function applyEasing(list: KeyframeEntry[], entry: KeyframeEntry, easing: CurveEasing): boolean {
   const profile = EASING_PROFILES[easing];
   const rightY = (fromValue: number, toValue: number): number =>
     easing === "ease-out" ? Math.round(EASE_OUT_RIGHT_Y_RATIO * (toValue - fromValue) * 1e6) / 1e6 : 0;
@@ -231,12 +270,69 @@ function applyEasing(list: KeyframeEntry[], entry: KeyframeEntry, easing: Exclud
   return true;
 }
 
+/**
+ * Emulate `hold` after every requested keyframe is in place (so a batch may
+ * name the held keyframe before the one it holds until): for each held entry,
+ * insert a helper keyframe carrying the same value one frame before the next
+ * keyframe on that property. The app then interpolates the whole change inside
+ * one frame — a step, as far as any viewer can tell. A hold with no later
+ * keyframe, or one whose neighbour is already within a frame, has nothing to
+ * hold until and is reported as a warning instead of inventing a keyframe.
+ */
+function applyHolds(
+  holds: Array<{ list: KeyframeListObject; entry: KeyframeEntry; property: string }>,
+  fps: number,
+  warnings: string[],
+): number {
+  const frameUs = Math.round(1_000_000 / fps);
+  let inserted = 0;
+  for (const { list, entry, property } of holds) {
+    const { next } = findNeighbours(list.keyframe_list, entry.time_offset);
+    if (!next) {
+      warnings.push(
+        `hold for ${property} at ${entry.time_offset}us has no later keyframe to hold until; wrote a plain keyframe`,
+      );
+      continue;
+    }
+    // A next keyframe that already carries the held value IS the hold (this is
+    // also what a previous run's helper looks like) — nothing to add.
+    if (next.values.length === entry.values.length && next.values.every((v, k) => v === entry.values[k])) continue;
+    const holdAt = next.time_offset - frameUs;
+    if (holdAt <= entry.time_offset) {
+      warnings.push(
+        `hold for ${property} at ${entry.time_offset}us: the next keyframe is within one frame, nothing to hold`,
+      );
+      continue;
+    }
+    if (list.keyframe_list.some((k) => k.time_offset === holdAt)) continue; // already stepped
+    list.keyframe_list.push({
+      curveType: "Line",
+      graphID: "",
+      left_control: { x: 0.0, y: 0.0 },
+      right_control: { x: 0.0, y: 0.0 },
+      id: uuidHex(),
+      time_offset: holdAt,
+      values: [...entry.values],
+    });
+    list.keyframe_list.sort((a, b) => a.time_offset - b.time_offset);
+    inserted++;
+  }
+  return inserted;
+}
+
 export function addKeyframes(
   draft: Draft,
   segmentId: string,
   keyframes: KeyframeInput[],
   easing?: string,
-): { segmentId: string; added: number; lists: Array<{ property: string; count: number }>; warnings: string[] } {
+): {
+  segmentId: string;
+  added: number;
+  lists: Array<{ property: string; count: number }>;
+  warnings: string[];
+  /** Helper keyframes written to emulate `hold` (0 when no hold was requested). */
+  holdKeyframes: number;
+} {
   resolveEasing(easing); // fail fast even when every keyframe overrides it
   const found = findSegment(draft, segmentId);
   if (!found) throw new Error(`Segment not found: ${segmentId}`);
@@ -247,14 +343,11 @@ export function addKeyframes(
   }
   const commonKeyframes = seg.common_keyframes as KeyframeListObject[];
   const warnings: string[] = [];
+  const holds: Array<{ list: KeyframeListObject; entry: KeyframeEntry; property: string }> = [];
 
   for (const kf of keyframes) {
-    const propEnum = Object.hasOwn(PROPERTY_MAP, kf.property) ? PROPERTY_MAP[kf.property] : undefined;
-    if (!propEnum) {
-      throw new Error(
-        `Unsupported keyframe property: ${kf.property}. Supported: ${Object.keys(PROPERTY_MAP).join(", ")}`,
-      );
-    }
+    const property = resolveKeyframeProperty(kf.property);
+    const propEnum = PROPERTY_MAP[property];
     const kfEasing = resolveEasing(kf.easing ?? easing);
     let list = commonKeyframes.find((l) => l.property_type === propEnum);
     if (!list) {
@@ -275,7 +368,12 @@ export function addKeyframes(
       time_offset: kf.timeUs,
       values: [kf.value],
     };
-    if (kfEasing !== "linear") {
+    if (kfEasing === "hold") {
+      // A held keyframe is a plain linear one; the step is added by applyHolds
+      // once every keyframe of this call is in place.
+      clearFacingHandles(list.keyframe_list, entry.time_offset);
+      holds.push({ list, entry, property });
+    } else if (kfEasing !== "linear") {
       if (!applyEasing(list.keyframe_list, entry, kfEasing)) {
         warnings.push(
           `easing '${kfEasing}' for ${kf.property} at ${kf.timeUs}us has no adjacent keyframe to ease against; ` +
@@ -289,12 +387,15 @@ export function addKeyframes(
     list.keyframe_list.sort((a, b) => a.time_offset - b.time_offset);
   }
 
+  const fps = typeof draft.fps === "number" && Number.isFinite(draft.fps) && draft.fps > 0 ? draft.fps : 30;
+  const holdKeyframes = holds.length > 0 ? applyHolds(holds, fps, warnings) : 0;
+
   const summary = commonKeyframes.map((l) => {
     const prop = Object.entries(PROPERTY_MAP).find(([, v]) => v === l.property_type)?.[0] ?? l.property_type;
     return { property: prop, count: l.keyframe_list.length };
   });
 
-  return { segmentId: seg.id, added: keyframes.length, lists: summary, warnings };
+  return { segmentId: seg.id, added: keyframes.length, lists: summary, warnings, holdKeyframes };
 }
 
 // --- Phase 1: transition / mask / bg-blur / text-style / text-anim ---

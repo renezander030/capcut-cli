@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -669,7 +669,7 @@
     {
       "name": "export-timeline",
       "summary": "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
-      "usage": "capcut export-timeline <project> [--out <file.otio>]",
+      "usage": "capcut export-timeline <project> [--out <file.otio>] [--captions skip|markers]",
       "positionals": [
         {
           "name": "project",
@@ -691,6 +691,20 @@
           "type": "path",
           "required": false,
           "description": "Output path."
+        },
+        {
+          "name": "captions",
+          "flags": [
+            "--captions"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "Text/caption tracks: skip them with a note (default), or write every cue as an OTIO timeline marker on the Stack (name = text, marked_range = timing, metadata.capcut.kind = caption) — Resolve/Premiere import those as timeline markers and import-timeline rebuilds the text track from them.",
+          "values": [
+            "skip",
+            "markers"
+          ],
+          "default": "skip"
         }
       ],
       "mutates": false,
@@ -1516,12 +1530,13 @@
           ],
           "type": "enum",
           "required": false,
-          "description": "Interpolation easing to adjacent keyframes. Needs an adjacent keyframe on the same property; a lone eased keyframe stays linear (warns).",
+          "description": "Interpolation easing to adjacent keyframes. Needs an adjacent keyframe on the same property; a lone eased keyframe stays linear (warns). hold = step: the value is held by a helper keyframe one frame before the next keyframe on that property (needs a later keyframe; warns otherwise).",
           "values": [
             "linear",
             "ease-in",
             "ease-out",
-            "ease-in-out"
+            "ease-in-out",
+            "hold"
           ],
           "default": "linear"
         }
@@ -3561,6 +3576,15 @@
       ],
       "options": [
         {
+          "name": "script",
+          "flags": [
+            "--script"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Known transcript (plain text). Whisper's word timing is kept, the script's wording is used; each non-empty line is a cue boundary. The result's `script` block reports matched/substituted/inserted words."
+        },
+        {
           "name": "audio",
           "flags": [
             "--audio"
@@ -3957,6 +3981,44 @@
       }
     },
     {
+      "name": "matting",
+      "summary": "Smart matting (background removal) on a video/photo segment's material — flag 3 on; --off writes the documented flag-0 object.",
+      "usage": "capcut matting <project> <id> [--off]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "id",
+          "type": "id",
+          "required": true
+        }
+      ],
+      "options": [
+        {
+          "name": "off",
+          "flags": [
+            "--off"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Turn smart matting off: writes the documented flag-0 matting object on the segment's video material (cache fields kept)."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "prune",
       "summary": "Remove materials no segment references.",
       "usage": "capcut prune <project>",
@@ -3981,8 +4043,8 @@
     },
     {
       "name": "register",
-      "summary": "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak).",
-      "usage": "capcut register <project-dir> [--apply] [--drafts <dir>]",
+      "summary": "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak); --materials also registers the timeline's media in draft_materials (the CapCut 9.1 relink-prompt fix).",
+      "usage": "capcut register <project-dir> [--apply] [--materials] [--drafts <dir>]",
       "positionals": [
         {
           "name": "project-dir",
@@ -4004,6 +4066,15 @@
           "type": "boolean",
           "required": false,
           "description": "Write the repaired draft_meta_info.json / root_meta_info.json entry (default: print the plan only)."
+        },
+        {
+          "name": "materials",
+          "flags": [
+            "--materials"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Also register the timeline's local media in draft_meta_info.json's draft_materials (the list CapCut 9.1 uses to decide what is imported; empty, every clip shows as 'file inaccessible'). Appends missing entries to the type-0 group, preserves existing ones, no-ops when complete."
         },
         {
           "name": "drafts",
@@ -4925,7 +4996,7 @@
     {
       "name": "init",
       "summary": "Create a new empty draft from a template.",
-      "usage": "capcut init <name> [--template <dir>] [--drafts <dir>]",
+      "usage": "capcut init <name> [--template <dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
       "positionals": [
         {
           "name": "name",
@@ -4935,6 +5006,11 @@
         {
           "name": "dir",
           "type": "path",
+          "required": false
+        },
+        {
+          "name": "r",
+          "type": "string",
           "required": false
         }
       ],
@@ -4956,6 +5032,40 @@
           "type": "path",
           "required": false,
           "description": "Draft root directory."
+        },
+        {
+          "name": "ratio",
+          "flags": [
+            "--ratio"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "Canvas aspect preset at the size CapCut uses for it (16:9 = 1920x1080, the template default; 9:16 = 1080x1920 portrait). Explicit --width/--height win over the preset's size but keep its label.",
+          "values": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ]
+        },
+        {
+          "name": "width",
+          "flags": [
+            "--width"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Exact canvas width in pixels (requires --height)."
+        },
+        {
+          "name": "height",
+          "flags": [
+            "--height"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Exact canvas height in pixels (requires --width)."
         }
       ],
       "mutates": true,
@@ -4972,7 +5082,7 @@
     {
       "name": "quickstart",
       "summary": "One-command first draft: create + add one input + lint + print the open-in-CapCut step.",
-      "usage": "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]",
+      "usage": "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
       "positionals": [
         {
           "name": "name",
@@ -4987,6 +5097,11 @@
         {
           "name": "dir",
           "type": "path",
+          "required": false
+        },
+        {
+          "name": "r",
+          "type": "string",
           "required": false
         }
       ],
@@ -5044,6 +5159,40 @@
           "type": "path",
           "required": false,
           "description": "ffprobe binary for duration detection."
+        },
+        {
+          "name": "ratio",
+          "flags": [
+            "--ratio"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "Canvas aspect preset at the size CapCut uses for it (16:9 = 1920x1080, the template default; 9:16 = 1080x1920 portrait). Explicit --width/--height win over the preset's size but keep its label.",
+          "values": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ]
+        },
+        {
+          "name": "width",
+          "flags": [
+            "--width"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Exact canvas width in pixels (requires --height)."
+        },
+        {
+          "name": "height",
+          "flags": [
+            "--height"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Exact canvas height in pixels (requires --width)."
         }
       ],
       "mutates": true,
@@ -5222,6 +5371,15 @@
           "type": "boolean",
           "required": false,
           "description": "Burn captions."
+        },
+        {
+          "name": "soft_captions",
+          "flags": [
+            "--soft-captions"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Mux the text-track cues as a toggleable mov_text subtitle stream (the SRT is also written next to the output as <preview>.srt); skipped with a note when ffmpeg has no mov_text encoder."
         },
         {
           "name": "all_video_tracks",
@@ -5422,6 +5580,97 @@
         "ffmpeg",
         "ffprobe (optional)"
       ],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "detect-retakes",
+      "summary": "Find repeated takes in the draft's captions (or an SRT): windowed word-sequence similarity, later take kept; prints cuts + keep segments to seed compile/cut.",
+      "usage": "capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] | --srt <file>",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "s",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "n",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "track_name",
+          "flags": [
+            "--track-name"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Target track name."
+        },
+        {
+          "name": "srt",
+          "flags": [
+            "--srt"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Read cues from this SRT file instead of a draft (no <project> then)."
+        },
+        {
+          "name": "window",
+          "flags": [
+            "--window"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Max seconds between the earlier cue's end and the later cue's start.",
+          "default": 60
+        },
+        {
+          "name": "similarity",
+          "flags": [
+            "--similarity"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Word-sequence similarity floor, 0..1 (2·LCS/(a+b)).",
+          "default": 0.8
+        },
+        {
+          "name": "min_words",
+          "flags": [
+            "--min-words"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Cues with fewer normalised words never count as a take.",
+          "default": 4
+        },
+        {
+          "name": "json",
+          "flags": [
+            "--json"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Force JSON output (the default; overrides -H)."
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [],
       "output": {
         "type": "object",
         "description": "JSON by default; use -H where supported for human output."

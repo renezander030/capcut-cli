@@ -131,6 +131,20 @@ const TEXT_STYLE: OptionSpec[] = [
   option("bg_v_offset", ["--bg-v-offset"], "number", "Background vertical offset."),
 ];
 
+// Canvas at creation (init / quickstart): a preset picks CapCut's native size
+// for that aspect; explicit width+height set an exact canvas (both or neither).
+const CANVAS: OptionSpec[] = [
+  option(
+    "ratio",
+    ["--ratio"],
+    "enum",
+    "Canvas aspect preset at the size CapCut uses for it (16:9 = 1920x1080, the template default; 9:16 = 1080x1920 portrait). Explicit --width/--height win over the preset's size but keep its label.",
+    { values: ["16:9", "9:16", "1:1", "4:3", "3:4"] },
+  ),
+  option("width", ["--width"], "number", "Exact canvas width in pixels (requires --height)."),
+  option("height", ["--height"], "number", "Exact canvas height in pixels (requires --width)."),
+];
+
 const KEYWORD_EMPHASIS: OptionSpec[] = [
   option(
     "color_cycle",
@@ -172,7 +186,7 @@ const usages = {
   opacity: "capcut opacity <project> <id> <alpha>",
   "export-srt": "capcut export-srt <project> [options]",
   "export-ass": "capcut export-ass <project> [--karaoke] [--out <file.ass>]",
-  "export-timeline": "capcut export-timeline <project> [--out <file.otio>]",
+  "export-timeline": "capcut export-timeline <project> [--out <file.otio>] [--captions skip|markers]",
   "import-timeline": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
   materials: "capcut materials <project> [--type <type>]",
   segment: "capcut segment <project> <id>",
@@ -211,8 +225,9 @@ const usages = {
   migrate: "capcut migrate <project> --from <version> --to <version>",
   "add-sfx": "capcut add-sfx <project> <slug> <start> <duration> [options]",
   chroma: "capcut chroma <project> <id> (--color <hex> | --off) [options]",
+  matting: "capcut matting <project> <id> [--off]",
   prune: "capcut prune <project>",
-  register: "capcut register <project-dir> [--apply] [--drafts <dir>]",
+  register: "capcut register <project-dir> [--apply] [--materials] [--drafts <dir>]",
   rename: "capcut rename <project> <new-name> [--drafts <dir>]",
   relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>) [--stage]",
   timeline: "capcut timeline <project> [--cols <number>]",
@@ -235,12 +250,15 @@ const usages = {
   decrypt: "capcut decrypt <project-or-file>",
   export: "capcut export <drafts-dir> --batch [options]",
   "replace-media": "capcut replace-media <project> <segment-id> <new-file> [--retime]",
-  init: "capcut init <name> [--template <dir>] [--drafts <dir>]",
-  quickstart: "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]",
+  init: "capcut init <name> [--template <dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
+  quickstart:
+    "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
   compile: "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
   "detect-silence": "capcut detect-silence <media> [options]",
+  "detect-retakes":
+    "capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] | --srt <file>",
 } as const satisfies Record<string, string>;
 
 export type CommandName = keyof typeof usages;
@@ -342,9 +360,9 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "easing",
       ["--easing"],
       "enum",
-      "Interpolation easing to adjacent keyframes. Needs an adjacent keyframe on the same property; a lone eased keyframe stays linear (warns).",
+      "Interpolation easing to adjacent keyframes. Needs an adjacent keyframe on the same property; a lone eased keyframe stays linear (warns). hold = step: the value is held by a helper keyframe one frame before the next keyframe on that property (needs a later keyframe; warns otherwise).",
       {
-        values: ["linear", "ease-in", "ease-out", "ease-in-out"],
+        values: ["linear", "ease-in", "ease-out", "ease-in-out", "hold"],
         default: "linear",
       },
     ),
@@ -451,7 +469,16 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     OUT,
   ],
-  "export-timeline": [OUT],
+  "export-timeline": [
+    OUT,
+    option(
+      "captions",
+      ["--captions"],
+      "enum",
+      "Text/caption tracks: skip them with a note (default), or write every cue as an OTIO timeline marker on the Stack (name = text, marked_range = timing, metadata.capcut.kind = caption) — Resolve/Premiere import those as timeline markers and import-timeline rebuilds the text track from them.",
+      { values: ["skip", "markers"], default: "skip" },
+    ),
+  ],
   "import-timeline": [
     option("out", ["--out"], "path", "Build a NEW draft directory at this path from the OTIO timeline."),
     option(
@@ -479,6 +506,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   "text-ranges": [option("styles", ["--styles"], "json", "Inline JSON or @file style ranges.")],
   caption: [
+    option(
+      "script",
+      ["--script"],
+      "path",
+      "Known transcript (plain text). Whisper's word timing is kept, the script's wording is used; each non-empty line is a cue boundary. The result's `script` block reports matched/substituted/inserted words.",
+    ),
     option("audio", ["--audio"], "path", "Audio input."),
     option("from_segment", ["--from-segment"], "id", "Audio segment input."),
     option("whisper_cmd", ["--whisper-cmd"], "path", "Whisper binary."),
@@ -512,12 +545,26 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("intensity", ["--intensity"], "number", "Key intensity."),
     option("off", ["--off"], "boolean", "Remove chroma key."),
   ],
+  matting: [
+    option(
+      "off",
+      ["--off"],
+      "boolean",
+      "Turn smart matting off: writes the documented flag-0 matting object on the segment's video material (cache fields kept).",
+    ),
+  ],
   register: [
     option(
       "apply",
       ["--apply"],
       "boolean",
       "Write the repaired draft_meta_info.json / root_meta_info.json entry (default: print the plan only).",
+    ),
+    option(
+      "materials",
+      ["--materials"],
+      "boolean",
+      "Also register the timeline's local media in draft_meta_info.json's draft_materials (the list CapCut 9.1 uses to decide what is imported; empty, every clip shows as 'file inaccessible'). Appends missing entries to the type-0 group, preserves existing ones, no-ops when complete.",
     ),
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
@@ -633,6 +680,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   init: [
     option("template", ["--template"], "path", "Template directory."),
     option("drafts", ["--drafts"], "path", "Draft root directory."),
+    ...CANVAS,
   ],
   quickstart: [
     option("video", ["--video"], "path", "Video or image to add."),
@@ -641,6 +689,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("drafts", ["--drafts"], "path", "Draft root directory."),
     option("template", ["--template"], "path", "Template directory."),
     option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary for duration detection."),
+    ...CANVAS,
   ],
   compile: [
     OUT,
@@ -673,6 +722,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering.",
     ),
     option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
+    option(
+      "soft_captions",
+      ["--soft-captions"],
+      "boolean",
+      "Mux the text-track cues as a toggleable mov_text subtitle stream (the SRT is also written next to the output as <preview>.srt); skipped with a note when ffmpeg has no mov_text encoder.",
+    ),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
     option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
   ],
@@ -717,6 +772,20 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
   ],
+  "detect-retakes": [
+    TRACK_NAME,
+    option("srt", ["--srt"], "path", "Read cues from this SRT file instead of a draft (no <project> then)."),
+    option("window", ["--window"], "number", "Max seconds between the earlier cue's end and the later cue's start.", {
+      default: 60,
+    }),
+    option("similarity", ["--similarity"], "number", "Word-sequence similarity floor, 0..1 (2·LCS/(a+b)).", {
+      default: 0.8,
+    }),
+    option("min_words", ["--min-words"], "number", "Cues with fewer normalised words never count as a take.", {
+      default: 4,
+    }),
+    option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
+  ],
 };
 optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 
@@ -728,7 +797,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --granularity, --format -> export-srt
 //   --preset            -> add-text, text-style, caption
 //   --apply             -> register, sync-timelines
-//   --ratio, --rect, --reset -> crop
+//   --ratio, --rect, --reset -> crop; --ratio also -> init, quickstart (v0.22 canvas preset)
 //   --threshold, --min-gap, --limit, --json -> detect-scenes
 //   --highlight-words, --keyword-color, --keyword-size, --color-cycle
 //                       -> caption, import-srt (v0.14 keyword emphasis)
@@ -749,12 +818,18 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
 //   --clone-style        -> import-srt, import-ass (v0.21 id-free style preservation)
 //   --stage              -> relink (v0.21 stage relinked media into the draft)
+//   --materials          -> register (v0.22 draft_materials registration)
+//   --captions           -> export-timeline (v0.22 caption cues as OTIO timeline markers)
+//   --script             -> caption (v0.22 transcript-guided alignment)
+//   --window, --similarity, --min-words -> detect-retakes (v0.22); --json also scopes there
+//   --soft-captions      -> render (v0.22 mov_text subtitle stream)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--add",
   "--apply",
   "--bind",
+  "--captions",
   "--catalogue",
   "--clone-style",
   "--color-cycle",
@@ -774,8 +849,10 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--kind",
   "--limit",
   "--mask-field",
+  "--materials",
   "--min-gap",
   "--min-silence",
+  "--min-words",
   "--nested",
   "--new-track",
   "--pad",
@@ -785,12 +862,16 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--ratio",
   "--rect",
   "--reset",
+  "--script",
+  "--similarity",
+  "--soft-captions",
   "--sync",
   "--text",
   "--text-file",
   "--threshold",
   "--threshold-db",
   "--tts-cmd",
+  "--window",
 ]);
 
 /** True when `command` declares `flag` among its command-specific options. */
@@ -841,6 +922,7 @@ const mutating = new Set([
   "migrate",
   "add-sfx",
   "chroma",
+  "matting",
   "prune",
   "register",
   "rename",

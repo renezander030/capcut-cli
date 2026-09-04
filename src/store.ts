@@ -964,12 +964,10 @@ function draftMaterialsAllEmpty(value: unknown): boolean {
  * on CapCut International 9.1.0, macOS) are reported to show timeline media as
  * "file inaccessible" and prompt per-clip relinking when draft_meta_info.json's
  * `draft_materials` does not register the media, even with valid paths in
- * draft_content.json. This CLI never writes `draft_materials` and the entry
- * shape has never been captured from a real draft, so the registration write
- * is deliberately out of scope — diagnose only observes and asks for the one
- * artifact it can be built from. Null (no note) whenever the timeline
- * references no local media, the sidecar is unreadable, or `draft_materials`
- * is not provably empty.
+ * draft_content.json. diagnose observes; `register --materials` (v0.22,
+ * src/materials-register.ts) writes the registration from the pyCapCut PR #14
+ * entry shape. Null (no note) whenever the timeline references no local media,
+ * the sidecar is unreadable, or `draft_materials` is not provably empty.
  */
 function assessMediaRegistration(store: DraftStore): MediaRegistrationNote | null {
   const meta = store.candidates.find((candidate) => candidate.name === "draft_meta_info.json");
@@ -1018,10 +1016,10 @@ export function assessMediaRegistrationRaw(
       `${referenced} local media file(s) are referenced by the timeline, and ${observed}. ` +
       "Newer builds (reported on CapCut International 9.1.0, macOS) are reported to show such media as " +
       '"file inaccessible" and to prompt per-clip relinking even when the timeline file carries valid paths. ' +
-      "This CLI does not write `draft_materials` — no real entry shape has been captured yet. If you see that " +
-      "symptom: save a draft with the same media in the CapCut app itself on such a build, then run " +
-      "`capcut fixture <project> --out <dir>` on it. The sanitized bundle includes draft_meta_info.json and is " +
-      "the evidence a registration write can be built from.",
+      "Repair: `capcut register <project> --materials --apply` registers the referenced media in " +
+      "`draft_materials` (entry shape per pyCapCut PR #14, verified against the 9.1.0 prompt by its author). " +
+      "An app-authored sidecar from such a build is still welcome as ground truth: save a draft with the same " +
+      "media in the CapCut app, then run `capcut fixture <project> --out <dir>` on it.",
   };
 }
 
