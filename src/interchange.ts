@@ -247,7 +247,7 @@ function captionsFromStackMarkers(markers: unknown, rate: number, skipped: OtioS
   for (const marker of markers) {
     const m = marker as OtioObject;
     const capcut = (m.metadata as { capcut?: Record<string, unknown> } | undefined)?.capcut;
-    if (!capcut || capcut.kind !== "caption") {
+    if (capcut?.kind !== "caption") {
       foreign++;
       continue;
     }

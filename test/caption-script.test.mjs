@@ -14,6 +14,9 @@ import { tmpDraft } from "./helpers/tmp-draft.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FAKE_WHISPER = join(__dirname, "helpers", "fake-whisper.mjs");
+// spawnSync cannot execute a shebang script on Windows (same reason the other
+// fake-binary suites skip there); the alignment itself is asserted directly above.
+const isWindows = process.platform === "win32";
 
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), "capcut-caption-script-"));
@@ -127,7 +130,7 @@ describe("align.ts — transcript alignment", () => {
   });
 });
 
-describe("capcut caption --script (fake whisper)", () => {
+describe("capcut caption --script (fake whisper)", { skip: isWindows }, () => {
   it("one cue per script line with the script's wording and whisper's timing; reports the alignment", (t) => {
     const fix = tmpDraft();
     t.after(() => fix.cleanup());
@@ -271,7 +274,9 @@ describe("capcut caption --script (fake whisper)", () => {
     assert.equal(r.json.script, undefined);
     assert.equal(r.json.cues, 1);
   });
+});
 
+describe("caption --script surface", () => {
   it("describe lists --script on caption", () => {
     const r = spawnCli(["describe"]);
     const spec = r.json.commands.find((c) => c.name === "caption");
