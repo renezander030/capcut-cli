@@ -81,9 +81,10 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
+> **New in v0.22.0:** nine items mined from what users are hitting across this repo, its forks and the wider CapCut/JianYing tooling. `register --materials` writes the `draft_materials` registration CapCut 9.1 reads to decide what is imported — the fix for every clip showing as "file inaccessible" with a relink prompt ([pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13)). `export-timeline --captions markers` carries caption cues into the NLE as OTIO timeline markers, and `import-timeline` rebuilds the text track from them (OTIO has no title schema — [OpenTimelineIO#62](https://github.com/AcademySoftwareFoundation/OpenTimelineIO/issues/62), open since 2017). `caption --script` keeps whisper's word timing but uses your script's wording. `detect-retakes` finds the sentence the speaker fluffed and said again, with the window / min-words / similarity guards that keep it from collapsing a timeline. Plus `render --soft-captions` (a toggleable mov_text stream), `matting` (smart background removal on a clip's material), `init --ratio 9:16` for portrait drafts, IR-style keyframe aliases (`scale`, `x`, `y`, `opacity`) and `--easing hold`. No command was removed and no existing output changed shape. Full details in the [changelog](./CHANGELOG.md).
+
 > **New in v0.21.1:** one fix, and if you run the CLI via `npx` it is the whole release: the `refused [editor-open]` guard was detecting the CLI's *own* npm process — npm rewrites its process title to the full command line, which contains `capcut-cli`, and the guard substring-matched the joined process table — so every write on the documented zero-install path (`npx capcut-cli …`) was refused even with CapCut closed ([#99](https://github.com/renezander030/capcut-cli/issues/99), reported by [@hansuk94](https://github.com/hansuk94) with the diagnosis and the fix direction included). Editor detection now compares exact process names, per process, on macOS, Linux and Windows — a really-running CapCut/JianYing still refuses, npm never does. Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.21.0:** the CapCut Mac 9.2.8 nested-Timelines report ([#50](https://github.com/renezander030/capcut-cli/issues/50)) gets its repair path — `sync-timelines --nested` copies the root timeline into the `Timelines/<id>/` documents as an explicit opt-in, each document keeping its own GUID (the workaround verified in the thread), and `fixture --check` mechanically verifies a bundle leaks no home path, email or device id before you attach it. Every write refusal now names its gate (`refused [editor-open]` / `[version-boundary]` / `[draft-changed-on-disk]`), so a pasted stderr line is unambiguous. Plus `catalogue <query>` — name → resource_id across every bundled and harvested table, `lint --pip` for the PIP + local-mask workflow ([#78](https://github.com/renezander030/capcut-cli/issues/78)), `import-srt --clone-style` (keep the draft's caption look without hunting a segment id), `relink --stage` (the repaired draft leaves portable), an observe-only `media-unregistered` note (pyCapCut#13), and Chinese docs for version support and encryption. No command was removed and no existing flag changed meaning. Full details in the [changelog](./CHANGELOG.md).
 
 ## Commands
 
@@ -99,8 +100,8 @@ JSON by default (pipe to `jq`); add `-H` for a human-readable table. Pass `--jia
 | **Edit / animate** | trim · speed · volume · transitions · masks · text/image animations · easing curves |
 | **Templates** | apply and extract reusable layouts · `make-preset` (portable text-style presets) |
 | **Subtitles & i18n** | `caption` · `import-srt` · `export-srt` (line/word SRT + VTT) · `translate` (multi-language draft clone) |
-| **Effects** | `sfx` · `chroma` (chroma key) |
-| **Long-form → short** | `cut` · `detect-scenes` (ffmpeg scene-cut detection) |
+| **Effects** | `sfx` · `chroma` (chroma key) · `matting` (smart background removal) |
+| **Long-form → short** | `cut` · `detect-scenes` (ffmpeg scene-cut detection) · `detect-silence` · `detect-retakes` (repeated takes) |
 | **Automation** | `serve` (stateless JSONL runner) · `migrate` · `doctor` · `sync-timelines` (8.7 mirror repair) |
 
 **Full reference** for every command, option, and exit code: **[docs/command-reference.md](./docs/command-reference.md)** (简体中文: [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)).

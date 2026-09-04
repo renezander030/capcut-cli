@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { stripBom } from "./bom.js";
 import { loadDraft, saveDraft } from "./draft.js";
-import { addAudio, addText, addVideo, initDraft } from "./factory.js";
+import { addAudio, addText, addVideo, type CanvasConfig, initDraft } from "./factory.js";
 import { lintDraft, summarize } from "./lint.js";
 import { probeMedia } from "./probe.js";
 import { parseSrt } from "./srt.js";
@@ -29,6 +29,8 @@ export interface QuickstartOptions {
   srt?: string;
   ffprobeCmd?: string;
   now?: number;
+  /** Canvas override from --ratio / --width / --height (factory.resolveCanvas); template canvas when absent. */
+  canvas?: CanvasConfig;
 }
 
 export interface QuickstartStep {
@@ -43,6 +45,7 @@ export interface QuickstartResult {
   draft_path: string;
   file_path: string;
   registered: boolean;
+  canvas: CanvasConfig | null;
   added: { video: boolean; audio: boolean; captions: number };
   steps: QuickstartStep[];
   lint: { errors: number; warnings: number; info: number; total: number };
@@ -83,13 +86,16 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     templateDir: opts.templateDir,
     draftsDir: opts.draftsDir,
     now: opts.now,
+    canvas: opts.canvas,
   });
+  const canvasNote = init.canvas ? ` Canvas ${init.canvas.width}x${init.canvas.height} (${init.canvas.ratio}).` : "";
   steps.push({
     step: "create",
     ok: true,
-    detail: init.registered
-      ? "Draft created and registered in CapCut's project index."
-      : "Draft created (could not update root_meta_info.json — may not be listed).",
+    detail:
+      (init.registered
+        ? "Draft created and registered in CapCut's project index."
+        : "Draft created (could not update root_meta_info.json — may not be listed).") + canvasNote,
   });
 
   const { draft, filePath } = loadDraft(init.draftPath);
@@ -154,6 +160,7 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     draft_path: init.draftPath,
     file_path: filePath,
     registered: init.registered,
+    canvas: init.canvas,
     added,
     steps,
     lint,

@@ -115,6 +115,70 @@ export interface InitOptions {
   templateDir: string; // path to template directory
   draftsDir: string; // path to CapCut drafts directory
   now?: number; // epoch ms — injectable clock for tests; defaults to Date.now()
+  /** Canvas override (see resolveCanvas); the template's canvas_config is kept when absent. */
+  canvas?: CanvasConfig;
+}
+
+export interface CanvasConfig {
+  width: number;
+  height: number;
+  ratio: string;
+}
+
+/**
+ * The aspect presets CapCut's canvas picker offers, at the pixel sizes the app
+ * itself uses for them. The bundled template is 1920x1080 "16:9", so a portrait
+ * short — the format most of this repo's users cut for — needed either a
+ * hand-written spec through `compile` or a second step; the most-diverged
+ * community fork shipped `init --width/--height` for exactly that.
+ */
+export const CANVAS_RATIO_PRESETS: Readonly<Record<string, { width: number; height: number }>> = {
+  "16:9": { width: 1920, height: 1080 },
+  "9:16": { width: 1080, height: 1920 },
+  "1:1": { width: 1080, height: 1080 },
+  "4:3": { width: 1440, height: 1080 },
+  "3:4": { width: 1080, height: 1440 },
+};
+
+/**
+ * Resolve `--ratio` / `--width` / `--height` into a canvas_config, or null when
+ * none was given. A preset alone picks its native size; explicit width+height
+ * win over the preset's size but keep its label; width+height without a preset
+ * get the matching preset label when the pair reduces to one, else "original"
+ * (the label CapCut writes for a custom canvas). One of width/height alone is an
+ * error — the app has no notion of a half-specified canvas.
+ */
+export function resolveCanvas(opts: { width?: number; height?: number; ratio?: string }): CanvasConfig | null {
+  const { width, height, ratio } = opts;
+  if (width === undefined && height === undefined && ratio === undefined) return null;
+  if ((width === undefined) !== (height === undefined)) {
+    throw new Error("--width and --height must be given together (or use --ratio <16:9|9:16|1:1|4:3|3:4>).");
+  }
+  for (const [flag, v] of [
+    ["--width", width],
+    ["--height", height],
+  ] as const) {
+    if (v !== undefined && (!Number.isInteger(v) || v <= 0)) {
+      throw new Error(`${flag} must be a positive integer pixel count, got: ${v}`);
+    }
+  }
+  let preset: { width: number; height: number } | undefined;
+  if (ratio !== undefined) {
+    preset = CANVAS_RATIO_PRESETS[ratio];
+    if (!preset) {
+      throw new Error(`Unknown --ratio ${ratio}. Presets: ${Object.keys(CANVAS_RATIO_PRESETS).join(", ")}`);
+    }
+  }
+  if (width !== undefined && height !== undefined) {
+    const label =
+      ratio ??
+      Object.entries(CANVAS_RATIO_PRESETS).find(([, p]) => p.width * height === p.height * width)?.[0] ??
+      "original";
+    return { width, height, ratio: label };
+  }
+  // ratio given, no explicit size: preset is defined here.
+  const p = preset as { width: number; height: number };
+  return { width: p.width, height: p.height, ratio: ratio as string };
 }
 
 /**
@@ -170,7 +234,12 @@ export function templateVersionWarning(templateVersion: string | null, storeVers
   );
 }
 
-export function initDraft(opts: InitOptions): { draftPath: string; filePath: string; registered: boolean } {
+export function initDraft(opts: InitOptions): {
+  draftPath: string;
+  filePath: string;
+  registered: boolean;
+  canvas: CanvasConfig | null;
+} {
   const draftPath = resolve(opts.draftsDir, opts.name);
   if (existsSync(draftPath)) {
     throw new Error(`Draft already exists: ${draftPath}. Delete it first or use a different name.`);
@@ -182,6 +251,21 @@ export function initDraft(opts: InitOptions): { draftPath: string; filePath: str
 
   // Find the draft file
   const candidates = ["draft_info.json", "draft_content.json"];
+
+  // Canvas override lands in EVERY timeline file the template ships (the
+  // bundled template carries draft_info.json and draft_content.json as
+  // mirrors): a canvas that differs between the two would be exactly the kind
+  // of drift sync-timelines exists to repair.
+  if (opts.canvas) {
+    for (const c of candidates) {
+      const fp = resolve(draftPath, c);
+      if (!existsSync(fp)) continue;
+      const parsed = JSON.parse(stripBom(readFileSync(fp, "utf-8"))) as Record<string, unknown>;
+      parsed.canvas_config = { ...opts.canvas };
+      writeFileSync(fp, JSON.stringify(parsed, null, 0), "utf-8");
+    }
+  }
+
   for (const c of candidates) {
     const fp = resolve(draftPath, c);
     if (existsSync(fp)) {
@@ -216,7 +300,7 @@ export function initDraft(opts: InitOptions): { draftPath: string; filePath: str
       } catch {
         registered = false;
       }
-      return { draftPath, filePath: fp, registered };
+      return { draftPath, filePath: fp, registered, canvas: opts.canvas ? { ...opts.canvas } : null };
     }
   }
   throw new Error(`No draft_info.json or draft_content.json found in template: ${opts.templateDir}`);

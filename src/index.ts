@@ -129,6 +129,7 @@ export const COMMANDS = [
   "migrate",
   "add-sfx",
   "chroma",
+  "matting",
   "prune",
   "register",
   "rename",
@@ -158,6 +159,7 @@ export const COMMANDS = [
   "render",
   "detect-scenes",
   "detect-silence",
+  "detect-retakes",
 ] as const;
 
 const HELP = `capcut-cli -- fast edits to CapCut projects
@@ -216,16 +218,21 @@ Detail (drill into one item):
   material   <project> <id>                     Full detail for one material
 
 Create:
-  init       <name> [--template <dir>] [--drafts <dir>]
+  init       <name> [--template <dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]
              Create a new empty draft from template. Defaults:
                --template   bundled minimal template (no external repo needed)
                --drafts     this OS's CapCut draft store (CAPCUT_DRAFT_DIR overrides;
                             run capcut doctor to see the detected paths)
-  quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]
+               --ratio      canvas preset: 16:9 (template default, 1920x1080),
+                            9:16 (1080x1920 portrait shorts), 1:1, 4:3, 3:4.
+                            --width/--height set an exact canvas (label from the
+                            matching preset, else "original"); both or neither.
+  quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r>]
              One-command first draft: create + add one input + lint + print the
              exact "open in CapCut" step. The fastest path from a file to an
              editable project. Pass at least one of --video / --audio / --srt.
              Durations come from ffprobe when available (5s placeholder if not).
+             --ratio / --width / --height set the canvas exactly as in init.
              Exit codes: 0 created & lint-clean · 2 created but lint errors
   compile    <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]
              Build a whole draft from a declarative JSON spec (the inverse of
@@ -250,6 +257,13 @@ Preview:
                --scale <f>        Proxy scale of canvas dims (default 0.5)
                --fps <n>          Output fps (default draft fps)
                --burn-captions    Draw text-track segments onto the video
+               --soft-captions    Mux the text-track cues as a toggleable
+                                  subtitle stream (mov_text) instead of, or
+                                  as well as, burning them: the SRT is written
+                                  next to the output (<preview>.srt — players
+                                  auto-load it) and muxed as stream 0:s:0.
+                                  Skipped with a note when the ffmpeg build
+                                  has no mov_text encoder.
                --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
                --encoder <name>   Video encoder for -c:v (default libx264)
                --dry-run          Print the ffmpeg plan; do not execute
@@ -301,6 +315,20 @@ Analyze:
                --ffprobe-cmd <p>  ffprobe binary for the container duration
                                   (default ffprobe)
                --json             Force JSON output (the default; overrides -H)
+  detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <0..1>] [--min-words <n>]
+  detect-retakes --srt <file> [same options]
+             Find repeated takes — the sentence the speaker fluffed and said
+             again — from the draft's caption cues (every text track, or one
+             --track-name) or an SRT file, without touching the draft. A pair
+             is an earlier cue and a later cue whose normalised words are at
+             least --similarity alike (2·LCS/(a+b), default 0.8), both at least
+             --min-words long (default 4), the later one starting within
+             --window seconds of the earlier one ending (default 60 — the
+             guard against matching unrelated sentences half an hour apart).
+             The LATER take is the keeper: each earlier cue's span is a cut,
+             and the report lists cuts + the complementary keep spans in
+             seconds AND microseconds, the detect-silence shape, ready for
+             "capcut cut" / "capcut compile". --json forces JSON over -H.
 
 Add:
   add-audio  <project> <file-or-wikimedia-url> <start> <duration> [options]
@@ -389,7 +417,7 @@ Edit:
              remaining segment end across all tracks. Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   export-ass <project> [--karaoke] [--out <f.ass>]  Export styled subtitles as ASS
-  export-timeline <project> [--out <f.otio>]    Export the cut as OpenTimelineIO for an NLE
+  export-timeline <project> [--out <f.otio>] [--captions markers]  Export the cut as OpenTimelineIO for an NLE
   import-timeline <f.otio> (--out <dir> | --into <project>)  Import an OpenTimelineIO cut
   batch      <project>                          Run multiple edits from stdin (JSONL)
   restore    <project> [--step N | --list]      Undo writes (latest .bak, or N writes back; --list history)
@@ -410,7 +438,7 @@ Maintenance & inspection:
              draft cannot disambiguate them; duplicate ids are refused,
              naming the entry that already owns them.
   prune      <project>                          Remove materials no segment references
-  register   <project-dir> [--apply] [--drafts <dir>]  Repair an EXISTING draft's
+  register   <project-dir> [--apply] [--materials] [--drafts <dir>]  Repair an EXISTING draft's
              registration metadata so the CapCut app lists it again (init only
              registers drafts it creates): recreates a missing/corrupt
              draft_meta_info.json sidecar and inserts/updates the draft's entry
@@ -424,6 +452,14 @@ Maintenance & inspection:
              and nothing is written. Refuses to write while the editor is
              running unless --force-write. Exits 2 on --apply when a target
              stays blocked (unknown store root, unreadable root_meta_info.json).
+             --materials additionally registers the timeline's local media in
+             the sidecar's draft_materials (the list CapCut 9.1 reads to decide
+             what is imported — empty, it shows every clip as "file
+             inaccessible" and asks to relink, pyCapCut#13). One entry per
+             distinct file, appended to the type-0 group; existing entries are
+             preserved, re-runs are no-ops, and the write folds into the same
+             sidecar write (one .bak). Entry shape per pyCapCut PR #14 — see
+             docs/draft-schema/00-overview.md for what is measured vs inferred.
   rename     <project> <new-name> [--drafts <dir>]  Rename a draft after
              creation: the draft folder on disk, plus draft_name and every
              self-referential path field in draft_meta_info.json and in the
@@ -474,10 +510,18 @@ Animate:
              plus optional "easing" overriding --easing per line.
              Properties: position_x, position_y, rotation, scale_x, scale_y,
                          uniform_scale, alpha, saturation, contrast, brightness, volume
+             Aliases:    scale=uniform_scale, x=position_x, y=position_y,
+                         opacity=alpha (the IR names agent pipelines use; stored
+                         under the canonical name, also accepted by compile)
              Values: "1.5", "50%" (alpha/volume), "45deg" (rotation),
                      "+0.5"/"-0.3" (saturation/contrast/brightness)
              Easing: linear (default), ease-in, ease-out, ease-in-out — written
                      as CapCut bezier handles (ease-out = the UI's "Cubic Out").
+                     hold = a step: CapCut always interpolates, so the value is
+                     held by a helper keyframe one frame before the NEXT
+                     keyframe on that property (the ramp happens inside one
+                     frame). Needs a later keyframe; warns otherwise. Reported
+                     as hold_keyframes.
                      Easing needs an adjacent keyframe on the same property: a
                      lone eased keyframe stays linear (warns) and picks up the
                      curve when its pair is added with an easing. A linear
@@ -644,6 +688,16 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                --color-cycle <#hex1,#hex2,...>
                                     Rotate the BASE text colour per cue in
                                     list order (independent of emphasis)
+               --script <file>      The known transcript: whisper's word timing
+                                    is kept, the script's wording (names, terms,
+                                    punctuation) replaces what it heard. Each
+                                    non-empty script line is one cue (split at
+                                    --max-chars, default 42); with --karaoke the
+                                    timed script words group as usual. The
+                                    result's "script" block reports matched /
+                                    substituted / inserted words; below 50%
+                                    matched it warns that the script probably
+                                    belongs to other audio.
              Precedence: --color-cycle wins over the style-ref/preset base
              colour per cue; keyword emphasis sits on top of base/karaoke
              styling and overrides the matched words' colour/size; with
@@ -673,6 +727,12 @@ Sound effects + chroma (v0.5):
   chroma     <project> <id> --off
              Apply chroma key (green-screen) to a video segment.
              --intensity: how aggressively to key out the color (0-1, default 0.5).
+  matting    <project> <id> [--off]
+             Smart matting ("Remove background" / 智能抠像) on a video or photo
+             segment: writes flag 3 (smart portrait matting) on the segment's
+             VIDEO MATERIAL — the app computes the cutout itself on next open.
+             --off writes the documented flag-0 object. Per material: segments
+             sharing the material (reported as shared_segments) change too.
 
 Render queue (v0.4 — experimental):
   export     <drafts-dir> --batch [options]
@@ -755,17 +815,25 @@ Subtitles (Phase 3):
                               highlight colour becomes PrimaryColour, the
                               base colour SecondaryColour.
                --out <f.ass>  Write to a file and print a JSON summary.
-  export-timeline <project> [--out <file.otio>]
+  export-timeline <project> [--out <file.otio>] [--captions markers]
              Export video/audio tracks as OpenTimelineIO JSON (stdout, or
              --out): clip order, trims, gaps, and speed (LinearTimeWarp) —
              the exit ramp when an app build rejects the draft. DaVinci
              Resolve imports .otio natively. Text tracks are skipped with a
-             pointer to export-srt.
+             pointer to export-srt — OTIO has no title schema — unless
+             --captions markers: then every caption cue travels as a timeline
+             marker on the Stack (name = cue text, marked_range = cue timing,
+             metadata.capcut.kind = "caption"), which Resolve/Premiere import
+             as timeline markers and import-timeline turns back into the text
+             track. Default "skip" keeps today's output byte-identical.
   import-timeline <file.otio> (--out <new-project> | --into <project>)
              The inverse of export-timeline: read OpenTimelineIO JSON (the
              schema set export-timeline emits) and build the cut as a draft.
              Clips become video/audio segments with their source ranges, gaps
              become timeline offsets, LinearTimeWarp becomes segment speed.
+             Timeline markers that export-timeline --captions markers wrote
+             (metadata.capcut.kind = "caption") become text segments again on
+             the recorded track name; other timeline markers are reported.
              Media that exists on disk is staged into assets/ (the add-video
              copy); missing media becomes a placeholder material to swap with
              replace-media. Unsupported OTIO features are reported in the
@@ -808,6 +876,18 @@ interface Flags {
   drafts?: string;
   // sync-timelines
   nested?: boolean;
+  // register
+  materials?: boolean;
+  // export-timeline
+  captions?: string;
+  // caption --script
+  script?: string;
+  // detect-retakes
+  window?: number;
+  similarity?: number;
+  minWords?: number;
+  // render
+  softCaptions?: boolean;
   // lint
   pip?: boolean;
   // catalogue
@@ -1106,6 +1186,20 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.duration = args[++i];
     } else if (a === "--off") {
       flags.off = true;
+    } else if (a === "--materials") {
+      flags.materials = true;
+    } else if (a === "--captions" && i + 1 < args.length) {
+      flags.captions = args[++i];
+    } else if (a === "--script" && i + 1 < args.length) {
+      flags.script = args[++i];
+    } else if (a === "--window" && i + 1 < args.length) {
+      flags.window = parseFloat(args[++i]);
+    } else if (a === "--similarity" && i + 1 < args.length) {
+      flags.similarity = parseFloat(args[++i]);
+    } else if (a === "--min-words" && i + 1 < args.length) {
+      flags.minWords = parseInt(args[++i], 10);
+    } else if (a === "--soft-captions") {
+      flags.softCaptions = true;
     } else if (a === "--center-x" && i + 1 < args.length) {
       flags.centerX = parseFloat(args[++i]);
     } else if (a === "--center-y" && i + 1 < args.length) {
@@ -1967,12 +2061,25 @@ async function cmdHarvestEnumsAdd(positional: string[], flags: Flags): Promise<v
 // silent (text tracks point at export-srt).
 async function cmdExportTimeline(draft: Draft, flags: Flags): Promise<void> {
   const { draftToOtio } = await import("./interchange.js");
-  const { doc, stats } = draftToOtio(draft);
+  const captions = flags.captions ?? "skip";
+  if (captions !== "skip" && captions !== "markers") {
+    die(`--captions must be skip|markers (got ${captions}). markers = caption cues as OTIO timeline markers.`);
+  }
+  const { doc, stats } = draftToOtio(draft, { captions });
   const serialized = `${JSON.stringify(doc, null, 2)}\n`;
   if (flags.out) {
     writeFileSync(flags.out, serialized, "utf-8");
     out(
-      { ok: true, out: flags.out, tracks: stats.tracks, clips: stats.clips, gaps: stats.gaps, skipped: stats.skipped },
+      {
+        ok: true,
+        out: flags.out,
+        tracks: stats.tracks,
+        clips: stats.clips,
+        gaps: stats.gaps,
+        // Present only when asked for, so the default JSON stays byte-identical.
+        ...(captions === "markers" ? { captions: stats.captions } : {}),
+        skipped: stats.skipped,
+      },
       flags,
     );
   } else {
@@ -1990,6 +2097,8 @@ const IMPORT_TIMELINE_USAGE = "capcut import-timeline <file.otio> (--out <new-pr
 interface ImportApplyResult {
   tracks: number;
   clips: number;
+  /** Caption cues rebuilt as text segments from the document's caption markers. */
+  captions: number;
   placeholders: Array<{ track: string; clip: string; path: string | null }>;
 }
 
@@ -1998,15 +2107,18 @@ interface ImportApplyResult {
 // into an existing track by name could overlap the segments already there, so
 // a name collision de-collides with a numeric suffix instead.
 async function applyImportPlan(draft: Draft, filePath: string, plan: ImportPlan): Promise<ImportApplyResult> {
-  const { addAudio, addVideo } = await import("./factory.js");
-  const result: ImportApplyResult = { tracks: 0, clips: 0, placeholders: [] };
+  const { addAudio, addText, addVideo } = await import("./factory.js");
+  const result: ImportApplyResult = { tracks: 0, clips: 0, captions: 0, placeholders: [] };
   const claimed = new Set(draft.tracks.map((t) => `${t.type} ${t.name}`));
+  const claimTrack = (kind: string, base: string): string => {
+    let name = base;
+    for (let n = 2; claimed.has(`${kind} ${name}`); n++) name = `${base} (${n})`;
+    claimed.add(`${kind} ${name}`);
+    return name;
+  };
   for (const track of plan.tracks) {
     if (track.clips.length === 0) continue;
-    const base = track.name || track.kind;
-    let name = base;
-    for (let n = 2; claimed.has(`${track.kind} ${name}`); n++) name = `${base} (${n})`;
-    claimed.add(`${track.kind} ${name}`);
+    const name = claimTrack(track.kind, track.name || track.kind);
 
     for (const clip of track.clips) {
       // Media on disk is staged into assets/ (the add-video/add-audio copy);
@@ -2038,6 +2150,23 @@ async function applyImportPlan(draft: Draft, filePath: string, plan: ImportPlan)
       }
       if (placeholder) result.placeholders.push({ track: name, clip: clip.name, path: clip.mediaPath });
       result.clips++;
+    }
+    result.tracks++;
+  }
+
+  // Caption markers → text segments, grouped back onto the track names the
+  // export recorded (one fresh text track per name, same de-collision rule).
+  const byTrack = new Map<string, typeof plan.captions>();
+  for (const cue of plan.captions) {
+    const list = byTrack.get(cue.track) ?? [];
+    list.push(cue);
+    byTrack.set(cue.track, list);
+  }
+  for (const [base, cues] of byTrack) {
+    const name = claimTrack("text", base);
+    for (const cue of cues) {
+      addText(draft, filePath, { text: cue.text, start: cue.startUs, duration: cue.durationUs, trackName: name });
+      result.captions++;
     }
     result.tracks++;
   }
@@ -2101,6 +2230,9 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
       tracks: applied.tracks,
       clips: applied.clips,
       gaps: plan.gaps,
+      // Present only when the document carried caption markers, so documents
+      // without them keep the previous JSON shape byte-for-byte.
+      ...(plan.captions.length > 0 ? { captions: applied.captions } : {}),
       placeholders: applied.placeholders,
       duration_us: draft.duration,
       skipped: plan.skipped,
@@ -2632,9 +2764,15 @@ async function cmdAddText(draft: Draft, filePath: string, positional: string[], 
 }
 
 async function cmdKeyframe(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
-  const { addKeyframes, keyframeProperties, parseKeyframeValue } = await import("./decorators.js");
+  const { addKeyframes, keyframeProperties, keyframePropertyAliases, parseKeyframeValue } = await import(
+    "./decorators.js"
+  );
   const segId = positional[2];
   if (!segId) die("Usage: capcut keyframe <project> <id> <property> <time> <value>  (or --batch with JSONL on stdin)");
+  const propertyHelp = (): string =>
+    `Properties: ${keyframeProperties().join(", ")}\nAliases: ${Object.entries(keyframePropertyAliases())
+      .map(([alias, canonical]) => `${alias}=${canonical}`)
+      .join(", ")}`;
 
   const inputs: KeyframeInput[] = [];
 
@@ -2662,9 +2800,7 @@ async function cmdKeyframe(draft: Draft, filePath: string, positional: string[],
     const timeStr = positional[4];
     const valueStr = positional[5];
     if (!property || !timeStr || valueStr === undefined) {
-      die(
-        `Usage: capcut keyframe <project> <id> <property> <time> <value>\nProperties: ${keyframeProperties().join(", ")}`,
-      );
+      die(`Usage: capcut keyframe <project> <id> <property> <time> <value>\n${propertyHelp()}`);
     }
     const timeUs = parseTimeInput(timeStr);
     const value = parseKeyframeValue(property, valueStr);
@@ -2680,6 +2816,8 @@ async function cmdKeyframe(draft: Draft, filePath: string, positional: string[],
       id: result.segmentId,
       added: result.added,
       lists: result.lists,
+      // Only when a hold was emulated, so existing output stays byte-identical.
+      ...(result.holdKeyframes > 0 ? { hold_keyframes: result.holdKeyframes } : {}),
       ...(result.warnings.length ? { warnings: result.warnings } : {}),
     },
     flags,
@@ -3601,9 +3739,15 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     die("Missing --audio <path> or --from-segment <id>. One is required.");
   }
   const emphasis = await keywordEmphasisFromFlags(flags);
+  let scriptText: string | undefined;
+  if (flags.script !== undefined) {
+    if (!existsSync(flags.script)) die(`--script file not found: ${flags.script}`);
+    scriptText = stripBom(readFileSync(flags.script, "utf-8"));
+  }
   const result = captionDraft(draft, {
     audio: flags.audio,
     fromSegment: flags.fromSegment,
+    scriptText,
     whisperCmd: flags.whisperCmd,
     whisperEngine: flags.whisperEngine,
     whisperModel: flags.whisperModel,
@@ -3621,6 +3765,15 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     colorCycle: emphasis.cycle,
   });
   saveDraft(filePath, draft);
+  // A script that barely matches the recognised words is almost certainly the
+  // wrong script for this audio: the timing would be nonsense. Warn, never
+  // refuse — a heavy accent or a noisy room legitimately lowers the ratio.
+  if (result.script && result.script.match_ratio < 0.5 && !flags.quiet) {
+    process.stderr.write(
+      `Warning: only ${Math.round(result.script.match_ratio * 100)}% of the script's words matched what whisper heard ` +
+        `(${result.script.matched}/${result.script.script_words}). Check that --script belongs to this audio.\n`,
+    );
+  }
   out(result, flags);
 }
 
@@ -3684,6 +3837,20 @@ async function cmdChroma(draft: Draft, filePath: string, positional: string[], f
     intensity: flags.intensity,
   });
   saveDraft(filePath, draft);
+  out(result, flags);
+}
+
+async function cmdMatting(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { clearMatting, setMatting } = await import("./matting.js");
+  const segId = positional[2];
+  if (!segId) die("Usage: capcut matting <project> <id> [--off]");
+  const result = flags.off ? clearMatting(draft, segId) : setMatting(draft, segId);
+  saveDraft(filePath, draft);
+  if (result.shared_segments.length > 0 && !flags.quiet) {
+    process.stderr.write(
+      `Note: material ${result.materialId} is shared by ${result.shared_segments.length} other segment(s); matting is per material, so they change too.\n`,
+    );
+  }
   out(result, flags);
 }
 
@@ -3918,8 +4085,13 @@ async function cmdDiagnose(projectPath: string | undefined, flags: Flags): Promi
 // root_meta_info.json).
 async function cmdRegister(projectPath: string | undefined, flags: Flags): Promise<number> {
   const { applyDraftRegistration, planDraftRegistration } = await import("./factory.js");
-  if (!projectPath) die("Usage: capcut register <project-dir> [--apply] [--drafts <dir>]");
-  const result = planDraftRegistration(projectPath, { draftsDir: flags.drafts });
+  if (!projectPath) die("Usage: capcut register <project-dir> [--apply] [--materials] [--drafts <dir>]");
+  const planWithMaterials = async (): Promise<Awaited<ReturnType<typeof planDraftRegistration>>> => {
+    const planned = planDraftRegistration(projectPath, { draftsDir: flags.drafts });
+    if (flags.materials) await addMaterialsToRegistrationPlan(planned);
+    return planned;
+  };
+  const result = await planWithMaterials();
   const { plan } = result;
 
   const warnBlocked = (): void => {
@@ -3929,12 +4101,24 @@ async function cmdRegister(projectPath: string | undefined, flags: Flags): Promi
     }
   };
 
+  const materials = (plan as RegistrationPlanWithMaterials).materials;
+  const describeMaterials = (): void => {
+    if (flags.quiet || !materials) return;
+    if (materials.action === "update") {
+      process.stderr.write(`plan: update draft_meta_info.json draft_materials (${materials.detail})\n`);
+    } else if (materials.action === "blocked") {
+      process.stderr.write(`WARNING draft_materials: ${materials.detail}\n`);
+    }
+  };
+
   if (!flags.apply) {
     const message = plan.needs_repair
       ? `Would write ${plan.repairs.join(", ")}. Re-run with --apply to write.`
       : plan.blocked.length > 0
         ? `Registration cannot be verified or repaired: ${plan.blocked.join(", ")} — see targets.`
-        : `Draft is registered: draft_meta_info.json and the store's root_meta_info.json entry agree with ${plan.identity_source}.`;
+        : materials
+          ? `Draft is registered and its ${materials.referenced} referenced media file(s) are in draft_materials.`
+          : `Draft is registered: draft_meta_info.json and the store's root_meta_info.json entry agree with ${plan.identity_source}.`;
     out({ ok: plan.blocked.length === 0, applied: false, message, ...plan }, flags);
     if (!flags.quiet) {
       for (const target of plan.targets) {
@@ -3942,6 +4126,7 @@ async function cmdRegister(projectPath: string | undefined, flags: Flags): Promi
           process.stderr.write(`plan: ${target.action} ${target.file} (${target.detail})\n`);
         }
       }
+      describeMaterials();
       warnBlocked();
       process.stderr.write(plan.needs_repair ? "Plan only — re-run with --apply to write.\n" : `${message}\n`);
     }
@@ -3979,7 +4164,7 @@ async function cmdRegister(projectPath: string | undefined, flags: Flags): Promi
 
   const { applied, backups } = applyDraftRegistration(result, { forceWrite: flags.forceWrite === true });
 
-  const verify = planDraftRegistration(projectPath, { draftsDir: flags.drafts });
+  const verify = await planWithMaterials();
   if (verify.plan.needs_repair) {
     die(
       `register wrote ${applied.join(", ")} but the draft still needs repair (${verify.plan.repairs.join(", ")}). ` +
@@ -3988,10 +4173,64 @@ async function cmdRegister(projectPath: string | undefined, flags: Flags): Promi
   }
   const ok = plan.blocked.length === 0;
   out({ ok, applied, backups, ...verify.plan }, flags);
-  if (!flags.quiet) process.stderr.write(`Registered from ${plan.identity_source}: wrote ${applied.join(", ")}\n`);
+  if (!flags.quiet) {
+    process.stderr.write(`Registered from ${plan.identity_source}: wrote ${applied.join(", ")}\n`);
+    if (materials?.action === "update") {
+      process.stderr.write(
+        `Registered ${materials.to_register.length} media file(s) in draft_materials — reopen the draft in CapCut to clear the relink prompt.\n`,
+      );
+    }
+  }
   warnBlocked();
   return ok ? 0 : 2;
 }
+
+// `register --materials`: fold the draft_materials registration (pyCapCut#13,
+// the CapCut 9.1 "file inaccessible" prompt) into register's plan. The
+// registration lives in the same sidecar register already repairs, so when the
+// plan is about to create/rewrite draft_meta_info.json the media entries are
+// merged into THAT write (one file, one .bak, one concurrency check); otherwise
+// the on-disk sidecar is the base. The timeline is read from the plan's
+// identity file — never through loadDraft, for the same reason register itself
+// avoids it (the sidecar files discovery looks at may be exactly what is missing).
+async function addMaterialsToRegistrationPlan(
+  result: Awaited<ReturnType<typeof import("./factory.js").planDraftRegistration>>,
+): Promise<void> {
+  const { planDraftMaterials } = await import("./materials-register.js");
+  const { plan } = result;
+  const sidecarPath = path.resolve(plan.project_dir, "draft_meta_info.json");
+  const draft = JSON.parse(stripBom(readFileSync(plan.content_path, "utf-8"))) as Draft;
+  const sidecarWrite = result.writes.find((w) => w.file === "draft_meta_info.json");
+  const onDiskRaw = existsSync(sidecarPath) ? stripBom(readFileSync(sidecarPath, "utf-8")) : null;
+  const baseRaw = sidecarWrite ? sidecarWrite.content : onDiskRaw;
+  let base: Record<string, unknown> | null = null;
+  if (baseRaw !== null) {
+    try {
+      const parsed = JSON.parse(baseRaw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed as Record<string, unknown>;
+    } catch {
+      base = null;
+    }
+  }
+  const { target, fixed } = planDraftMaterials(draft, base, { sidecarPath, projectDir: plan.project_dir });
+  if (fixed) {
+    const content = JSON.stringify(fixed, null, 0);
+    if (sidecarWrite) sidecarWrite.content = content;
+    else result.writes.push({ file: "draft_meta_info.json", path: sidecarPath, content, previous: onDiskRaw });
+    if (!plan.repairs.includes("draft_meta_info.json")) plan.repairs.push("draft_meta_info.json");
+    plan.needs_repair = true;
+  }
+  if (target.action === "blocked" && !plan.blocked.includes("draft_meta_info.json")) {
+    plan.blocked.push("draft_meta_info.json");
+  }
+  (plan as RegistrationPlanWithMaterials).materials = target;
+}
+
+type RegistrationPlanWithMaterials = Awaited<
+  ReturnType<typeof import("./factory.js").planDraftRegistration>
+>["plan"] & {
+  materials?: import("./materials-register.js").MaterialsRegistrationTarget;
+};
 
 // `rename` gives a draft a new display name + folder name after creation —
 // no tool in the ecosystem has this (VectCutAPI#45): users recreate whole
@@ -4643,6 +4882,8 @@ const SUMMARIES: Record<string, string> = {
   migrate: "Apply known schema migrations across version boundaries.",
   "add-sfx": "Add a sound effect on a dedicated track.",
   chroma: "Green-screen / chroma key a video segment, or --off.",
+  matting:
+    "Smart matting (background removal) on a video/photo segment's material — flag 3 on; --off writes the documented flag-0 object.",
   enums: "List enum slugs (transitions, masks, effects, ...) by category.",
   catalogue: "Find a resource id by name across every category, harvested entries included.",
   doctor: "Environment preflight (Node, whisper, API key, project dir).",
@@ -4651,7 +4892,7 @@ const SUMMARIES: Record<string, string> = {
     "Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors).",
   prune: "Remove materials no segment references.",
   register:
-    "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak).",
+    "Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak); --materials also registers the timeline's media in draft_materials (the CapCut 9.1 relink-prompt fix).",
   rename:
     "Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists).",
   relink: "Repair broken media paths (--dir or --from/--to).",
@@ -4673,6 +4914,8 @@ const SUMMARIES: Record<string, string> = {
     "Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut.",
   "detect-silence":
     "Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut.",
+  "detect-retakes":
+    "Find repeated takes in the draft's captions (or an SRT): windowed word-sequence similarity, later take kept; prints cuts + keep segments to seed compile/cut.",
 };
 
 // `describe` emits a machine-readable tool spec for LLM/agent callers, so they
@@ -5062,6 +5305,7 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     ffmpegCmd: flags.ffmpegCmd,
     encoder: flags.encoder,
     burnCaptions: flags.burnCaptions,
+    softCaptions: flags.softCaptions,
     allVideoTracks: flags.allVideoTracks,
     dryRun: isDryRun(),
     progress: flags.progress,
@@ -5183,6 +5427,99 @@ async function cmdDetectSilence(positional: string[], flags: Flags): Promise<voi
     }
     console.log(
       "Next: pipe the keep segments into `capcut compile` (one clip per segment) or `capcut cut` to drop the silences.",
+    );
+    return;
+  }
+  out(report, flags);
+}
+
+const DETECT_RETAKES_USAGE =
+  "capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <0..1>] [--min-words <n>]  |  detect-retakes --srt <file>";
+
+// Retake detection reads caption cues — from the draft's text tracks (the
+// project form, dispatched through loadDraft like every read command) or from
+// an SRT file (no project) — and never writes. The three guards are explicit
+// flags; see src/retakes.ts for why each exists.
+async function cmdDetectRetakes(draft: Draft | null, flags: Flags): Promise<void> {
+  const { buildRetakeReport } = await import("./retakes.js");
+  const { timecode } = await import("./scenes.js");
+  const window = flags.window ?? 60;
+  if (!Number.isFinite(window) || window <= 0) die("--window must be > 0 seconds");
+  const similarity = flags.similarity ?? 0.8;
+  if (!Number.isFinite(similarity) || similarity <= 0 || similarity > 1) die("--similarity must be in (0, 1]");
+  const minWords = flags.minWords ?? 4;
+  if (!Number.isInteger(minWords) || minWords < 1) die("--min-words must be a positive integer");
+
+  let cues: Array<{ text: string; startUs: number; endUs: number }>;
+  let source: string;
+  let durationUs: number | null = null;
+  if (draft === null) {
+    const { parseSrt } = await import("./srt.js");
+    const srtPath = flags.srt as string;
+    if (!existsSync(srtPath)) die(`--srt file not found: ${srtPath}`);
+    cues = parseSrt(stripBom(readFileSync(srtPath, "utf-8"))).map((c) => ({
+      text: c.text,
+      startUs: c.startUs,
+      endUs: c.endUs,
+    }));
+    source = srtPath;
+  } else {
+    const tracks = getTracksByType(draft, "text").filter(
+      (t) => flags.trackName === undefined || t.name === flags.trackName,
+    );
+    if (tracks.length === 0) {
+      die(
+        flags.trackName === undefined
+          ? "The draft has no text track to read cues from — run `capcut caption` first, or pass --srt <file>."
+          : `No text track named "${flags.trackName}" — see \`capcut tracks\`.`,
+      );
+    }
+    cues = tracks.flatMap((track) =>
+      track.segments.flatMap((seg) => {
+        const mat = findMaterial(draft.materials.texts, seg.material_id);
+        if (!mat) return [];
+        const text = extractText(mat.content);
+        if (!text) return [];
+        return [
+          {
+            text,
+            startUs: seg.target_timerange.start,
+            endUs: seg.target_timerange.start + seg.target_timerange.duration,
+          },
+        ];
+      }),
+    );
+    source = tracks.map((t) => t.name).join(", ");
+    durationUs = typeof draft.duration === "number" && draft.duration > 0 ? draft.duration : null;
+  }
+  const report = buildRetakeReport(cues, durationUs, { window, similarity, minWords }, source);
+  if (flags.human && !flags.json) {
+    console.log(`Source:     ${report.source}`);
+    console.log(`Cues:       ${report.cues}`);
+    console.log(
+      `Guards:     window ${report.window}s · similarity ≥ ${report.similarity} · min words ${report.min_words}`,
+    );
+    console.log(`Retakes:    ${report.retakes.length}`);
+    for (const [i, pair] of report.retakes.entries()) {
+      console.log(
+        `  ${String(i + 1).padStart(3)}  ${timecode(pair.earlier.start)} - ${timecode(pair.earlier.end)}  →  ` +
+          `${timecode(pair.later.start)} - ${timecode(pair.later.end)}  sim ${pair.similarity.toFixed(3)}`,
+      );
+      console.log(`       cut:  ${pair.earlier.text}`);
+      console.log(`       keep: ${pair.later.text}`);
+    }
+    console.log(`Cuts:       ${report.cuts.length}`);
+    for (const [i, s] of report.cuts.entries()) {
+      const end = s.end === null ? "end" : timecode(s.end);
+      console.log(`  ${String(i + 1).padStart(3)}  ${timecode(s.start)} - ${end}`);
+    }
+    console.log(`Keeps:      ${report.keeps.length}`);
+    for (const [i, s] of report.keeps.entries()) {
+      const end = s.end === null ? "end" : timecode(s.end);
+      console.log(`  ${String(i + 1).padStart(3)}  ${timecode(s.start)} - ${end}`);
+    }
+    console.log(
+      "Next: pipe the keep segments into `capcut compile` (one clip per segment) or `capcut cut` to drop the earlier takes.",
     );
     return;
   }
@@ -5395,14 +5732,25 @@ async function main(): Promise<void> {
     if (!name) die("Missing name. Usage: capcut init <name> [--template <dir>] [--drafts <dir>]");
     const templateDir = resolveTemplateDir(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
-    const { initDraft } = await import("./factory.js");
-    const result = initDraft({ name, templateDir, draftsDir });
+    const { initDraft, resolveCanvas } = await import("./factory.js");
+    const canvas = resolveCanvas({ width: flags.width, height: flags.height, ratio: flags.ratio });
+    const result = initDraft({ name, templateDir, draftsDir, canvas: canvas ?? undefined });
     out(
-      { ok: true, name, draft_path: result.draftPath, file_path: result.filePath, registered: result.registered },
+      {
+        ok: true,
+        name,
+        draft_path: result.draftPath,
+        file_path: result.filePath,
+        registered: result.registered,
+        canvas: result.canvas,
+      },
       flags,
     );
     if (!flags.quiet) {
       process.stderr.write(`Created: ${result.draftPath}\n`);
+      if (result.canvas) {
+        process.stderr.write(`Canvas: ${result.canvas.width}x${result.canvas.height} (${result.canvas.ratio})\n`);
+      }
       if (result.registered) {
         process.stderr.write(`Registered in CapCut's project list — restart CapCut to see it.\n`);
       } else {
@@ -5421,6 +5769,8 @@ async function main(): Promise<void> {
     const templateDir = resolveTemplateDir(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
     const { runQuickstart } = await import("./quickstart.js");
+    const { resolveCanvas } = await import("./factory.js");
+    const canvas = resolveCanvas({ width: flags.width, height: flags.height, ratio: flags.ratio });
     const result = runQuickstart({
       name,
       templateDir,
@@ -5429,6 +5779,7 @@ async function main(): Promise<void> {
       audio: flags.audio,
       srt: flags.srt,
       ffprobeCmd: flags.ffprobeCmd,
+      canvas: canvas ?? undefined,
     });
     out(result, flags);
     if (!flags.quiet) {
@@ -5466,6 +5817,14 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // `detect-retakes --srt <file>` reads cues from a subtitle file — no draft
+  // needed; the project form falls through to the read-command switch below.
+  if (cmd === "detect-retakes" && flags.srt !== undefined) {
+    if (projectPath) die(`--srt reads cues from the file; drop the <project> argument. Usage: ${DETECT_RETAKES_USAGE}`);
+    await cmdDetectRetakes(null, flags);
+    process.exit(0);
+  }
+
   if (!projectPath) die("Missing project path. Run 'capcut --help' for usage.");
 
   const { draft, filePath } = loadDraft(projectPath);
@@ -5489,6 +5848,9 @@ async function main(): Promise<void> {
       break;
     case "render":
       await cmdRender(draft, filePath, flags);
+      break;
+    case "detect-retakes":
+      await cmdDetectRetakes(draft, flags);
       break;
     case "version":
       cmdVersion(draft, filePath, flags);
@@ -5696,6 +6058,10 @@ async function main(): Promise<void> {
     case "chroma":
       requireArgs(positional, 3, "capcut chroma <project> <id> --color <#RRGGBB>  |  --off");
       await cmdChroma(draft, filePath, positional, flags);
+      break;
+    case "matting":
+      requireArgs(positional, 3, "capcut matting <project> <id> [--off]");
+      await cmdMatting(draft, filePath, positional, flags);
       break;
     default:
       die(`Unknown command: ${cmd}. Run 'capcut --help' for usage.`);

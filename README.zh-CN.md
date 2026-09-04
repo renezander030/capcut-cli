@@ -57,9 +57,10 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 
 ## 发布说明
 
+> **v0.22.0 新增：** 九项来自本仓库、其分支及更广泛 CapCut/剪映工具生态中真实用户痛点的功能。`register --materials` 会写入 CapCut 9.1 用来判断素材是否已导入的 `draft_materials` 登记——修复所有片段显示为"文件无法访问"并要求重新链接的问题（[pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13)）。`export-timeline --captions markers` 把字幕作为 OTIO 时间线标记带进 NLE，`import-timeline` 再由这些标记重建文本轨道（OTIO 没有字幕/标题 schema——[OpenTimelineIO#62](https://github.com/AcademySoftwareFoundation/OpenTimelineIO/issues/62)，自 2017 年悬而未决）。`caption --script` 保留 whisper 的逐词时间，但采用你的脚本文字。`detect-retakes` 找出说错后重说的句子，并以窗口、最少词数、相似度三道守卫防止误剪整条时间线。另有 `render --soft-captions`（可开关的 mov_text 字幕流）、`matting`（对片段素材开启智能抠像）、`init --ratio 9:16`（竖版草稿）、IR 风格的关键帧属性别名（`scale`、`x`、`y`、`opacity`）与 `--easing hold`。没有删除任何命令，现有输出结构均未改变。详见[更新日志](./CHANGELOG.md)。
+
 > **v0.21.1 新增：** 只有一个修复，但如果你通过 `npx` 使用 CLI，它就是这个版本的全部：`refused [editor-open]` 守卫会把 CLI *自己的* npm 进程识别为正在运行的编辑器——npm 会把自身进程标题改写为完整命令行（其中含有 `capcut-cli`），而守卫对拼接后的整张进程表做子串匹配——因此在文档记载的免安装路径（`npx capcut-cli …`）上，即使 CapCut 已关闭，所有写入也一律被拒绝（[#99](https://github.com/renezander030/capcut-cli/issues/99)，由 [@hansuk94](https://github.com/hansuk94) 报告，诊断与修复方向随报告一并给出）。编辑器检测现在在 macOS、Linux 与 Windows 上都按进程逐个精确比较进程名——真正运行中的 CapCut/JianYing 仍会拒绝写入，npm 进程不再触发。详见[更新日志](./CHANGELOG.md)。
 
-> **v0.21.0 新增：** issue [#50](https://github.com/renezander030/capcut-cli/issues/50) 中 CapCut Mac 9.2.8 嵌套 Timelines 布局的报告有了修复路径——`sync-timelines --nested` 以显式选择的方式把根时间线复制进 `Timelines/<id>/` 文档（每个文档保留自己的 GUID，即讨论串中验证过的解决办法），`fixture --check` 会在你附上诊断包之前机械化地检查是否残留家目录路径、邮箱或设备 ID。每次写入拒绝现在都会标明触发的守卫（`refused [editor-open]` / `[version-boundary]` / `[draft-changed-on-disk]`），粘贴的 stderr 不再有歧义。另有 `catalogue <query>`（按名称在全部内置与采集目录中查 resource_id）、`lint --pip`（画中画+蒙版工作流校验，[#78](https://github.com/renezander030/capcut-cli/issues/78)）、`import-srt --clone-style`（无需先查段 ID 即沿用草稿现有字幕样式）、`relink --stage`（修复后的草稿可随文件夹迁移）、只观察不写入的 `media-unregistered` 提示（pyCapCut#13），以及 version-support 与 jianying-encryption 的中文文档。没有删除任何命令，现有参数含义均未改变。详见[更新日志](./CHANGELOG.md)。
 
 ## 常用命令
 
@@ -75,8 +76,8 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 | **编辑 / 动画** | 裁剪 · 变速 · 音量 · 转场 · 蒙版 · 文字/图片动画 · 缓动曲线 |
 | **模板** | 应用与提取可复用版式 · `make-preset`（可移植文字样式预设）|
 | **字幕 / 多语言** | `caption` · `import-srt` · `export-srt`（行级/逐词 SRT + VTT）· `translate`（多语言草稿克隆）|
-| **特效** | `sfx` · `chroma`（绿幕抠像）|
-| **长视频切短** | `cut` · `detect-scenes`（ffmpeg 场景切点检测）|
+| **特效** | `sfx` · `chroma`（绿幕抠像）· `matting`（智能抠像/去背景）|
+| **长视频切短** | `cut` · `detect-scenes`（ffmpeg 场景切点检测）· `detect-silence` · `detect-retakes`（重复口播段落）|
 | **自动化** | `serve`（无状态 JSONL 执行器）· `migrate` · `doctor` · `sync-timelines`（8.7 时间线镜像修复）|
 
 **完整命令参考**（每个命令、参数与退出码）：**[docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)**（[英文原版](./docs/command-reference.md)）。

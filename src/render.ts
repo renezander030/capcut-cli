@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
+import { renderSrt } from "./srt.js";
 
 /**
  * Headless ffmpeg proxy renderer.
@@ -31,9 +32,37 @@ export interface RenderOptions {
   ffmpegCmd?: string; // ffmpeg binary (default "ffmpeg")
   encoder?: string; // -c:v video encoder (default libx264; e.g. h264_videotoolbox/h264_nvenc/h264_qsv)
   burnCaptions?: boolean; // draw text-track segments onto the video
+  softCaptions?: boolean; // mux the text-track cues as a mov_text subtitle stream (see softCaptionsFor)
   allVideoTracks?: boolean; // composite overlay video tracks
   dryRun?: boolean; // build the plan, do not execute ffmpeg
   progress?: boolean; // stream ffmpeg's own stderr instead of buffering it
+}
+
+/**
+ * `--soft-captions`: reviewers asked for subtitle STREAMS they can toggle in
+ * the player rather than pixels burned into the proxy (munim-ffmpeg#3,
+ * home-os#86 — "soft subtitle muxing" in ffmpeg terms). The text-track cues
+ * are rendered to an SRT beside the output (`<preview>.srt`, which most
+ * players auto-load by name anyway) and muxed as an mp4 `mov_text` stream.
+ * Two ffmpeg facts shape the plan: mov_text is an encoder some minimal builds
+ * lack (probed; skipped with a note, like drawtext), and `-shortest` treats
+ * the subtitle stream as a stream — the file would end at the last cue — so
+ * the plan drops `-shortest` when a subtitle stream is muxed (the video and
+ * audio chains are already bounded by their trims, photos by `-t`).
+ */
+export interface SoftCaptionsPlan {
+  /** Where the SRT is written before ffmpeg runs (next to the output). */
+  path: string;
+  /** SRT content, one cue per text segment with text. */
+  srt: string;
+  cues: number;
+  /** Input index the SRT occupies in the ffmpeg invocation. */
+  inputIndex: number;
+}
+
+export function srtPathFor(output: string): string {
+  const ext = extname(output);
+  return ext ? `${output.slice(0, -ext.length)}.srt` : `${output}.srt`;
 }
 
 const RENDER_TIMEOUT_MS = 600_000;
@@ -98,7 +127,7 @@ export function explainFfmpegFailure(stderr: string): string {
 export interface RenderInput {
   index: number;
   path: string;
-  kind: "video" | "photo" | "audio";
+  kind: "video" | "photo" | "audio" | "subtitle";
 }
 
 export interface RenderPlan {
@@ -115,6 +144,8 @@ export interface RenderPlan {
   skipped: Array<{ segmentId: string; reason: string }>;
   overlaySegments: number;
   capabilities?: FfmpegCapabilities;
+  /** Present only with --soft-captions and at least one cue. */
+  softCaptions?: SoftCaptionsPlan;
 }
 
 export interface RenderResult extends RenderPlan {
@@ -579,6 +610,25 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     filterParts.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:normalize=0[${aOut}]`);
   }
 
+  // --- soft captions (optional): SRT input + mov_text stream ---
+  let softCaptions: SoftCaptionsPlan | undefined;
+  if (opts.softCaptions) {
+    const cues = textSegments(draft).map(({ seg, text }) => ({
+      startUs: seg.target_timerange.start,
+      endUs: seg.target_timerange.start + seg.target_timerange.duration,
+      text,
+    }));
+    if (cues.length === 0) {
+      skipped.push({ segmentId: "captions", reason: "no text segments to mux as soft captions" });
+    } else {
+      const srtPath = srtPathFor(output);
+      const inputIndex = inputs.length;
+      inputs.push({ index: inputIndex, path: srtPath, kind: "subtitle" });
+      inputArgs.push("-i", srtPath);
+      softCaptions = { path: srtPath, srt: renderSrt(cues), cues: cues.length, inputIndex };
+    }
+  }
+
   const filterComplex = filterParts.join(";");
   const args = [
     "-y",
@@ -588,6 +638,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     "-map",
     `[${vOut}]`,
     ...(aOut ? ["-map", `[${aOut}]`] : []),
+    ...(softCaptions ? ["-map", `${softCaptions.inputIndex}:0`] : []),
     "-c:v",
     opts.encoder ?? "libx264",
     "-preset",
@@ -597,7 +648,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     "-pix_fmt",
     "yuv420p",
     ...(aOut ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-    "-shortest",
+    ...(softCaptions ? ["-c:s", "mov_text", "-metadata:s:s:0", "language=und"] : ["-shortest"]),
     output,
   ];
 
@@ -614,6 +665,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     textOverlays,
     overlaySegments,
     skipped,
+    ...(softCaptions ? { softCaptions } : {}),
   };
 }
 
@@ -666,6 +718,19 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     effective.allVideoTracks = false;
     fallbackSkipped.push({ segmentId: "overlays", reason: "ffmpeg lacks overlay filter; extra video tracks disabled" });
   }
+  if (effective.softCaptions) {
+    // Same shape as the drawtext fallback: an optional extra is withheld with
+    // a note rather than failing the render. Only a build that LISTS its
+    // encoders and lacks mov_text is treated as lacking it.
+    const { listed, encoders } = probeFfmpegEncoders(opts.ffmpegCmd ?? "ffmpeg");
+    if (listed && !encoders.has("mov_text")) {
+      effective.softCaptions = false;
+      fallbackSkipped.push({
+        segmentId: "captions",
+        reason: "ffmpeg lacks the mov_text encoder; soft captions disabled",
+      });
+    }
+  }
   const basePlan = buildRenderPlan(draft, effective);
   const plan = { ...basePlan, capabilities, skipped: [...basePlan.skipped, ...fallbackSkipped] };
 
@@ -687,6 +752,10 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   if (opts.dryRun) {
     return { ...plan, ok: true, executed: false };
   }
+
+  // The SRT must exist before ffmpeg opens its inputs; it stays next to the
+  // output afterwards (players auto-load a same-named .srt).
+  if (plan.softCaptions) writeFileSync(plan.softCaptions.path, plan.softCaptions.srt, "utf-8");
 
   const cmd = opts.ffmpegCmd ?? "ffmpeg";
   // --progress hands ffmpeg's stderr straight to the terminal. That is both the

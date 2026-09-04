@@ -110,6 +110,48 @@ Every write command in `capcut-cli`:
 
 The `.bak` is your safety net — if CapCut crashes on open, restore from `.bak`. Close CapCut on the project before editing, reopen after.
 
+## `draft_meta_info.json` — the sidecar the app trusts for "what is imported"
+
+The per-draft sidecar carries the registration fields (`draft_id`,
+`draft_fold_path`, `draft_json_file`, `draft_name`, `draft_root_path`,
+`tm_*`) that `capcut register` repairs, plus `draft_materials`: an array of
+groups `{ "type": N, "value": [ … ] }`. Group `type: 0` lists the media the
+user IMPORTED. Newer builds (reported on CapCut International 9.1.0, macOS —
+[pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13)) decide from
+this list, not from the timeline's material paths, which clips are available:
+a tool-built sidecar whose groups are all empty opens with every clip shown as
+"file inaccessible" and a relink prompt, even though the paths in
+`draft_content.json` are valid. `capcut lint` reports the empty state as
+`media-unregistered`; `capcut register <project> --materials --apply` writes the
+registration (v0.22, `src/materials-register.ts`).
+
+One entry per distinct local file, matched by `file_Path`:
+
+```jsonc
+{
+  "ai_group_type": "", "create_time": -1,
+  "duration": 3000000,            // µs; photos: 5000000 nominal
+  "enter_from": 0, "extra_info": "clip.mp4",   // display name
+  "file_Path": "/abs/or/relative/path/clip.mp4",
+  "height": 1080, "id": "<uuid>",
+  "import_time": -1, "import_time_ms": -1, "item_source": 1,
+  "material_color_tag": "", "md5": "",
+  "metetype": "video",            // "video" | "photo" | "music"
+  "roughcut_time_range": { "duration": -1, "start": -1 },
+  "sub_time_range": { "duration": -1, "start": -1 },
+  "type": 0, "width": 1920
+}
+```
+
+**Provenance, and what is still inferred:** the shape is pyCapCut PR
+[#14](https://github.com/GuanYixuan/pyCapCut/pull/14) (gingatimo, 2026-08-18),
+verified by its author against the 9.1.0 relink prompt; `-1` timestamps and an
+empty `md5` are what the app accepts for a manual import. No app-authored 9.1
+sidecar is committed here yet — `capcut fixture` on a draft the app itself
+imported media into would confirm the shape byte-for-byte (the bundle includes
+`draft_meta_info.json`). The CLI merges, never replaces: existing entries stay,
+missing files are appended to the type-0 group, re-runs are no-ops.
+
 ## Common gotchas
 
 - **CapCut MUST be closed on the draft before edit.** CapCut periodically rewrites the file from in-memory state; editing while open = your changes overwritten on next save. `capcut-cli` does not enforce this, but you'll lose data if you skip it.

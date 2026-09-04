@@ -56,6 +56,14 @@ One entry per property. Within an entry, `keyframe_list` is sorted by `time_offs
 > A test now fails if this table and `PROPERTY_MAP` disagree again, so the two
 > cannot drift apart silently a second time.
 
+**Aliases (v0.22).** The IR-style names agent pipelines use are accepted
+wherever a property is read (`keyframe`, `keyframe --batch`, compile's keyframe
+op) and stored under the canonical name above — `scale` → `uniform_scale`,
+`x` → `position_x`, `y` → `position_y`, `opacity` → `alpha`. `scale` always
+means the uniform scale (the IR meaning), never `scale_x`/`scale_y`. Every
+downstream integrator had been re-implementing this table by hand (vertir's
+PROP_MAP, qcut's spec.py).
+
 The `keyframe` CLI command appends to existing per-property lists on re-invocation and sorts by `time_offset`, so you can build up complex motion incrementally.
 
 ### `curveType`
@@ -63,7 +71,14 @@ The `keyframe` CLI command appends to existing per-property lists on re-invocati
 Per-keyframe interpolation curve to the NEXT keyframe in the list:
 
 - `"Line"` — linear (default)
-- `"Hold"` — step (no interpolation)
+- `"Hold"` — step (no interpolation). **Listed, not verified:** no app-authored
+  draft in this repo or the neighbouring ecosystem carries it, so `capcut-cli`
+  never writes it — an unverified encoding would save without error and could
+  silently no-op. `keyframe --easing hold` (v0.22) emulates the step with plain
+  `"Line"` keyframes instead: a helper keyframe carrying the held value one
+  frame before the NEXT keyframe on that property, so the whole ramp happens
+  inside a single frame. A fixture that shows the app writing `"Hold"` would
+  let the flag switch to the native curve.
 - `"Smooth"` — ease in/out
 - `"Beizer"` — custom bezier (additional `value_bezier_control_points` field)
 - `"FreeCurveInOut"` — bezier via `left_control` / `right_control` handles; this is what the CapCut UI writes when an easing preset (Cubic In / Cubic Out / …) is applied

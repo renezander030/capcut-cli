@@ -616,14 +616,14 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     }
   }
 
-  // Unregistered-media sidecar note (pyCapCut#13), observe-only: newer builds
-  // (reported on CapCut International 9.1.0, macOS) show timeline media as
-  // "file inaccessible" and prompt per-clip relinking when
-  // draft_meta_info.json's draft_materials registers nothing. The registration
-  // WRITE stays deliberately out of scope until a real entry shape is captured
-  // (src/store.ts rationale) — so this is info-severity: it names the hazard
-  // where CI pipelines will actually see it and asks for the one artifact the
-  // write can be built from. It can never fail an exit code.
+  // Unregistered-media sidecar note (pyCapCut#13): newer builds (reported on
+  // CapCut International 9.1.0, macOS) show timeline media as "file
+  // inaccessible" and prompt per-clip relinking when draft_meta_info.json's
+  // draft_materials registers nothing. The repair is `capcut register
+  // <project> --materials --apply` (src/materials-register.ts) — a sidecar
+  // write, which lint --fix (a timeline-file repair) does not perform, so the
+  // issue stays fixable:false and names the command. Info-severity: it can
+  // never fail an exit code.
   // Gated on media that actually exists on disk: absent media is
   // missing-file's finding, and the 9.1.0 symptom is precisely media that IS
   // there and still shows inaccessible in the app.
@@ -644,7 +644,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
         code: "media-unregistered",
         message: registration.note,
         fixable: false,
-        suggested_command: `capcut fixture ${opts.draftDir} --out <dir>`,
+        suggested_command: `capcut register ${opts.draftDir} --materials --apply`,
       });
     }
   }

@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import type { Draft, Segment } from "./draft.js";
+import { extractText } from "./draft.js";
 import { framesFor } from "./time.js";
 
 /**
@@ -15,8 +16,14 @@ import { framesFor } from "./time.js";
  *
  * Deliberate scope:
  * - Video and audio tracks only. Text/caption tracks are skipped with a
- *   pointer to `export-srt` (OTIO has no standard title schema); sticker /
- *   effect / filter tracks have no portable equivalent and are skipped too.
+ *   pointer to `export-srt` (OTIO has no standard title schema — the request
+ *   has been open since 2017, OpenTimelineIO#62), UNLESS `captions: "markers"`
+ *   is asked for: then every caption cue becomes a timeline marker on the
+ *   Stack (name = cue text, marked_range = cue timing), which is what NLEs
+ *   already round-trip — Resolve and Premiere import Stack markers as timeline
+ *   markers — so the captions at least survive the handoff as positioned notes
+ *   and `import-timeline` can rebuild the text track from them. Sticker /
+ *   effect / filter tracks have no portable equivalent and are skipped.
  *   Every skip is reported, never silent.
  * - `speed` maps to a LinearTimeWarp effect (time_scalar = speed), matching
  *   OTIO semantics: timeline duration = source_range.duration / time_scalar,
@@ -44,7 +51,45 @@ export interface OtioStats {
   tracks: number;
   clips: number;
   gaps: number;
+  /** Caption cues written as timeline markers (`captions: "markers"`); 0 otherwise. */
+  captions: number;
   skipped: OtioSkip[];
+}
+
+export interface OtioExportOptions {
+  /** How text/caption tracks travel: dropped with a note (default) or as Stack markers. */
+  captions?: "skip" | "markers";
+}
+
+/** The marker colour every caption marker carries — one colour, so an NLE user can filter them. */
+export const CAPTION_MARKER_COLOR = "YELLOW";
+
+/**
+ * One caption cue as an OTIO Marker.1 (the 0.14-era schema, which every
+ * reader still accepts and newer libraries upgrade on read). The cue text is
+ * the marker name; it is repeated under metadata.capcut.text because some
+ * NLEs shorten or rewrite marker names on import, and `import-timeline` needs
+ * the exact text back. metadata.Resolve_OTIO.Note is DaVinci Resolve's own
+ * marker-note field (it writes and reads it on its .otio round trips); harmless
+ * elsewhere, it makes the cue text show in Resolve's marker panel too.
+ */
+function captionMarker(
+  text: string,
+  startFrames: number,
+  durationFrames: number,
+  rate: number,
+  capcut: Record<string, unknown>,
+): OtioObject {
+  return {
+    OTIO_SCHEMA: "Marker.1",
+    color: CAPTION_MARKER_COLOR,
+    marked_range: timeRange(startFrames, durationFrames, rate),
+    metadata: {
+      Resolve_OTIO: { Keywords: [], Note: text },
+      capcut: { kind: "caption", text, ...capcut },
+    },
+    name: text,
+  };
 }
 
 function rationalTime(value: number, rate: number): OtioObject {
@@ -170,13 +215,64 @@ export interface ImportTrackPlan {
   clips: ImportClipPlan[];
 }
 
+export interface ImportCaptionPlan {
+  text: string;
+  startUs: number;
+  durationUs: number;
+  /** Text track name recorded at export (falls back to "captions"). */
+  track: string;
+}
+
 export interface ImportPlan {
   name: string;
   rate: number;
   tracks: ImportTrackPlan[];
   clips: number;
   gaps: number;
+  /** Caption cues recovered from Stack markers that export-timeline --captions markers wrote. */
+  captions: ImportCaptionPlan[];
   skipped: OtioSkip[];
+}
+
+/**
+ * Timeline (Stack) markers: the ones export-timeline wrote for captions carry
+ * metadata.capcut.kind === "caption" and come back as caption cues; any other
+ * timeline marker (an editor's own notes) has no CapCut equivalent and is
+ * reported once, with the count, like every other skip.
+ */
+function captionsFromStackMarkers(markers: unknown, rate: number, skipped: OtioSkip[]): ImportCaptionPlan[] {
+  const captions: ImportCaptionPlan[] = [];
+  if (!Array.isArray(markers)) return captions;
+  let foreign = 0;
+  for (const marker of markers) {
+    const m = marker as OtioObject;
+    const capcut = (m.metadata as { capcut?: Record<string, unknown> } | undefined)?.capcut;
+    if (capcut?.kind !== "caption") {
+      foreign++;
+      continue;
+    }
+    const range = timeRangeUs(m.marked_range, rate, "caption marker marked_range");
+    const text =
+      typeof capcut.text === "string" && capcut.text ? capcut.text : typeof m.name === "string" ? m.name : "";
+    if (!text) {
+      skipped.push({ track: "(timeline)", type: "markers", reason: "a caption marker carries no text — skipped" });
+      continue;
+    }
+    captions.push({
+      text,
+      startUs: range.startUs,
+      durationUs: Math.max(1, range.durationUs),
+      track: typeof capcut.track === "string" && capcut.track ? capcut.track : "captions",
+    });
+  }
+  if (foreign > 0) {
+    skipped.push({
+      track: "(timeline)",
+      type: "markers",
+      reason: `${foreign} timeline marker(s) without capcut caption metadata have no CapCut equivalent`,
+    });
+  }
+  return captions;
 }
 
 function schemaOf(node: unknown): string {
@@ -318,6 +414,7 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
     tracks: [],
     clips: 0,
     gaps: 0,
+    captions: captionsFromStackMarkers((stack as OtioObject).markers, rate, skipped),
     skipped,
   };
 
@@ -380,8 +477,9 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
   return plan;
 }
 
-export function draftToOtio(draft: Draft): { doc: OtioObject; stats: OtioStats } {
+export function draftToOtio(draft: Draft, options: OtioExportOptions = {}): { doc: OtioObject; stats: OtioStats } {
   const rate = typeof draft.fps === "number" && draft.fps > 0 ? draft.fps : 30;
+  const captionMode = options.captions ?? "skip";
   // Issue #82: this used to be a local `Math.round((us / 1e6) * rate)`, a second
   // frame grid alongside time.ts. It differed in two ways that both reached the
   // exported file: a clip shorter than half a frame rounded to a zero-length OTIO
@@ -391,17 +489,37 @@ export function draftToOtio(draft: Draft): { doc: OtioObject; stats: OtioStats }
   const toFrames = (us: number) => framesFor(us, rate);
 
   const children: OtioObject[] = [];
-  const stats: OtioStats = { tracks: 0, clips: 0, gaps: 0, skipped: [] };
+  const stackMarkers: OtioObject[] = [];
+  const stats: OtioStats = { tracks: 0, clips: 0, gaps: 0, captions: 0, skipped: [] };
 
   for (const track of draft.tracks) {
     const kind = EXPORTABLE_TRACK_KINDS[track.type];
     if (!kind) {
+      if (track.type === "text" && captionMode === "markers") {
+        const segments = [...track.segments].sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+        for (const segment of segments) {
+          const material = (draft.materials.texts ?? []).find((m) => m.id === segment.material_id);
+          const text = material && typeof material.content === "string" ? extractText(material.content) : "";
+          if (!text) continue;
+          stackMarkers.push(
+            captionMarker(
+              text,
+              toFrames(segment.target_timerange.start),
+              Math.max(1, toFrames(segment.target_timerange.duration)),
+              rate,
+              { track: track.name, track_id: track.id, segment_id: segment.id, material_id: segment.material_id },
+            ),
+          );
+          stats.captions++;
+        }
+        continue;
+      }
       stats.skipped.push({
         track: track.name,
         type: track.type,
         reason:
           track.type === "text"
-            ? "OTIO has no standard title schema — export captions with `capcut export-srt` and re-attach them in the NLE"
+            ? "OTIO has no standard title schema — pass --captions markers to carry cues as timeline markers, or export them with `capcut export-srt` and re-attach them in the NLE"
             : "no portable OTIO equivalent for this track type",
       });
       continue;
@@ -451,7 +569,7 @@ export function draftToOtio(draft: Draft): { doc: OtioObject; stats: OtioStats }
       OTIO_SCHEMA: "Stack.1",
       children,
       effects: [],
-      markers: [],
+      markers: stackMarkers,
       metadata: {},
       name: "tracks",
       source_range: null,

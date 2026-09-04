@@ -3,6 +3,7 @@ import { randomUUID as uuid } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type AlignmentReport, alignScript, tokenizeScript } from "./align.js";
 import {
   buildEmphasisRanges,
   DEFAULT_KEYWORD_SIZE,
@@ -34,6 +35,12 @@ export interface CaptionOptions {
   keywordColor?: string; // emphasis colour; default KARAOKE_HIGHLIGHT_COLOR
   keywordSize?: number; // emphasis multiplier on the cue's base font size; default DEFAULT_KEYWORD_SIZE
   colorCycle?: string[]; // rotate the BASE text colour per cue in list order
+  /**
+   * --script: the known transcript. Whisper's word timing is kept, the
+   * script's wording is used (see align.ts); each non-empty script line is a
+   * cue boundary, long lines still split at --max-chars.
+   */
+  scriptText?: string;
 }
 
 export interface CaptionWord {
@@ -63,6 +70,8 @@ export interface CaptionResult {
   karaoke?: boolean;
   keyword_matches?: number;
   color_cycle?: number;
+  /** --script alignment quality (only when a script was given). */
+  script?: AlignmentReport;
 }
 
 /**
@@ -85,14 +94,29 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
   }
   const audio = resolveAudio(draft, opts);
   const transcription = runWhisper(audio, opts);
-  const cues = opts.karaoke
-    ? groupWords(
-        transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues),
-        opts.maxWords ?? 4,
-        opts.maxChars ?? 28,
-        (opts.maxGapMs ?? 500) * 1000,
-      )
-    : transcription.cues;
+  const recognizedWords = transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues);
+  let scriptReport: AlignmentReport | undefined;
+  let cues: CaptionCue[];
+  if (opts.scriptText !== undefined) {
+    const lines = tokenizeScript(opts.scriptText);
+    if (lines.length === 0) throw new Error("--script file contains no words.");
+    if (recognizedWords.length === 0) {
+      throw new Error("Whisper produced no words to align the script to. Check the audio is not silent.");
+    }
+    const aligned = alignScript(lines, recognizedWords);
+    scriptReport = aligned.report;
+    cues = opts.karaoke
+      ? groupWords(aligned.words, opts.maxWords ?? 4, opts.maxChars ?? 28, (opts.maxGapMs ?? 500) * 1000)
+      : // One cue per script line — the author's chunking — split only when a
+        // line outgrows --max-chars (words and gaps never split a line).
+        aligned.lines.flatMap((line) =>
+          groupWords(line, Number.POSITIVE_INFINITY, opts.maxChars ?? 42, Number.POSITIVE_INFINITY),
+        );
+  } else {
+    cues = opts.karaoke
+      ? groupWords(recognizedWords, opts.maxWords ?? 4, opts.maxChars ?? 28, (opts.maxGapMs ?? 500) * 1000)
+      : transcription.cues;
+  }
   if (cues.length === 0) {
     throw new Error("Whisper produced no cues. Check the audio file is not silent and the model name is valid.");
   }
@@ -193,6 +217,7 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     // undefined when the flags are off, so JSON output stays byte-identical.
     keyword_matches: highlightWords.length > 0 ? keywordMatches : undefined,
     color_cycle: colorCycle.length > 0 ? colorCycle.length : undefined,
+    script: scriptReport,
   };
 }
 

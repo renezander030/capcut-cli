@@ -19,7 +19,7 @@
 | `opacity` | `capcut opacity <project> <id> <alpha>` | yes | Set a segment's opacity (0.0-1.0). |
 | `export-srt` | `capcut export-srt <project> [options]` | no | Export subtitles to SRT or WebVTT on stdout, per line or per word. |
 | `export-ass` | `capcut export-ass <project> [--karaoke] [--out <file.ass>]` | no | Export styled ASS subtitles on stdout or --out, with per-range overrides and --karaoke word timing. |
-| `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | no | Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively). |
+| `export-timeline` | `capcut export-timeline <project> [--out <file.otio>] [--captions skip\|markers]` | no | Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively). |
 | `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | yes | Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent. |
 | `materials` | `capcut materials <project> [--type <type>]` | no | List material types and counts; filter with --type. |
 | `segment` | `capcut segment <project> <id>` | no | Full detail for one segment and its material. |
@@ -59,8 +59,9 @@
 | `migrate` | `capcut migrate <project> --from <version> --to <version>` | yes | Apply known schema migrations across version boundaries. |
 | `add-sfx` | `capcut add-sfx <project> <slug> <start> <duration> [options]` | yes | Add a sound effect on a dedicated track. |
 | `chroma` | `capcut chroma <project> <id> (--color <hex> \| --off) [options]` | yes | Green-screen / chroma key a video segment, or --off. |
+| `matting` | `capcut matting <project> <id> [--off]` | yes | Smart matting (background removal) on a video/photo segment's material — flag 3 on; --off writes the documented flag-0 object. |
 | `prune` | `capcut prune <project>` | yes | Remove materials no segment references. |
-| `register` | `capcut register <project-dir> [--apply] [--drafts <dir>]` | yes | Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak). |
+| `register` | `capcut register <project-dir> [--apply] [--materials] [--drafts <dir>]` | yes | Repair an existing draft's registration metadata (draft_meta_info.json + root_meta_info.json entry) from a read-only draft_content.json so the CapCut app lists it (plan by default; --apply writes with .bak); --materials also registers the timeline's media in draft_materials (the CapCut 9.1 relink-prompt fix). |
 | `rename` | `capcut rename <project> <new-name> [--drafts <dir>]` | yes | Rename a draft after creation: the folder on disk plus draft_name and every self-referential path in draft_meta_info.json and the store's root_meta_info.json entry, transactionally (refuses when the target folder exists). |
 | `relink` | `capcut relink <project> (--dir <path> \| --from <prefix> --to <prefix>) [--stage]` | yes | Repair broken media paths (--dir or --from/--to). |
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | yes | Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes. |
@@ -82,9 +83,10 @@
 | `serve` | `capcut serve [--queue <path>] [options]` | no | Run a stateless JSONL job queue from stdin/--queue. |
 | `decrypt` | `capcut decrypt <project-or-file>` | no | Detect JianYing 6.0+ encryption and explain the workaround. |
 | `export` | `capcut export <drafts-dir> --batch [options]` | yes | EXPERIMENTAL UI-automated render queue (macOS). |
-| `init` | `capcut init <name> [--template <dir>] [--drafts <dir>]` | yes | Create a new empty draft from a template. |
-| `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
+| `init` | `capcut init <name> [--template <dir>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | Create a new empty draft from a template. |
+| `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
 | `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |
 | `detect-silence` | `capcut detect-silence <media> [options]` | no | Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut. |
+| `detect-retakes` | `capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] \| --srt <file>` | no | Find repeated takes in the draft's captions (or an SRT): windowed word-sequence similarity, later take kept; prints cuts + keep segments to seed compile/cut. |
