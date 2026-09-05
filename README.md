@@ -85,6 +85,12 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 > **New in v0.21.1:** one fix, and if you run the CLI via `npx` it is the whole release: the `refused [editor-open]` guard was detecting the CLI's *own* npm process — npm rewrites its process title to the full command line, which contains `capcut-cli`, and the guard substring-matched the joined process table — so every write on the documented zero-install path (`npx capcut-cli …`) was refused even with CapCut closed ([#99](https://github.com/renezander030/capcut-cli/issues/99), reported by [@hansuk94](https://github.com/hansuk94) with the diagnosis and the fix direction included). Editor detection now compares exact process names, per process, on macOS, Linux and Windows — a really-running CapCut/JianYing still refuses, npm never does. Full details in the [changelog](./CHANGELOG.md).
 
+## Built with capcut-cli
+
+- [OpenChatCut](https://github.com/0xsline/OpenChatCut) — exports an agent-edited timeline, local media, audio, and captions into a real CapCut / JianYing draft for review and rendering.
+
+Project descriptions are approved by their maintainers. Inclusion does not imply endorsement or affiliation.
+
 
 ## Commands
 
