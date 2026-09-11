@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -3823,11 +3823,16 @@
     {
       "name": "migrate",
       "summary": "Apply known schema migrations across version boundaries.",
-      "usage": "capcut migrate <project> --from <version> --to <version>",
+      "usage": "capcut migrate <project> (--from <version> --to <version> | --like <project> | --from-store)",
       "positionals": [
         {
           "name": "project",
           "type": "path",
+          "required": true
+        },
+        {
+          "name": "version",
+          "type": "string",
           "required": true
         }
       ],
@@ -3849,6 +3854,24 @@
           "type": "string",
           "required": false,
           "description": "Target version."
+        },
+        {
+          "name": "like",
+          "flags": [
+            "--like"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Donor project: copy its schema markers (version, new_version, platform, last_modified_platform, color_space, render flags) onto this draft so a build that refused it as 'from an unusual path' opens it (#67, #111). Timeline content is never touched."
+        },
+        {
+          "name": "from_store",
+          "flags": [
+            "--from-store"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Like --like, with the newest app-authored project in this draft's own drafts folder as the donor."
         }
       ],
       "mutates": true,
@@ -4074,7 +4097,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Also register the timeline's local media in draft_meta_info.json's draft_materials (the list CapCut 9.1 uses to decide what is imported; empty, every clip shows as 'file inaccessible'). Appends missing entries to the type-0 group, preserves existing ones, no-ops when complete."
+          "description": "Also register the timeline's local media in draft_meta_info.json's draft_materials (the list CapCut 9.1 uses to decide what is imported; empty, every clip shows as 'file inaccessible'). Appends missing entries to the type-0 group, preserves existing ones, no-ops when complete. Reports timeline materials whose local_material_id does not link to their entry; `capcut lint <project> --fix` writes that link."
         },
         {
           "name": "drafts",
@@ -4996,7 +5019,7 @@
     {
       "name": "init",
       "summary": "Create a new empty draft from a template.",
-      "usage": "capcut init <name> [--template <dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
+      "usage": "capcut init <name> [--template auto|bundled|<dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
       "positionals": [
         {
           "name": "name",
@@ -5020,9 +5043,9 @@
           "flags": [
             "--template"
           ],
-          "type": "path",
+          "type": "string",
           "required": false,
-          "description": "Template directory."
+          "description": "Skeleton for the new draft. `auto` (the default when omitted): when the drafts folder holds projects from a newer CapCut major than the bundled template declares, seed the draft from the store's newest app-authored project — its version markers and settings, none of its content — because CapCut 8.4+/8.7 Windows/9.3 refuse the bundled 6.5.0 template's drafts as 'from an unusual path' (#67, #111); otherwise the bundled template. `bundled`: always the bundled template. A directory: copy that template (its Timelines/ mirrors, .bak files and undo history are never carried over)."
         },
         {
           "name": "drafts",
@@ -5082,7 +5105,7 @@
     {
       "name": "quickstart",
       "summary": "One-command first draft: create + add one input + lint + print the open-in-CapCut step.",
-      "usage": "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
+      "usage": "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto|bundled|<dir>] [--ratio <r> | --width <px> --height <px>]",
       "positionals": [
         {
           "name": "name",
@@ -5147,9 +5170,9 @@
           "flags": [
             "--template"
           ],
-          "type": "path",
+          "type": "string",
           "required": false,
-          "description": "Template directory."
+          "description": "Skeleton for the new draft. `auto` (the default when omitted): when the drafts folder holds projects from a newer CapCut major than the bundled template declares, seed the draft from the store's newest app-authored project — its version markers and settings, none of its content — because CapCut 8.4+/8.7 Windows/9.3 refuse the bundled 6.5.0 template's drafts as 'from an unusual path' (#67, #111); otherwise the bundled template. `bundled`: always the bundled template. A directory: copy that template (its Timelines/ mirrors, .bak files and undo history are never carried over)."
         },
         {
           "name": "ffprobe_cmd",
@@ -5209,7 +5232,7 @@
     {
       "name": "compile",
       "summary": "Build a draft from a declarative JSON spec (the inverse of describe).",
-      "usage": "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
+      "usage": "capcut compile <spec.json> [--out <draftdir>] [--template auto|bundled|<dir>] [--data <rows.jsonl|->] [--check | --plan]",
       "positionals": [
         {
           "name": "spec.json",
@@ -5218,6 +5241,11 @@
         },
         {
           "name": "draftdir",
+          "type": "path",
+          "required": false
+        },
+        {
+          "name": "dir",
           "type": "path",
           "required": false
         }
@@ -5246,9 +5274,9 @@
           "flags": [
             "--template"
           ],
-          "type": "path",
+          "type": "string",
           "required": false,
-          "description": "Template directory."
+          "description": "Skeleton for the new draft. `auto` (the default when omitted): when the drafts folder holds projects from a newer CapCut major than the bundled template declares, seed the draft from the store's newest app-authored project — its version markers and settings, none of its content — because CapCut 8.4+/8.7 Windows/9.3 refuse the bundled 6.5.0 template's drafts as 'from an unusual path' (#67, #111); otherwise the bundled template. `bundled`: always the bundled template. A directory: copy that template (its Timelines/ mirrors, .bak files and undo history are never carried over)."
         },
         {
           "name": "check",

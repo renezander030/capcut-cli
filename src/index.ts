@@ -861,6 +861,8 @@ interface Flags {
   human: boolean;
   quiet: boolean;
   batch: boolean;
+  like?: string;
+  fromStore?: boolean;
   track?: string;
   out?: string;
   fontSize?: number;
@@ -1188,6 +1190,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.off = true;
     } else if (a === "--materials") {
       flags.materials = true;
+    } else if (a === "--like" && i + 1 < args.length) {
+      flags.like = args[++i];
+    } else if (a === "--from-store") {
+      flags.fromStore = true;
     } else if (a === "--captions" && i + 1 < args.length) {
       flags.captions = args[++i];
     } else if (a === "--script" && i + 1 < args.length) {
@@ -1555,19 +1561,29 @@ function requireArgs(args: string[], min: number, usage: string): void {
 }
 
 /**
- * Default template resolution shared by init / quickstart / compile / edit:
- * user --template > ../CapCutAPI/template > the bundled _init template.
- * Stays in this module because it resolves against `import.meta.url`.
+ * Template resolution shared by init / quickstart / compile / import-timeline:
+ * `--template <dir>` > `--template bundled` > ../CapCutAPI/template > the
+ * bundled _init template — plus the store-seeding mode initDraft applies on
+ * top (#67, #111): omitted = `auto` (seed from the drafts folder's newest
+ * project when it outgrows the template), `--template auto` = always seed,
+ * `bundled` / a directory = never. Stays in this module because it resolves
+ * against `import.meta.url`.
  */
-function resolveTemplateDir(flags: Flags): string {
+function resolveTemplate(flags: Flags): { templateDir: string; seed: "auto" | "always" | "off" } {
   const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const externalTemplate = path.resolve(cliDir, "..", "CapCutAPI", "template");
   const bundledTemplate = path.join(cliDir, "templates", "_init");
-  let templateDir = flags.template ?? externalTemplate;
-  if (!flags.template && !existsSync(templateDir) && existsSync(bundledTemplate)) {
-    templateDir = bundledTemplate;
-  }
-  return templateDir;
+  const fallback = !existsSync(externalTemplate) && existsSync(bundledTemplate) ? bundledTemplate : externalTemplate;
+  if (flags.template === undefined) return { templateDir: fallback, seed: "auto" };
+  if (flags.template === "auto") return { templateDir: fallback, seed: "always" };
+  if (flags.template === "bundled") return { templateDir: bundledTemplate, seed: "off" };
+  return { templateDir: flags.template, seed: "off" };
+}
+
+/** One stderr line naming where a new draft's skeleton came from. */
+function describeTemplate(template: import("./factory.js").TemplateReport): string | null {
+  if (template.source !== "store") return null;
+  return `Skeleton seeded from the store's CapCut ${template.app_version} project: ${template.path} (schema markers kept, content emptied).`;
 }
 
 // --- Commands ---
@@ -2202,11 +2218,18 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
   let draft: Draft;
   let filePath: string;
   let draftPath: string;
+  let template: ReturnType<typeof initDraft>["template"] | null = null;
   if (flags.out) {
-    // Fresh draft from the bundled template — the same resolution init/compile use.
+    // Fresh draft from the template (or the store's newest project) — the same resolution init/compile use.
     const outDir = path.resolve(flags.out);
-    const templateDir = resolveTemplateDir(flags);
-    const created = initDraft({ name: path.basename(outDir), templateDir, draftsDir: path.dirname(outDir) });
+    const resolved = resolveTemplate(flags);
+    const created = initDraft({
+      name: path.basename(outDir),
+      templateDir: resolved.templateDir,
+      draftsDir: path.dirname(outDir),
+      seed: resolved.seed,
+    });
+    template = created.template;
     ({ draft, filePath } = loadDraft(created.filePath));
     draftPath = created.draftPath;
     // Display name from the timeline, fps from the document's rate, so a
@@ -2236,10 +2259,14 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
       placeholders: applied.placeholders,
       duration_us: draft.duration,
       skipped: plan.skipped,
+      // Present only for --out (a draft was created), so --into keeps its shape.
+      ...(template ? { template } : {}),
     },
     flags,
   );
   if (!flags.quiet) {
+    const seeded = template ? describeTemplate(template) : null;
+    if (seeded) process.stderr.write(`${seeded}\n`);
     for (const skip of plan.skipped) {
       process.stderr.write(`skipped in "${skip.track}" (${skip.type}): ${skip.reason}\n`);
     }
@@ -2518,6 +2545,7 @@ async function cmdAddAudio(draft: Draft, filePath: string, positional: string[],
     duration_us: duration,
     duration_source: durationStr ? "argument" : "ffprobe",
     media_probe: media,
+    registration: result.registered ? "draft_materials" : "none",
   };
   if (asset) payload.wikimedia = wikimediaPayload(asset);
   if (warning) payload.warning = warning;
@@ -2663,6 +2691,7 @@ async function cmdAddVideo(draft: Draft, filePath: string, positional: string[],
     height: height ?? 1080,
     dimension_source: dimensionSource,
     media_probe: media,
+    registration: result.registered ? "draft_materials" : "none",
   };
   if (asset) payload.wikimedia = wikimediaPayload(asset, true);
   const warnings = [warning, dimensionWarning].filter(Boolean);
@@ -3649,6 +3678,32 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     draftDir: path.dirname(path.resolve(filePath)),
     dryRun: isDryRun(),
   };
+  // template-stale (#67, #111) needs the store's newest app version, which
+  // costs one timeline read per sibling project — so it is looked up only for
+  // drafts that carry the bundled-template signature (an app_version but none
+  // of the markers the app writes) AND live in a drafts folder (a
+  // root_meta_info.json index next to the project, or the managed
+  // com.lveditor.draft path); a draft in a scratch directory has no store
+  // whose projects could refuse it, and scanning its parent would read
+  // unrelated folders.
+  {
+    const d = draft as unknown as Record<string, unknown>;
+    const markerless =
+      typeof draft.platform?.app_version === "string" &&
+      d.version === undefined &&
+      (d.new_version === undefined || d.new_version === "") &&
+      d.last_modified_platform === undefined;
+    if (markerless) {
+      const { isManagedDraftPath } = await import("./store.js");
+      const storeDir = path.dirname(path.dirname(path.resolve(filePath)));
+      const inStore =
+        existsSync(path.join(storeDir, "root_meta_info.json")) || isManagedDraftPath(path.resolve(filePath));
+      if (inStore) {
+        const { detectStoreAppVersion } = await import("./factory.js");
+        opts.storeAppVersion = detectStoreAppVersion(storeDir);
+      }
+    }
+  }
 
   // The --pip report (issue #78): counts for the PIP + local-mask workflow's
   // silent failure modes, printed alongside the ordinary issues in both output
@@ -3794,8 +3849,54 @@ async function cmdTranslate(draft: Draft, _filePath: string, flags: Flags): Prom
 }
 
 async function cmdMigrate(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { migrateDraft } = await import("./migrate.js");
-  if (!flags.from || !flags.to) die("Usage: capcut migrate <project> --from <ver> --to <ver>");
+  const { migrateDraft, restampDraft } = await import("./migrate.js");
+  // Donor restamp (#67, #111): a draft the pre-0.23 bundled template stamped
+  // is refused by CapCut 8.4+ / 8.7 Windows / 9.3 "from an unusual path";
+  // copying the schema markers from a project the installed app wrote is the
+  // repair that does not recreate the draft. --from-store picks that project
+  // the way init's seeding does.
+  if (flags.like !== undefined || flags.fromStore) {
+    if (flags.like !== undefined && flags.fromStore) die("--like and --from-store are mutually exclusive.");
+    const projectDir = path.dirname(path.resolve(filePath));
+    let donorPath: string;
+    if (flags.like !== undefined) {
+      donorPath = path.resolve(flags.like);
+    } else {
+      const { findStoreSeed } = await import("./factory.js");
+      // The draft being repaired is never its own donor (once restamped it
+      // carries the markers and would otherwise win the next scan).
+      const seed = findStoreSeed(path.dirname(projectDir), { exclude: projectDir });
+      if (!seed) {
+        die(`No other readable project in ${path.dirname(projectDir)} to restamp from. Pass --like <project>.`);
+      }
+      if (!seed.appAuthored) {
+        die(
+          `No app-authored project in ${path.dirname(projectDir)} to restamp from (the newest readable one, ` +
+            `${seed.projectDir}, carries no version/new_version markers itself). Create an empty project in CapCut ` +
+            "first, or pass --like <project>.",
+        );
+      }
+      donorPath = seed.projectDir;
+    }
+    if (path.resolve(donorPath) === projectDir)
+      die("The donor must be a different project than the draft being restamped.");
+    const donor = loadDraft(donorPath).draft;
+    const result = restampDraft(draft, donor, donorPath);
+    saveDraft(filePath, draft);
+    out({ ...result, from: null, to: null, applied: [], skipped: [], warnings: [] }, flags);
+    if (!flags.quiet) {
+      const changed = [...result.added, ...result.restamped];
+      process.stderr.write(
+        changed.length > 0
+          ? `Restamped ${changed.join(", ")} from ${donorPath} (CapCut ${result.donor_app_version ?? "?"}).\n`
+          : `Nothing to restamp — every marker already matches ${donorPath}.\n`,
+      );
+    }
+    return;
+  }
+  if (!flags.from || !flags.to) {
+    die("Usage: capcut migrate <project> (--from <ver> --to <ver> | --like <project> | --from-store)");
+  }
   const result = migrateDraft(draft, flags.from, flags.to);
   saveDraft(filePath, draft);
   out(result, flags);
@@ -4178,6 +4279,12 @@ async function cmdRegister(projectPath: string | undefined, flags: Flags): Promi
     if (materials?.action === "update") {
       process.stderr.write(
         `Registered ${materials.to_register.length} media file(s) in draft_materials — reopen the draft in CapCut to clear the relink prompt.\n`,
+      );
+    }
+    if (materials && materials.unlinked_materials > 0) {
+      process.stderr.write(
+        `${materials.unlinked_materials} timeline material(s) still carry no local_material_id link to their entry ` +
+          "(JianYing 5.9+ / CapCut 9.3 resolve local media by it) — run `capcut lint <project> --fix` to write it.\n",
       );
     }
   }
@@ -5168,7 +5275,7 @@ async function cmdCompile(positional: string[], flags: Flags): Promise<void> {
     return;
   }
 
-  const templateDir = resolveTemplateDir(flags);
+  const { templateDir, seed } = resolveTemplate(flags);
 
   // Target draft directory: --out wins; else <drafts>/<spec.name>; else cwd/<spec.name>.
   const name = spec.name ?? "compiled-draft";
@@ -5179,9 +5286,14 @@ async function cmdCompile(positional: string[], flags: Flags): Promise<void> {
     templateDir,
     outDir,
     specDir: path.dirname(path.resolve(specPath)),
+    seed,
   });
   out(result, flags);
-  if (!flags.quiet) process.stderr.write(`Compiled: ${result.draft_path}\n`);
+  if (!flags.quiet) {
+    const seeded = describeTemplate(result.template);
+    if (seeded) process.stderr.write(`${seeded}\n`);
+    process.stderr.write(`Compiled: ${result.draft_path}\n`);
+  }
 }
 
 // `compile --data`: one spec + N JSONL rows = N built-and-registered drafts,
@@ -5214,7 +5326,7 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
   const input = stripBom(readFileSync(flags.data === "-" ? 0 : (flags.data as string), "utf-8")).trim();
   if (!input) die(flags.data === "-" ? "No input on stdin for --data" : `No rows in ${flags.data}`);
 
-  const templateDir = resolveTemplateDir(flags);
+  const { templateDir, seed } = resolveTemplate(flags);
   const draftsRoot = path.resolve(flags.drafts ?? requireDraftsDir());
   const specDir = path.dirname(path.resolve(specPath));
 
@@ -5272,7 +5384,12 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
       continue;
     }
     try {
-      const result = compileDraft(plan.spec as CompileSpec, { templateDir, outDir: plan.outDir as string, specDir });
+      const result = compileDraft(plan.spec as CompileSpec, {
+        templateDir,
+        outDir: plan.outDir as string,
+        specDir,
+        seed,
+      });
       results.push({ row: plan.row, ok: true, name: result.name, draft_path: result.draft_path });
       if (!flags.quiet) process.stderr.write(`Compiled: ${result.draft_path}\n`);
     } catch (e) {
@@ -5730,11 +5847,11 @@ async function main(): Promise<void> {
   if (cmd === "init") {
     const name = projectPath; // positional[1] is the name for init
     if (!name) die("Missing name. Usage: capcut init <name> [--template <dir>] [--drafts <dir>]");
-    const templateDir = resolveTemplateDir(flags);
+    const { templateDir, seed } = resolveTemplate(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
     const { initDraft, resolveCanvas } = await import("./factory.js");
     const canvas = resolveCanvas({ width: flags.width, height: flags.height, ratio: flags.ratio });
-    const result = initDraft({ name, templateDir, draftsDir, canvas: canvas ?? undefined });
+    const result = initDraft({ name, templateDir, draftsDir, canvas: canvas ?? undefined, seed });
     out(
       {
         ok: true,
@@ -5743,11 +5860,14 @@ async function main(): Promise<void> {
         file_path: result.filePath,
         registered: result.registered,
         canvas: result.canvas,
+        template: result.template,
       },
       flags,
     );
     if (!flags.quiet) {
       process.stderr.write(`Created: ${result.draftPath}\n`);
+      const seeded = describeTemplate(result.template);
+      if (seeded) process.stderr.write(`${seeded}\n`);
       if (result.canvas) {
         process.stderr.write(`Canvas: ${result.canvas.width}x${result.canvas.height} (${result.canvas.ratio})\n`);
       }
@@ -5766,7 +5886,7 @@ async function main(): Promise<void> {
     if (!name) {
       die("Missing name. Usage: capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]");
     }
-    const templateDir = resolveTemplateDir(flags);
+    const { templateDir, seed } = resolveTemplate(flags);
     const draftsDir = flags.drafts ?? requireDraftsDir();
     const { runQuickstart } = await import("./quickstart.js");
     const { resolveCanvas } = await import("./factory.js");
@@ -5780,6 +5900,7 @@ async function main(): Promise<void> {
       srt: flags.srt,
       ffprobeCmd: flags.ffprobeCmd,
       canvas: canvas ?? undefined,
+      seed,
     });
     out(result, flags);
     if (!flags.quiet) {

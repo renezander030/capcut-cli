@@ -152,6 +152,35 @@ imported media into would confirm the shape byte-for-byte (the bundle includes
 `draft_meta_info.json`). The CLI merges, never replaces: existing entries stay,
 missing files are appended to the type-0 group, re-runs are no-ops.
 
+**`local_material_id` is the foreign key into this list.** A video, photo or
+audio material in the timeline carries the `id` of its `draft_materials` entry
+as `local_material_id`; that is what the app writes when media comes in through
+its own picker, and it is how JianYing 5.9+ and CapCut 9.3 resolve a local clip
+([luoluoluo22/jianying-editor-skill#23](https://github.com/luoluoluo22/jianying-editor-skill/pull/23),
+[JmsLdrn/capcut-mcp#1](https://github.com/JmsLdrn/capcut-mcp/issues/1)). Blank,
+the clip shows as missing / inaccessible and the app's Link-media dialog cannot
+repair it (audio is resolved by path and survives). Since v0.23 `add-video`,
+`add-audio`, `quickstart` and `compile` register the file and write the link
+in the same step; for drafts built earlier, `capcut register <project>
+--materials --apply` creates the entries and `capcut lint <project> --fix`
+writes the links (`media-unlinked`).
+
+## The top-level markers modern builds insist on
+
+A draft built from the bundled `_init` template used to carry only
+`platform` (`app_version: "6.5.0"`, `os: "mac"`) and none of `version`,
+`new_version`, `last_modified_platform`, `color_space` or
+`render_index_track_mode_on`. CapCut 8.4, 8.5, 8.7 Windows and 9.3 list such a
+draft at 00:00 and refuse to open it with "Current project is from an unusual
+path and cannot be used currently" — the path is not the cause
+([#67](https://github.com/renezander030/capcut-cli/issues/67),
+[#111](https://github.com/renezander030/capcut-cli/issues/111)). Since v0.23
+`init` / `quickstart` / `compile` seed a new draft from the newest app-authored
+project in the drafts folder (markers and settings kept, content emptied,
+`Timelines/` never copied) whenever that project outgrows the template;
+`migrate <project> --from-store` restamps a draft built earlier, and `lint`
+reports the stale signature as `template-stale`.
+
 ## Common gotchas
 
 - **CapCut MUST be closed on the draft before edit.** CapCut periodically rewrites the file from in-memory state; editing while open = your changes overwritten on next save. `capcut-cli` does not enforce this, but you'll lose data if you skip it.

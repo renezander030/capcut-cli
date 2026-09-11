@@ -4,7 +4,8 @@ import { bubbleCatalogue, imageAnimCatalogue } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
 import { extractStyleRanges, extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
-import { copyAssetDeduped, effectCatalogue, filterCatalogue } from "./factory.js";
+import { copyAssetDeduped, effectCatalogue, filterCatalogue, storeOutgrowsTemplate } from "./factory.js";
+import { linkLocalMaterialIds, readSidecar, unlinkedMaterials } from "./materials-register.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
 import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
@@ -51,6 +52,7 @@ const FIXABLE_CODES = new Set<string>([
   "dangling-companion-ref",
   "main-track-gap",
   "media-outside-draft",
+  "media-unlinked",
   "text-range-doubled",
 ]);
 
@@ -92,6 +94,13 @@ export interface LintOptions {
    * reported. The pure-JSON repair passes run either way (the caller's
    * dry-run save discards them). */
   dryRun?: boolean;
+  /** Newest `platform.app_version` among the projects in the draft's drafts
+   * folder, when the caller looked it up. Enables template-stale: a draft
+   * stamped by the pre-0.23 bundled template (app_version 6.5.0, no
+   * version/new_version markers) sitting in a store whose projects come from
+   * a newer app major is the draft CapCut refuses as "from an unusual path"
+   * (#67, #111). Library callers with no store simply omit it. */
+  storeAppVersion?: string | null;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -283,6 +292,54 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     }
   }
 
+  // Source range against the material it reads from. CapCut treats a
+  // `source_timerange` that reaches past the material's duration as out of
+  // range and clamps the in-point to zero, so every such clip plays from the
+  // start of its file whatever start was written — a two-camera cut came out
+  // as both cameras replaying their opening seconds (JmsLdrn/capcut-mcp#1,
+  // found on 9.3.0). Photos carry a nominal duration and are skipped; a
+  // missing or non-positive material duration says nothing. One frame of
+  // tolerance covers probe/JSON rounding. Info, not warning: the shipped
+  // fixture itself carries one such range, and the installed base of
+  // hand-authored drafts is not known to be clean — the media-outside-draft
+  // exit-code rationale.
+  const frameUs = typeof draft.fps === "number" && draft.fps > 0 ? Math.ceil(1_000_000 / draft.fps) : 40_000;
+  for (const track of draft.tracks) {
+    if (track.type !== "video" && track.type !== "audio") continue;
+    for (const s of track.segments) {
+      const src = s.source_timerange;
+      if (!src || typeof src.start !== "number" || typeof src.duration !== "number") continue;
+      const mat = findMaterial(
+        ((track.type === "video" ? draft.materials?.videos : draft.materials?.audios) ?? []) as Array<{
+          id: string;
+          type?: string;
+          duration?: number;
+        }>,
+        s.material_id,
+      ) as { id: string; type?: string; duration?: number } | undefined;
+      if (!mat || mat.type === "photo") continue;
+      if (typeof mat.duration !== "number" || !Number.isFinite(mat.duration) || mat.duration <= 0) continue;
+      const end = src.start + src.duration;
+      if (end > mat.duration + frameUs) {
+        const maxDuration = Math.max(0, mat.duration - src.start);
+        issues.push({
+          severity: "info",
+          code: "source-range-exceeds-material",
+          message:
+            `Segment ${shortId(s.id)} reads ${src.start}us+${src.duration}us of material ${shortId(mat.id)}, ` +
+            `which is only ${mat.duration}us long — CapCut clamps an out-of-range in-point to 0, so the clip ` +
+            "plays from the start of its file (JmsLdrn/capcut-mcp#1)",
+          fixable: false,
+          suggested_command:
+            src.start >= mat.duration
+              ? `capcut trim <project> ${s.id} 0 ${Math.round(Math.min(s.target_timerange.duration, mat.duration) / 1000)}ms  # in-point past the end of the file`
+              : `capcut trim <project> ${s.id} ${Math.round(src.start / 1000)}ms ${Math.round(maxDuration / 1000)}ms`,
+          location: { track: track.name, segment_id: s.id, material_id: mat.id },
+        });
+      }
+    }
+  }
+
   // Speed consistency. `capcut speed` maintains two things at once: the
   // segment's own `speed`, and the source span it consumes
   // (source.duration = target.duration * speed). A draft that has been through
@@ -452,6 +509,12 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           if (m.path.startsWith("http://") || m.path.startsWith("https://")) continue;
           if (!isAbsoluteAnyOs(m.path) || isUnderDir(m.path, opts.draftDir)) continue;
           const stageable = fileExists(m.path);
+          // macOS keeps Desktop, Documents and Downloads behind a per-app
+          // permission (TCC). Media there is readable by the shell that
+          // wrote the draft and not necessarily by the app: JianYing 11.4
+          // shows the clip as "no access permission" and prompts a relink
+          // although the path is valid (GuanYixuan/pyJianYingDraft#198).
+          const tccFolder = /^\/Users\/[^/]+\/(Desktop|Documents|Downloads)(\/|$)/.exec(m.path)?.[1];
           const issue: LintIssue = {
             severity: "info",
             code: "media-outside-draft",
@@ -459,7 +522,12 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
               `Material ${shortId(m.id)} (${kind}) references media outside the draft folder: ${m.path} — ` +
               "the draft breaks when that file moves or the folder is copied to another machine, and sandboxed " +
               "macOS builds can lose read access entirely (black screen — sun-guannan/VectCutAPI#48, #65; " +
-              "luoluoluo22/jianying-editor-skill#16)",
+              "luoluoluo22/jianying-editor-skill#16)" +
+              (tccFolder
+                ? `. ~/${tccFolder} is a macOS permission-protected folder: the app may report "no access permission" ` +
+                  "and ask to relink even though the path is valid (GuanYixuan/pyJianYingDraft#198) — " +
+                  "`capcut lint <project> --fix` stages the file into the draft"
+                : ""),
             fixable: FIXABLE_CODES.has("media-outside-draft") && stageable,
             location: { material_id: m.id, path: m.path },
           };
@@ -471,6 +539,73 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           issues.push(issue);
         }
       }
+    }
+  }
+
+  // local_material_id ↔ draft_materials. JianYing 5.9+ and CapCut 9.3 resolve
+  // a local clip through the material's `local_material_id`, the id of its
+  // entry in the sidecar's draft_materials (luoluoluo22/jianying-editor-skill#23,
+  // JmsLdrn/capcut-mcp#1): blank, the clip shows as missing / inaccessible
+  // and the app's own Link-media dialog cannot repair it. Every draft this
+  // CLI built before v0.23 is blank here, so severity is info (no exit-code
+  // flip on the installed base); --fix writes the link when the sidecar has
+  // the entry, and register --materials is the step when it does not.
+  // Judged only against an existing sidecar: a bare timeline file (library
+  // callers, fixtures) has nothing to link to yet, and `register --apply`
+  // creating the sidecar is the first step diagnose already names.
+  const sidecar = opts.draftDir ? readSidecar(opts.draftDir) : null;
+  if (opts.draftDir && sidecar) {
+    for (const u of unlinkedMaterials(draft, sidecar, opts.draftDir)) {
+      const linkable = u.entryId !== null;
+      const issue: LintIssue = {
+        severity: "info",
+        code: "media-unlinked",
+        message: linkable
+          ? `Material ${shortId(u.materialId)} (${u.kind}) carries local_material_id "${u.current}" but its file is ` +
+            `registered in draft_meta_info.json as ${shortId(u.entryId as string)} — JianYing 5.9+ / CapCut 9.3 resolve ` +
+            "local media by that key and show the clip as missing without it"
+          : `Material ${shortId(u.materialId)} (${u.kind}) has no local_material_id and its file is not registered in ` +
+            "draft_meta_info.json's draft_materials — JianYing 5.9+ / CapCut 9.3 show it as missing / inaccessible",
+        fixable: FIXABLE_CODES.has("media-unlinked") && linkable,
+        location: { material_id: u.materialId, path: u.path },
+      };
+      if (!linkable)
+        issue.suggested_command = "capcut register <project> --materials --apply  # then: capcut lint <project> --fix";
+      issues.push(issue);
+    }
+  }
+
+  // Template staleness (#67, #111). The pre-0.23 bundled template stamps
+  // app_version 6.5.0 and none of the markers the app writes (`version`,
+  // `new_version`); dropped into a store whose projects come from a newer app
+  // major, CapCut lists the draft at 00:00 and refuses to open it "from an
+  // unusual path". The caller supplies the store version only for drafts
+  // carrying that signature, so the warning (exit 1) reaches exactly the
+  // drafts the app will refuse.
+  {
+    const d = draft as unknown as Record<string, unknown>;
+    const app = draft.platform?.app_version;
+    const markerless =
+      d.version === undefined &&
+      (d.new_version === undefined || d.new_version === "") &&
+      d.last_modified_platform === undefined;
+    if (
+      opts.storeAppVersion &&
+      typeof app === "string" &&
+      markerless &&
+      storeOutgrowsTemplate(app, opts.storeAppVersion)
+    ) {
+      issues.push({
+        severity: "warning",
+        code: "template-stale",
+        message:
+          `Draft declares CapCut ${app} and carries no version/new_version markers (the pre-0.23 bundled template), ` +
+          `while this drafts folder holds projects from ${opts.storeAppVersion} — CapCut ${opts.storeAppVersion} lists such a ` +
+          'draft at 00:00 and refuses to open it ("Current project is from an unusual path", #67, #111)',
+        fixable: false,
+        suggested_command:
+          "capcut migrate <project> --from-store  # restamps the markers from the store's newest project",
+      });
     }
   }
 
@@ -819,6 +954,11 @@ export interface FixResult {
 export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS): FixResult {
   const before = lintDraft(draft, opts);
   const fixed: LintIssue[] = [];
+
+  // Pass -1: link timeline materials to their draft_materials entries
+  // (media-unlinked). Pure JSON on the draft — the sidecar is only read — so
+  // it runs under dry-run too and the caller's dry-run save discards it.
+  if (opts.draftDir) linkLocalMaterialIds(draft, readSidecar(opts.draftDir), opts.draftDir);
 
   // Pass 0: close main-track gaps by pulling every later main-track segment
   // left — the same motion CapCut's magnetic main track performs on open

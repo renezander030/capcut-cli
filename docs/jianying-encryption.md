@@ -35,6 +35,22 @@ if every tripwire below clears.
   A brittle, legally-grey decryptor fights that claim. Detection + a clear
   workaround keeps the trust surface clean.
 
+## What encryption does and does not block (evidence as of 2026-09)
+
+The encryption gates *reading* drafts the app authored. It does not gate
+*writing* a new one: on JianYing 11.4 (macOS) a plaintext `draft_info.json`
+is opened, upgraded to the encrypted format in place and completed with
+`Timelines/` and a cover by the app itself — the engine probes each file for
+plaintext vs cipher (`DraftIO::getUriCipherTypeStatically`), and the failure
+people hit ("草稿内容已损坏") comes from writing the pre-6.0 file name
+`draft_content.json`, which the app only recognises inside a draft-package
+import ([pyJianYingDraft#198](https://github.com/GuanYixuan/pyJianYingDraft/issues/198),
+calibrated on 11.4.0). This CLI already writes `draft_info.json` on the
+info-primary layout; the write guard in `docs/version-support.md` stays
+conservative for 6.0+ until a fixture from such a build is committed. The
+decision below — detect, do not decrypt — is unchanged by this: it concerns
+the encrypted documents, which generation never needs to read.
+
 ## What we do instead (and why it is enough for most users)
 
 `capcut decrypt` reports the situation and points to, in order of preference:

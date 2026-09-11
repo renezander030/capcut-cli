@@ -127,12 +127,16 @@ export interface CompileOptions {
   templateDir: string; // bundled _init template
   outDir: string; // target draft directory (must not already exist)
   specDir: string; // directory the spec lives in, for relative path resolution
+  /** Store seeding mode handed to initDraft (see InitOptions.seed). */
+  seed?: "auto" | "always" | "off";
 }
 
 export interface CompileResult {
   ok: boolean;
   name: string;
   draft_path: string;
+  /** Where the draft's skeleton came from (the store's newest project, or a template directory). */
+  template: import("./factory.js").TemplateReport;
   file_path: string;
   tracks: number;
   segments: number;
@@ -286,6 +290,20 @@ export function validateSpec(spec: unknown): asserts spec is CompileSpec {
         throw new Error(`compile: operations[${index}].target must reference a declared item ref`);
       }
     }
+    // Payload shape, pre-flighted here so --check catches it and the real
+    // build never reaches setTextStyle with `undefined` (#110: styling keys
+    // written flat on the operation crashed with "Cannot read properties of
+    // undefined (reading 'alpha')" instead of naming the mistake).
+    if (op.op === "text-style" && (!op.style || typeof op.style !== "object" || Array.isArray(op.style))) {
+      const flat = Object.keys(op).filter((key) => !["op", "target", "style"].includes(key));
+      throw new Error(
+        `compile: operations[${index}].style must be an object of styling keys (alpha, shadow, borderWidth, …)` +
+          (flat.length > 0 ? ` — found ${flat.join(", ")} at the operation level; nest them under "style"` : ""),
+      );
+    }
+    if (op.op === "text-ranges" && !Array.isArray(op.ranges)) {
+      throw new Error(`compile: operations[${index}].ranges must be an array of range objects`);
+    }
     // Pre-flight the keyframe easing with the exact validation the real write
     // performs, so --check rejects what compile would reject and a bad easing
     // never fails AFTER initDraft seeded the draft directory (orphan dir).
@@ -397,8 +415,15 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
   // Pre-flight every media/operation path before initDraft writes anything.
   planCompile(spec, opts.specDir);
 
-  // Seed a fresh draft from the bundled template, then populate it.
-  const { filePath } = initDraft({ name: dirName, templateDir: opts.templateDir, draftsDir: dirname(opts.outDir) });
+  // Seed a fresh draft (the template, or the store's newest project — see
+  // initDraft's seeding), then populate it.
+  const init = initDraft({
+    name: dirName,
+    templateDir: opts.templateDir,
+    draftsDir: dirname(opts.outDir),
+    seed: opts.seed,
+  });
+  const { filePath } = init;
   const { draft } = loadDraft(filePath);
 
   // Canvas + fps from the spec.
@@ -611,6 +636,7 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
     duration_us: maxEnd,
     warnings,
     refs: Object.fromEntries(refs),
+    template: init.template,
   };
 }
 

@@ -16,6 +16,7 @@ import { uuidHex } from "./decorators.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
+import { PHOTO_META_DURATION_US, registerMediumInSidecar } from "./materials-register.js";
 import { isManagedDraftPath, parseCandidate } from "./store.js";
 import { storedTextLength } from "./text-offsets.js";
 import { atLeast, versionTuple } from "./version.js";
@@ -117,6 +118,15 @@ export interface InitOptions {
   now?: number; // epoch ms — injectable clock for tests; defaults to Date.now()
   /** Canvas override (see resolveCanvas); the template's canvas_config is kept when absent. */
   canvas?: CanvasConfig;
+  /**
+   * Store seeding (#67, #111). `auto` (the default): when the drafts folder
+   * holds projects from a newer app major than the template declares, build
+   * the skeleton from the store's best project instead of the template —
+   * exactly the case where the template's draft is refused. `always`: seed
+   * whenever the store holds a readable project. `off`: copy the template
+   * as-is (`--template bundled`, or an explicit --template directory).
+   */
+  seed?: "auto" | "always" | "off";
 }
 
 export interface CanvasConfig {
@@ -182,31 +192,114 @@ export function resolveCanvas(opts: { width?: number; height?: number; ratio?: s
 }
 
 /**
- * Newest `platform.app_version` across the drafts already in a drafts ROOT, or
- * null when the folder holds no readable draft. store.ts's highestVersion does
- * the same job across one project's siblings; `init` has no project to discover
- * yet, so it scans the store instead.
+ * One project in a drafts ROOT that `init` can seed a new draft from: its
+ * canonical timeline document, the app version it declares, and whether it
+ * carries the schema markers only the app writes (`version`, `new_version`,
+ * `last_modified_platform`) — the markers the bundled template lacks and that
+ * modern builds refuse a draft without (#67, #111).
  */
-export function detectStoreAppVersion(draftsDir: string): string | null {
+export interface StoreSeed {
+  projectDir: string;
+  filePath: string;
+  draft: Draft;
+  appVersion: string;
+  /** True when the project carries app-written schema markers (not a CLI-built draft). */
+  appAuthored: boolean;
+  mtimeMs: number;
+}
+
+function hasAppMarkers(draft: Draft): boolean {
+  const d = draft as unknown as Record<string, unknown>;
+  return (
+    (typeof d.version === "number" && d.version > 0) ||
+    (typeof d.new_version === "string" && d.new_version !== "") ||
+    (d.last_modified_platform !== undefined && d.last_modified_platform !== null)
+  );
+}
+
+/**
+ * The best seed in a drafts ROOT: app-authored projects first (a draft this
+ * CLI built from the bundled template would only reproduce the template),
+ * then the newest `platform.app_version`, then the most recently modified.
+ * Null when the folder holds no readable draft. One reading per project
+ * folder; the new draft being created is never in the scan (the store is read
+ * before its folder exists).
+ */
+export interface StoreScan {
+  seed: StoreSeed | null;
+  /** Newest `platform.app_version` across every readable project (the #67 comparison value). */
+  newestVersion: string | null;
+}
+
+export function scanStore(draftsDir: string, options: { exclude?: string } = {}): StoreScan {
   let dirs: string[];
   try {
     dirs = readdirSync(draftsDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
   } catch {
-    return null; // fresh or unreadable store — nothing to compare against
+    return { seed: null, newestVersion: null }; // fresh or unreadable store — nothing to seed from
   }
+  const excluded = options.exclude ? resolve(options.exclude) : null;
 
-  let best: string | null = null;
+  let best: StoreSeed | null = null;
+  let newest: string | null = null;
   for (const dir of dirs) {
+    if (excluded !== null && resolve(draftsDir, dir) === excluded) continue; // the draft being repaired is no donor for itself
     for (const name of ["draft_info.json", "draft_content.json"]) {
-      const version = parseCandidate(resolve(draftsDir, dir, name)).draft?.platform?.app_version;
-      if (typeof version !== "string" || version.length === 0) continue;
-      if (best === null || atLeast(version, best)) best = version;
+      const filePath = resolve(draftsDir, dir, name);
+      let candidate: ReturnType<typeof parseCandidate>;
+      try {
+        candidate = parseCandidate(filePath);
+      } catch {
+        continue; // a sibling vanishing or unreadable mid-scan is not this draft's problem
+      }
+      const draft = candidate.draft;
+      if (!draft) continue;
+      const version = draft.platform?.app_version;
+      if (typeof version !== "string" || version.length === 0) break; // markerless: nothing to rank on
+      if (newest === null || atLeast(version, newest)) newest = version;
+      const seed: StoreSeed = {
+        projectDir: resolve(draftsDir, dir),
+        filePath,
+        draft,
+        appVersion: version,
+        appAuthored: hasAppMarkers(draft),
+        mtimeMs: candidate.mtime ? Date.parse(candidate.mtime) : 0,
+      };
+      if (best === null || seedOutranks(seed, best)) best = seed;
       break; // one reading per project folder
     }
   }
-  return best;
+  return { seed: best, newestVersion: newest };
+}
+
+export function findStoreSeed(draftsDir: string, options: { exclude?: string } = {}): StoreSeed | null {
+  return scanStore(draftsDir, options).seed;
+}
+
+function seedOutranks(a: StoreSeed, b: StoreSeed): boolean {
+  if (a.appAuthored !== b.appAuthored) return a.appAuthored;
+  if (a.appVersion !== b.appVersion) return atLeast(a.appVersion, b.appVersion);
+  return a.mtimeMs > b.mtimeMs;
+}
+
+/**
+ * Newest `platform.app_version` across the drafts already in a drafts ROOT, or
+ * null when the folder holds no readable draft. store.ts's highestVersion does
+ * the same job across one project's siblings; `init` has no project to discover
+ * yet, so it scans the store instead.
+ */
+export function detectStoreAppVersion(draftsDir: string): string | null {
+  return scanStore(draftsDir).newestVersion;
+}
+
+/** True when the store's projects come from a materially newer app than the template declares (#67's gate). */
+export function storeOutgrowsTemplate(templateVersion: string | null, storeVersion: string | null): boolean {
+  if (!templateVersion || !storeVersion) return false;
+  const [templateMajor = 0] = versionTuple(templateVersion);
+  const [storeMajor = 0] = versionTuple(storeVersion);
+  return storeMajor > templateMajor;
 }
 
 /**
@@ -216,22 +309,143 @@ export function detectStoreAppVersion(draftsDir: string): string | null {
  * then refuses to open it, blaming the path — which is not the cause, and which
  * costs the user a long hunt. Name the real reason instead.
  *
- * Warn, never refuse: the evidence is a single 8.5.0 report with no committed
- * fixture, and `--template` is a working escape hatch. Gated on the major
- * version so a 6.5.0 template stays quiet on a 6.x store.
+ * Since v0.23 `init` seeds the new draft from the store's newest app-authored
+ * project by default (`--template auto`), so this fires only when that seeding
+ * was switched off (`--template bundled`, or an explicit older template) or
+ * when the store holds no project to seed from. Warn, never refuse: the
+ * evidence is one 8.5.0 report plus the 8.7.0 / 9.3.0 confirmations in #111,
+ * and both escape hatches work. Gated on the major version so a 6.5.0 template
+ * stays quiet on a 6.x store.
  */
 export function templateVersionWarning(templateVersion: string | null, storeVersion: string | null): string | null {
-  if (!templateVersion || !storeVersion) return null;
-  const [templateMajor = 0] = versionTuple(templateVersion);
-  const [storeMajor = 0] = versionTuple(storeVersion);
-  if (storeMajor <= templateMajor) return null;
+  if (!storeOutgrowsTemplate(templateVersion, storeVersion)) return null;
   return (
     `Template declares CapCut ${templateVersion}, but this drafts folder holds projects from ${storeVersion} ` +
-    `(issue #67). CapCut ${storeVersion} may list the new draft with a 00:00 duration and then refuse to open it, ` +
+    `(issues #67, #111). CapCut ${storeVersion} may list the new draft with a 00:00 duration and then refuse to open it, ` +
     `reporting "Current project is from an unusual path and cannot be used currently" — the path is not the cause; ` +
-    `the bundled template predates the schema markers that build writes. Workaround: create an empty project in ` +
+    `the template predates the schema markers that build writes. Fix: \`--template auto\` seeds the draft from the ` +
+    `newest project in this store (the default when no --template is given), or create an empty project in ` +
     `CapCut ${storeVersion} and pass its folder with --template <dir>.`
   );
+}
+
+/** How a new draft's skeleton was obtained; reported by init / quickstart / compile. */
+export interface TemplateReport {
+  /** `store`: seeded from a project in the drafts folder; `path`: the --template directory (or the bundled _init template). */
+  source: "store" | "path";
+  /** The seed project, or the template directory. */
+  path: string;
+  /** `platform.app_version` the skeleton declares. */
+  app_version: string | null;
+  /** Per-project state deliberately not carried over from a template directory. */
+  skipped: string[];
+  /** Top-level keys reset to empty when seeding from a store project. */
+  reset: string[];
+}
+
+// Top-level keys that hold a project's CONTENT rather than its schema/settings.
+// Seeding from a real project keeps everything else (version markers, platform,
+// config, colour space, render flags — whatever the installed app wrote) and
+// empties these. Unknown top-level arrays are emptied too: an app-created
+// empty project has every such list empty, so that is the closer match.
+const SEED_EMPTY_LISTS = new Set(["tracks", "relationships", "keyframe_graph_list", "combination"]);
+const SEED_NULL_KEYS = new Set(["cover", "retouch_cover", "time_marks"]);
+const SEED_ARRAY_MAPS = new Set(["materials", "keyframes"]);
+
+/**
+ * Build an empty draft skeleton from a real project's timeline document: the
+ * app's schema markers and settings stay, the content goes. `canvas` / `fps`
+ * come from the caller (the bundled template's defaults, or --ratio/--width),
+ * not from the donor — a portrait donor must not silently turn every new draft
+ * portrait. Returns the skeleton plus the keys it reset, for the report.
+ */
+export function seedDraftSkeleton(
+  donor: Draft,
+  opts: { name: string; id: string; canvas: CanvasConfig; fps: number; nowMs: number; materialKeys: string[] },
+): { draft: Draft; reset: string[] } {
+  const skeleton = structuredClone(donor) as unknown as Record<string, unknown>;
+  const reset: string[] = [];
+  for (const [key, value] of Object.entries(skeleton)) {
+    if (SEED_ARRAY_MAPS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+      const map = value as Record<string, unknown>;
+      for (const [sub, list] of Object.entries(map)) if (Array.isArray(list) && list.length > 0) map[sub] = [];
+      reset.push(key);
+    } else if (SEED_NULL_KEYS.has(key) && value !== null) {
+      skeleton[key] = null;
+      reset.push(key);
+    } else if (SEED_EMPTY_LISTS.has(key) || Array.isArray(value)) {
+      if (!Array.isArray(value) || value.length > 0) reset.push(key);
+      skeleton[key] = [];
+    }
+  }
+  const materials = (skeleton.materials ?? {}) as Record<string, unknown>;
+  for (const key of opts.materialKeys) if (!Array.isArray(materials[key])) materials[key] = [];
+  skeleton.materials = materials;
+  skeleton.tracks = [];
+  skeleton.id = opts.id;
+  skeleton.name = opts.name;
+  skeleton.duration = 0;
+  skeleton.canvas_config = { ...opts.canvas };
+  skeleton.fps = opts.fps;
+  if (typeof skeleton.static_cover_image_path === "string") skeleton.static_cover_image_path = "";
+  const nowSeconds = Math.floor(opts.nowMs / 1000);
+  if (typeof skeleton.create_time === "number") skeleton.create_time = nowSeconds;
+  if (typeof skeleton.update_time === "number") skeleton.update_time = nowSeconds;
+  return { draft: skeleton as unknown as Draft, reset };
+}
+
+// Per-project state a template directory carries that must never travel into
+// a new draft: the app's nested Timelines/ mirrors (a copied
+// Timelines/<id>/draft_info.json keeps the DONOR's timeline id and content,
+// and on the builds that read the nested document first the new draft opens
+// showing the donor's empty timeline — the #50 report on 9.2.8), the donor's
+// own sidecar (its draft_id, paths and draft_materials; init writes a fresh
+// one for the new draft), the CLI's backups and undo history, and OS litter.
+const TEMPLATE_SKIP_ENTRIES = new Set(["Timelines", ".capcut-cli-history", "draft_meta_info.json", ".DS_Store"]);
+function templateSkipsEntry(name: string): boolean {
+  return TEMPLATE_SKIP_ENTRIES.has(name) || name.endsWith(".bak") || /\.snap$/.test(name);
+}
+
+// Every timeline document a template directory may ship. `init` stamps the new
+// draft's identity into EACH one it can parse as a plain timeline — the
+// bundled template ships draft_info.json AND draft_content.json as mirrors, and
+// stamping only the first left draft_content.json with id "" and name "", so
+// `register` refused the CLI's own quickstart draft (#111's isolation control).
+const TEMPLATE_TIMELINE_FILES = ["draft_info.json", "draft_content.json", "template-2.tmp"] as const;
+
+/** The first plain timeline document a template directory ships, parsed. */
+function readTemplateTimeline(templateDir: string): { file: string; draft: Draft } | null {
+  for (const file of TEMPLATE_TIMELINE_FILES) {
+    const fp = resolve(templateDir, file);
+    if (!existsSync(fp)) continue;
+    try {
+      const parsed = JSON.parse(stripBom(readFileSync(fp, "utf-8"))) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.tracks)) {
+        return { file, draft: parsed as unknown as Draft };
+      }
+    } catch {
+      // Enveloped or binary mirror — not a document the template is judged by.
+    }
+  }
+  return null;
+}
+
+/** Copy a template directory minus its per-project state; returns the top-level entries skipped. */
+function copyTemplateDir(templateDir: string, draftPath: string): string[] {
+  const root = resolve(templateDir);
+  const skipped: string[] = [];
+  cpSync(root, draftPath, {
+    recursive: true,
+    filter: (source) => {
+      const resolved = resolve(source);
+      if (resolved === root) return true;
+      const name = basename(resolved);
+      if (!templateSkipsEntry(name)) return true;
+      if (dirname(resolved) === root) skipped.push(name);
+      return false;
+    },
+  });
+  return skipped;
 }
 
 export function initDraft(opts: InitOptions): {
@@ -239,71 +453,113 @@ export function initDraft(opts: InitOptions): {
   filePath: string;
   registered: boolean;
   canvas: CanvasConfig | null;
+  template: TemplateReport;
 } {
   const draftPath = resolve(opts.draftsDir, opts.name);
   if (existsSync(draftPath)) {
     throw new Error(`Draft already exists: ${draftPath}. Delete it first or use a different name.`);
   }
-  // Read the store before copying, so the draft being created is not itself
-  // one of the projects the version is derived from.
-  const storeAppVersion = detectStoreAppVersion(opts.draftsDir);
-  cpSync(opts.templateDir, draftPath, { recursive: true });
+  // Judge the template before touching the disk: a template without a timeline
+  // document must fail here, not after an orphan draft folder exists.
+  const templateDoc = readTemplateTimeline(opts.templateDir);
+  if (!templateDoc) {
+    throw new Error(`No draft_info.json or draft_content.json found in template: ${opts.templateDir}`);
+  }
+  const templateVersion = templateDoc.draft.platform?.app_version ?? null;
+  const nowMs = opts.now ?? Date.now();
+  const draftId = uuid();
 
-  // Find the draft file
-  const candidates = ["draft_info.json", "draft_content.json"];
+  // Read the store before creating the folder, so the draft being created is
+  // not itself one of the projects the version (or the seed) is derived from.
+  const seedMode = opts.seed ?? "auto";
+  const scan = scanStore(opts.draftsDir);
+  const seed = seedMode === "off" ? null : scan.seed;
+  const useSeed = seed !== null && (seedMode === "always" || storeOutgrowsTemplate(templateVersion, seed.appVersion));
 
-  // Canvas override lands in EVERY timeline file the template ships (the
-  // bundled template carries draft_info.json and draft_content.json as
-  // mirrors): a canvas that differs between the two would be exactly the kind
-  // of drift sync-timelines exists to repair.
-  if (opts.canvas) {
-    for (const c of candidates) {
-      const fp = resolve(draftPath, c);
+  let filePath: string;
+  let template: TemplateReport;
+  if (seed && useSeed) {
+    // Skeleton from the store's project: its schema markers and settings, no
+    // content. Canvas and fps stay the template's defaults (or the caller's
+    // override) so a portrait donor cannot flip every new draft to portrait.
+    const fps = typeof templateDoc.draft.fps === "number" && templateDoc.draft.fps > 0 ? templateDoc.draft.fps : 30;
+    const canvas: CanvasConfig = opts.canvas ??
+      (templateDoc.draft.canvas_config as CanvasConfig | undefined) ?? { width: 1920, height: 1080, ratio: "16:9" };
+    const { draft, reset } = seedDraftSkeleton(seed.draft, {
+      name: opts.name,
+      id: draftId,
+      canvas,
+      fps,
+      nowMs,
+      materialKeys: Object.keys(templateDoc.draft.materials ?? {}),
+    });
+    mkdirSync(draftPath, { recursive: true });
+    // The same file set the bundled template ships (both root mirrors), plus
+    // the template-2.tmp mirror when the seed project keeps a readable one —
+    // the >= 8.7 document the store's write path maintains from then on.
+    // draft_content.json is the registered identity file: the one `register`
+    // reads first, so the sidecar it verifies against agrees from the start.
+    const files = ["draft_content.json", "draft_info.json"];
+    if (parseCandidate(resolve(seed.projectDir, "template-2.tmp")).parseable) files.push("template-2.tmp");
+    const content = JSON.stringify(draft, null, 0);
+    for (const file of files) writeFileSync(resolve(draftPath, file), content, "utf-8");
+    filePath = resolve(draftPath, files[0]);
+    template = { source: "store", path: seed.projectDir, app_version: seed.appVersion, skipped: [], reset };
+  } else {
+    const skipped = copyTemplateDir(opts.templateDir, draftPath);
+    const versionWarning = templateVersionWarning(templateVersion, scan.newestVersion);
+    if (versionWarning) process.stderr.write(`WARNING: ${versionWarning}\n`);
+
+    // Identity (and the canvas override) land in EVERY plain timeline document
+    // the template ships — the bundled template carries draft_info.json and
+    // draft_content.json as mirrors, and a mirror left with id "" / name "" is
+    // exactly the drift sync-timelines exists to repair (and what made
+    // `register` refuse the CLI's own drafts, #111). An enveloped or binary
+    // template-2.tmp is left as copied; the first timeline write reconciles it.
+    const stamped: string[] = [];
+    for (const file of TEMPLATE_TIMELINE_FILES) {
+      const fp = resolve(draftPath, file);
       if (!existsSync(fp)) continue;
-      const parsed = JSON.parse(stripBom(readFileSync(fp, "utf-8"))) as Record<string, unknown>;
-      parsed.canvas_config = { ...opts.canvas };
-      writeFileSync(fp, JSON.stringify(parsed, null, 0), "utf-8");
-    }
-  }
-
-  for (const c of candidates) {
-    const fp = resolve(draftPath, c);
-    if (existsSync(fp)) {
-      // Update the draft name + id
-      const raw = stripBom(readFileSync(fp, "utf-8"));
-      const draft = JSON.parse(raw) as Draft;
-
-      const versionWarning = templateVersionWarning(draft.platform?.app_version ?? null, storeAppVersion);
-      if (versionWarning) process.stderr.write(`WARNING: ${versionWarning}\n`);
-
-      draft.name = opts.name;
-      const draftId = uuid();
-      draft.id = draftId;
-      writeFileSync(fp, JSON.stringify(draft, null, 0), "utf-8");
-
-      // CapCut's GUI does not scan the Projects folder — it lists drafts from a
-      // central index, root_meta_info.json, at the root of com.lveditor.draft/.
-      // Without an entry there a freshly created folder stays invisible. Register
-      // it (and write the per-folder draft_meta_info.json sidecar) so the new draft
-      // shows up. Best-effort: a failure here must not fail draft creation.
-      const nowMs = opts.now ?? Date.now();
-      let registered = false;
+      let parsed: Record<string, unknown>;
       try {
-        registered = registerDraftInIndex({
-          draftsDir: opts.draftsDir,
-          draftPath,
-          filePath: fp,
-          draftId,
-          name: opts.name,
-          nowMs,
-        });
+        parsed = JSON.parse(stripBom(readFileSync(fp, "utf-8"))) as Record<string, unknown>;
       } catch {
-        registered = false;
+        continue;
       }
-      return { draftPath, filePath: fp, registered, canvas: opts.canvas ? { ...opts.canvas } : null };
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.tracks)) continue;
+      if (opts.canvas) parsed.canvas_config = { ...opts.canvas };
+      parsed.name = opts.name;
+      parsed.id = draftId;
+      writeFileSync(fp, JSON.stringify(parsed, null, 0), "utf-8");
+      stamped.push(file);
     }
+    // Registered identity file: draft_content.json when the template ships it
+    // (what `register` reads first, so its verification agrees with the sidecar
+    // init writes), else draft_info.json, else whatever was stamped.
+    const identityFile = ["draft_content.json", "draft_info.json"].find((file) => stamped.includes(file));
+    filePath = resolve(draftPath, identityFile ?? stamped[0] ?? templateDoc.file);
+    template = { source: "path", path: resolve(opts.templateDir), app_version: templateVersion, skipped, reset: [] };
   }
-  throw new Error(`No draft_info.json or draft_content.json found in template: ${opts.templateDir}`);
+
+  // CapCut's GUI does not scan the Projects folder — it lists drafts from a
+  // central index, root_meta_info.json, at the root of com.lveditor.draft/.
+  // Without an entry there a freshly created folder stays invisible. Register
+  // it (and write the per-folder draft_meta_info.json sidecar) so the new draft
+  // shows up. Best-effort: a failure here must not fail draft creation.
+  let registered = false;
+  try {
+    registered = registerDraftInIndex({
+      draftsDir: opts.draftsDir,
+      draftPath,
+      filePath,
+      draftId,
+      name: opts.name,
+      nowMs,
+    });
+  } catch {
+    registered = false;
+  }
+  return { draftPath, filePath, registered, canvas: opts.canvas ? { ...opts.canvas } : null, template };
 }
 
 interface RegisterOptions {
@@ -473,6 +729,18 @@ export interface RegistrationResult {
  * draft lives under the managed com.lveditor.draft location init defaults to.
  * Anything else is reported explicitly and never written to.
  */
+/** `draft_id` from the project's own sidecar, or null when absent/unreadable/empty. */
+function readSidecarDraftId(projectDir: string): string | null {
+  const metaPath = resolve(projectDir, "draft_meta_info.json");
+  if (!existsSync(metaPath)) return null;
+  try {
+    const parsed = JSON.parse(stripBom(readFileSync(metaPath, "utf-8"))) as { draft_id?: unknown };
+    return typeof parsed?.draft_id === "string" && parsed.draft_id !== "" ? parsed.draft_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function discoverStoreRoot(projectDir: string, draftsDir?: string): { root: string | null; source: string } {
   const parent = dirname(projectDir);
   if (existsSync(resolve(parent, "root_meta_info.json"))) {
@@ -584,11 +852,21 @@ export function planDraftRegistration(
         "Run `capcut diagnose <project>` to inspect what is on disk.",
     );
   }
-  if (typeof content.id !== "string" || content.id === "") {
-    throw new Error(
-      `register cannot derive a draft id: ${identitySource} has no "id". Refusing to invent one — ` +
-        "run `capcut diagnose <project>` to inspect the draft.",
-    );
+  let draftId = typeof content.id === "string" ? content.id : "";
+  if (draftId === "") {
+    // Drafts this CLI built before v0.23 carry id "" in draft_content.json
+    // (init stamped only draft_info.json — #111's isolation control). The
+    // sidecar's draft_id is the identity the app already lists the draft
+    // under, so reuse it; an id is still never invented.
+    const sidecarId = readSidecarDraftId(projectDir);
+    if (sidecarId === null) {
+      throw new Error(
+        `register cannot derive a draft id: ${identitySource} has no "id" and draft_meta_info.json carries no draft_id. ` +
+          "Refusing to invent one — run `capcut diagnose <project>` to inspect the draft.",
+      );
+    }
+    draftId = sidecarId;
+    identitySource = `${identitySource} (id from draft_meta_info.json draft_id — ${identitySource} has none)`;
   }
 
   const name = typeof content.name === "string" && content.name !== "" ? content.name : basename(projectDir);
@@ -598,7 +876,7 @@ export function planDraftRegistration(
     draftsDir: storeRoot ?? dirname(projectDir),
     draftPath: projectDir,
     filePath: identityPath,
-    draftId: content.id,
+    draftId,
     name,
     nowMs: options.now ?? Date.now(),
     durationUs,
@@ -810,7 +1088,7 @@ export function planDraftRegistration(
       project_dir: projectDir,
       content_path: identityPath,
       identity_source: identitySource,
-      draft_id: content.id,
+      draft_id: draftId,
       draft_name: name,
       duration_us: durationUs,
       store_root: storeRoot,
@@ -1534,7 +1812,7 @@ export function addAudio(
   draft: Draft,
   filePath: string,
   opts: AddAudioOptions,
-): { segmentId: string; materialId: string; trackId: string } {
+): { segmentId: string; materialId: string; trackId: string; registered: boolean } {
   const segId = uuid();
   const matId = uuid();
   const trackName = opts.trackName ?? "audio";
@@ -1585,8 +1863,23 @@ export function addAudio(
     tone_speaker: "",
     tone_type: "",
     wave_points: [],
+    local_material_id: "",
   };
   (draft.materials.audios as unknown as Array<Record<string, unknown>>).push(audioMaterial);
+
+  // Sidecar registration at add time (see addVideo); audio registers as
+  // `metetype: "music"` with zero dimensions, the shape the app writes.
+  const registration = opts.placeholder
+    ? null
+    : registerMediumInSidecar(draftDir, {
+        path: localPath,
+        name: filename,
+        kind: "music",
+        durationUs: opts.duration,
+        width: 0,
+        height: 0,
+      });
+  if (registration) audioMaterial.local_material_id = registration.entryId;
 
   // Create segment
   const timerange: Timerange = { start: opts.start, duration: opts.duration };
@@ -1600,7 +1893,7 @@ export function addAudio(
     draft.duration = segEnd;
   }
 
-  return { segmentId: segId, materialId: matId, trackId: track.id };
+  return { segmentId: segId, materialId: matId, trackId: track.id, registered: registration !== null };
 }
 
 // --- Video / Image ---
@@ -1623,7 +1916,7 @@ export function addVideo(
   draft: Draft,
   filePath: string,
   opts: AddVideoOptions,
-): { segmentId: string; materialId: string; trackId: string } {
+): { segmentId: string; materialId: string; trackId: string; registered: boolean } {
   const segId = uuid();
   const matId = uuid();
   const trackName = opts.trackName ?? "video";
@@ -1709,6 +2002,23 @@ export function addVideo(
   };
   (draft.materials.videos as unknown as Array<Record<string, unknown>>).push(videoMaterial);
 
+  // Register the file in the draft's sidecar at add time and link the material
+  // to its entry (local_material_id): the list CapCut 9.1+ reads to decide what
+  // is imported, and the key JianYing 5.9+ / CapCut 9.3 resolve local video by.
+  // Placeholders have no file to register; a draft with no sidecar (a bare
+  // timeline file) is left for `register --materials`.
+  const registration = opts.placeholder
+    ? null
+    : registerMediumInSidecar(draftDir, {
+        path: localPath,
+        name: filename,
+        kind: materialType === "photo" ? "photo" : "video",
+        durationUs: materialType === "photo" ? PHOTO_META_DURATION_US : opts.duration,
+        width,
+        height,
+      });
+  if (registration) videoMaterial.local_material_id = registration.entryId;
+
   // Create segment
   const timerange: Timerange = { start: opts.start, duration: opts.duration };
   const seg = baseSegment(segId, matId, track.id, timerange, companions.ids, 14000);
@@ -1720,7 +2030,7 @@ export function addVideo(
     draft.duration = segEnd;
   }
 
-  return { segmentId: segId, materialId: matId, trackId: track.id };
+  return { segmentId: segId, materialId: matId, trackId: track.id, registered: registration !== null };
 }
 
 // --- Cut (extract time range) ---

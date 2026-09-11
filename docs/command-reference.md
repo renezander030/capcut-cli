@@ -56,7 +56,7 @@
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | yes | Apply byte-accurate multi-style ranges to a text segment. |
 | `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | yes | Transcribe audio via whisper into real caption-track segments. |
 | `translate` | `capcut translate <project> --to <language> --out <path> [options]` | yes | Clone a draft into another language via the Anthropic API. |
-| `migrate` | `capcut migrate <project> --from <version> --to <version>` | yes | Apply known schema migrations across version boundaries. |
+| `migrate` | `capcut migrate <project> (--from <version> --to <version> \| --like <project> \| --from-store)` | yes | Apply known schema migrations across version boundaries. |
 | `add-sfx` | `capcut add-sfx <project> <slug> <start> <duration> [options]` | yes | Add a sound effect on a dedicated track. |
 | `chroma` | `capcut chroma <project> <id> (--color <hex> \| --off) [options]` | yes | Green-screen / chroma key a video segment, or --off. |
 | `matting` | `capcut matting <project> <id> [--off]` | yes | Smart matting (background removal) on a video/photo segment's material — flag 3 on; --off writes the documented flag-0 object. |
@@ -83,9 +83,9 @@
 | `serve` | `capcut serve [--queue <path>] [options]` | no | Run a stateless JSONL job queue from stdin/--queue. |
 | `decrypt` | `capcut decrypt <project-or-file>` | no | Detect JianYing 6.0+ encryption and explain the workaround. |
 | `export` | `capcut export <drafts-dir> --batch [options]` | yes | EXPERIMENTAL UI-automated render queue (macOS). |
-| `init` | `capcut init <name> [--template <dir>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | Create a new empty draft from a template. |
-| `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
-| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
+| `init` | `capcut init <name> [--template auto\|bundled\|<dir>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | Create a new empty draft from a template. |
+| `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto\|bundled\|<dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
+| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |
 | `detect-silence` | `capcut detect-silence <media> [options]` | no | Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut. |

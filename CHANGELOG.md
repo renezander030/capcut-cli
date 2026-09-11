@@ -4,6 +4,146 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-09-11
+
+Nine items, mined the same way as 0.22: this repo's threads, the forks
+ahead of it, the downstream projects that build on it and the neighbouring
+CapCut/JianYing tools, each checked against what the CLI already did before
+it was built. This cycle one pain dominated everything else, and it is the
+oldest one in the tracker: a draft built from the bundled template does not
+open on a modern app build. The template stamps CapCut 6.5.0 and none of the
+schema markers the app writes, and 8.4, 8.5, 8.7 Windows and 9.3 list such a
+draft at 00:00 and refuse it as "from an unusual path"
+([#67](https://github.com/renezander030/capcut-cli/issues/67),
+[#111](https://github.com/renezander030/capcut-cli/issues/111), the 8.4.0 and
+9.2.8 reports in [#50](https://github.com/renezander030/capcut-cli/issues/50),
+and the shell-first recipe at
+[zxypro1/capcut-shell-inject](https://github.com/zxypro1/capcut-shell-inject)
+— four independent reporters, the last two in the past week). #111 is the
+real 8.7 Windows round-trip this repo has been waiting on since 0.11, and it
+came back negative for the bundled template and positive for a template
+captured from the installed app. The first four items below turn that
+finding into the default. The next three close the other 9.x gap, media
+that the app cannot resolve because the timeline material never named its
+sidecar entry. The last two are validation gaps with a single reporter each.
+No command was removed, no existing flag changed meaning, and every existing
+JSON output keeps its shape — new fields appear only where a draft was
+created or a registration was planned.
+
+### Added
+
+- **`init` / `quickstart` / `compile` seed new drafts from the store's newest
+  app-authored project** (`--template auto`, now the default when `--template`
+  is omitted) — when the drafts folder holds a project from a newer CapCut
+  major than the bundled template declares, the new draft's skeleton is that
+  project's timeline document with its content emptied: `version`,
+  `new_version`, `platform`, `last_modified_platform`, `color_space`,
+  `config` and the render flags stay; `tracks`, every `materials.*` list,
+  `keyframes`, `relationships`, the cover and the timestamps are reset; the
+  id and name are the new draft's; the canvas and fps stay the template's
+  defaults (or `--ratio`/`--width`), so a portrait donor cannot turn every
+  new draft portrait. Nothing else of the donor travels — in particular not
+  its `Timelines/` mirrors, which is how `--template <app project>` produced
+  a draft that opened with the donor's empty timeline on 9.2.8 (#50). The
+  bundled template remains the seed when the store is empty or on the same
+  major (`--template bundled` forces it and keeps the #67 warning, now naming
+  `--template auto` as the fix), and `--template <dir>` is unchanged apart
+  from the hygiene below. The result carries `template: { source: "store" |
+  "path", path, app_version, skipped, reset }` and one stderr line naming the
+  seed. This is the same finding as the shell-first recipe (create an empty
+  project in the app, quit, inject with this CLI): the app opens a draft
+  whose markers it wrote itself — done here without the manual step, and
+  with `register`/`lint`/`sync-timelines` unchanged for the shell flow.
+- **`--template <dir>` never carries per-project state** — the donor's
+  `Timelines/` directory, `.bak` files, `.capcut-cli-history/` and its
+  `draft_meta_info.json` sidecar are skipped (listed in `template.skipped`);
+  the new draft gets a fresh sidecar and, on 8.4+, the app materialises
+  `Timelines/` from the root documents on first open (the observation in
+  #50's 8.4.0 report).
+- **`migrate <project> --from-store` / `--like <project>`** — restamps a
+  draft an older release built (several per reporter in #111) with the
+  schema markers of a project the installed app wrote, in place: `version`,
+  `new_version`, `platform`, `last_modified_platform`, `color_space`,
+  `render_index_track_mode_on`, `free_render_index_mode_on`, `source`, plus
+  `config` when the draft has none. Timeline content is never touched; the
+  result lists `restamped`, `added`, `unchanged` and `unavailable`.
+  `--from-store` picks the newest app-authored project in the draft's own
+  drafts folder (never the draft itself) and refuses with a clear message
+  when the store holds only markerless drafts.
+- **`lint` `template-stale`** (warning) — a draft carrying the bundled
+  template's signature (an `app_version` but none of `version`,
+  `new_version`, `last_modified_platform`) inside a drafts folder whose
+  projects come from a newer app major, with `migrate --from-store` as the
+  suggested command. The store is scanned only for drafts that carry the
+  signature and live in a store (a `root_meta_info.json` next to the project
+  or the managed path), so every other lint run costs nothing extra.
+- **`local_material_id` links, at add time and on repair** — JianYing 5.9+
+  and CapCut 9.3 resolve a local clip through the material's
+  `local_material_id`, the id of its `draft_materials` entry; blank, the
+  clip shows as missing / inaccessible and the app's own Link-media dialog
+  cannot repair it
+  ([luoluoluo22/jianying-editor-skill#23](https://github.com/luoluoluo22/jianying-editor-skill/pull/23),
+  [JmsLdrn/capcut-mcp#1](https://github.com/JmsLdrn/capcut-mcp/issues/1),
+  the 9.3 follow-up on [pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13)).
+  Every video, photo and audio material this CLI wrote carried `""` there.
+  `add-video`, `add-audio`, `quickstart`, `compile` and `import-timeline`
+  now register the file in the draft's sidecar as they add it (one entry
+  per distinct file, the app's own entries preserved, `.bak` then atomic
+  replace) and write the entry id into the material; `add-video` /
+  `add-audio` report `registration: "draft_materials" | "none"` (none = no
+  sidecar to register in, `register --materials` remains the step). For
+  drafts built earlier, `lint` reports `media-unlinked` (info, no exit-code
+  flip on the installed base) and `lint --fix` writes the link from the
+  sidecar; where the file has no entry yet, the issue names
+  `register --materials --apply` first. `register --materials` reports
+  `unlinked_materials` in its plan and points at `lint --fix` — register
+  itself still never writes the timeline.
+- **`lint` `source-range-exceeds-material`** (info) — a segment whose
+  `source_timerange` reaches past its material's duration: CapCut clamps the
+  in-point to zero, so the clip plays from the start of its file whatever was
+  written — a two-camera cut came out as both cameras replaying their opening
+  seconds (JmsLdrn/capcut-mcp#1, on 9.3.0). Photos and materials without a
+  duration are skipped, one frame of tolerance covers rounding, and the
+  suggested command is the `trim` that fits.
+- **`compile --check` validates `text-style` and `text-ranges` payloads** —
+  styling keys written flat on the operation instead of under `style`
+  crashed the build with "Cannot read properties of undefined (reading
+  'alpha')" ([#110](https://github.com/renezander030/capcut-cli/issues/110));
+  the pre-flight now names the keys it found and where they belong, before
+  any draft directory exists.
+- **`lint` `media-outside-draft` names the macOS permission case** — media
+  under `~/Desktop`, `~/Documents` or `~/Downloads` makes JianYing 11.4 show
+  "no access permission" and ask to relink although the path is valid
+  ([pyJianYingDraft#198](https://github.com/GuanYixuan/pyJianYingDraft/issues/198));
+  the message says so and points at `lint --fix`, which stages the file into
+  the draft.
+
+### Fixed
+
+- **`init` stamps every timeline mirror** — the bundled template ships
+  `draft_info.json` and `draft_content.json`, and `init` wrote the new
+  draft's id and name into the first one only, so `draft_content.json` kept
+  `id: ""` / `name: ""` and `register` refused the CLI's own `quickstart`
+  draft with "has no id" (#111's isolation control). Both root mirrors (and
+  a plain-JSON `template-2.tmp`) now carry the identity, `draft_content.json`
+  is the registered identity file (what `register` reads first), and
+  `register` falls back to the sidecar's `draft_id` for drafts stamped by
+  earlier releases instead of refusing — it still never invents an id.
+- The canonical test fixture's first video segment read 7.5 s of a 5 s
+  material; the material now declares the length the segment needs.
+
+### Docs
+
+- `docs/version-support.md` records the real 8.7 Windows validation (#111,
+  negative with the bundled template, positive with a captured one on
+  9.3.0), the 8.4.0 root-to-nested and 9.2.8 nested-canonical observations
+  from #50, the 9.3.0 shell-first recipe, and JianYing 11.4 opening plaintext
+  drafts and upgrading them in place (pyJianYingDraft#198) — so
+  `docs/jianying-encryption.md` now says what the encryption does and does
+  not block: reading app-authored drafts, not generating new ones.
+  `docs/draft-schema/00-overview.md` documents the `local_material_id`
+  foreign key and the markers modern builds insist on.
+
 ## [0.22.0] — 2026-09-04
 
 Nine items, each mined from a pain users are hitting now — this repo's own

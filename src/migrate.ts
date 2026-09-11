@@ -1,5 +1,87 @@
 import type { Draft } from "./draft.js";
 
+/**
+ * The top-level markers that tell an app build which schema generation wrote a
+ * draft. A draft built from the pre-0.23 bundled template carries only
+ * `platform` (app_version 6.5.0, os mac) and none of the rest, which is what
+ * CapCut 8.4 / 8.5 / 8.7 Windows / 9.3 refuse with "Current project is from an
+ * unusual path" (#67, #111). Restamping copies exactly these from a project the
+ * installed app wrote; nothing in `tracks` or `materials` is touched.
+ */
+export const RESTAMP_FIELDS = [
+  "version",
+  "new_version",
+  "platform",
+  "last_modified_platform",
+  "color_space",
+  "render_index_track_mode_on",
+  "free_render_index_mode_on",
+  "source",
+] as const;
+
+/** Settings copied only when the draft has none of its own (per-project user values stay). */
+const RESTAMP_FILL_FIELDS = ["config"] as const;
+
+export interface RestampResult {
+  ok: true;
+  donor: string;
+  donor_app_version: string | null;
+  /** Markers rewritten to the donor's value. */
+  restamped: string[];
+  /** Markers the draft lacked entirely and now carries. */
+  added: string[];
+  /** Markers already equal to the donor's. */
+  unchanged: string[];
+  /** Markers the donor does not carry either. */
+  unavailable: string[];
+}
+
+/**
+ * `migrate --like <project>` / `--from-store`: rewrite a draft's schema
+ * markers from a donor draft the app itself wrote, so a draft an older
+ * template stamped opens in the installed build without being recreated
+ * (#111: "multiple drafts", each one a full re-compile otherwise).
+ */
+export function restampDraft(draft: Draft, donor: Draft, donorLabel: string): RestampResult {
+  const target = draft as unknown as Record<string, unknown>;
+  const source = donor as unknown as Record<string, unknown>;
+  const restamped: string[] = [];
+  const added: string[] = [];
+  const unchanged: string[] = [];
+  const unavailable: string[] = [];
+  for (const field of RESTAMP_FIELDS) {
+    if (source[field] === undefined) {
+      unavailable.push(field);
+      continue;
+    }
+    const wanted = structuredClone(source[field]);
+    if (target[field] === undefined) {
+      target[field] = wanted;
+      added.push(field);
+    } else if (JSON.stringify(target[field]) !== JSON.stringify(wanted)) {
+      target[field] = wanted;
+      restamped.push(field);
+    } else {
+      unchanged.push(field);
+    }
+  }
+  for (const field of RESTAMP_FILL_FIELDS) {
+    if (source[field] !== undefined && target[field] === undefined) {
+      target[field] = structuredClone(source[field]);
+      added.push(field);
+    }
+  }
+  return {
+    ok: true,
+    donor: donorLabel,
+    donor_app_version: donor.platform?.app_version ?? null,
+    restamped,
+    added,
+    unchanged,
+    unavailable,
+  };
+}
+
 export interface MigrationResult {
   ok: boolean;
   from: string;

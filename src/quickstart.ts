@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { stripBom } from "./bom.js";
 import { loadDraft, saveDraft } from "./draft.js";
-import { addAudio, addText, addVideo, type CanvasConfig, initDraft } from "./factory.js";
+import { addAudio, addText, addVideo, type CanvasConfig, initDraft, type TemplateReport } from "./factory.js";
 import { lintDraft, summarize } from "./lint.js";
 import { probeMedia } from "./probe.js";
 import { parseSrt } from "./srt.js";
@@ -31,6 +31,8 @@ export interface QuickstartOptions {
   now?: number;
   /** Canvas override from --ratio / --width / --height (factory.resolveCanvas); template canvas when absent. */
   canvas?: CanvasConfig;
+  /** Store seeding mode handed to initDraft (see InitOptions.seed). */
+  seed?: "auto" | "always" | "off";
 }
 
 export interface QuickstartStep {
@@ -46,6 +48,8 @@ export interface QuickstartResult {
   file_path: string;
   registered: boolean;
   canvas: CanvasConfig | null;
+  /** Where the draft's skeleton came from (the store's newest project, or a template directory). */
+  template: TemplateReport;
   added: { video: boolean; audio: boolean; captions: number };
   steps: QuickstartStep[];
   lint: { errors: number; warnings: number; info: number; total: number };
@@ -87,15 +91,22 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     draftsDir: opts.draftsDir,
     now: opts.now,
     canvas: opts.canvas,
+    seed: opts.seed,
   });
   const canvasNote = init.canvas ? ` Canvas ${init.canvas.width}x${init.canvas.height} (${init.canvas.ratio}).` : "";
+  const templateNote =
+    init.template.source === "store"
+      ? ` Skeleton seeded from the store's CapCut ${init.template.app_version} project (${init.template.path}).`
+      : "";
   steps.push({
     step: "create",
     ok: true,
     detail:
       (init.registered
         ? "Draft created and registered in CapCut's project index."
-        : "Draft created (could not update root_meta_info.json — may not be listed).") + canvasNote,
+        : "Draft created (could not update root_meta_info.json — may not be listed).") +
+      canvasNote +
+      templateNote,
   });
 
   const { draft, filePath } = loadDraft(init.draftPath);
@@ -105,7 +116,7 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
   if (opts.video) {
     const probe = probeMedia(opts.video, opts.ffprobeCmd ?? "ffprobe");
     const duration = probe?.durationUs && probe.durationUs > 0 ? probe.durationUs : QUICKSTART_FALLBACK_DURATION_US;
-    addVideo(draft, filePath, {
+    const video = addVideo(draft, filePath, {
       path: opts.video,
       start: 0,
       duration,
@@ -116,17 +127,25 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     steps.push({
       step: "add-video",
       ok: true,
-      detail: probe?.durationUs
-        ? `Added video (${(duration / 1_000_000).toFixed(2)}s, ${probe.width ?? DEFAULT_WIDTH}x${probe.height ?? DEFAULT_HEIGHT}).`
-        : `Added video (no readable duration — used ${(duration / 1_000_000).toFixed(0)}s placeholder; trim in CapCut).`,
+      detail:
+        (probe?.durationUs
+          ? `Added video (${(duration / 1_000_000).toFixed(2)}s, ${probe.width ?? DEFAULT_WIDTH}x${probe.height ?? DEFAULT_HEIGHT}).`
+          : `Added video (no readable duration — used ${(duration / 1_000_000).toFixed(0)}s placeholder; trim in CapCut).`) +
+        (video.registered ? " Registered in draft_materials." : ""),
     });
   }
 
   if (opts.audio) {
     const duration = probedDuration(opts.audio, opts.ffprobeCmd);
-    addAudio(draft, filePath, { path: opts.audio, start: 0, duration });
+    const audio = addAudio(draft, filePath, { path: opts.audio, start: 0, duration });
     added.audio = true;
-    steps.push({ step: "add-audio", ok: true, detail: `Added audio (${(duration / 1_000_000).toFixed(2)}s).` });
+    steps.push({
+      step: "add-audio",
+      ok: true,
+      detail:
+        `Added audio (${(duration / 1_000_000).toFixed(2)}s).` +
+        (audio.registered ? " Registered in draft_materials." : ""),
+    });
   }
 
   if (opts.srt) {
@@ -161,6 +180,7 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     file_path: filePath,
     registered: init.registered,
     canvas: init.canvas,
+    template: init.template,
     added,
     steps,
     lint,

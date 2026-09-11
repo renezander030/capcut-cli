@@ -288,7 +288,7 @@
         "path": "/media/intro-clip.mp4",
         "material_name": "intro-clip.mp4",
         "type": "video",
-        "duration": 5000000,
+        "duration": 7500000,
         "width": 1920,
         "height": 1080,
         "has_audio": true

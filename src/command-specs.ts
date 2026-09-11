@@ -88,6 +88,12 @@ const TRACK = option("track", ["--track", "--type"], "string", "Track or materia
 const TRACK_NAME = option("track_name", ["--track-name"], "string", "Target track name.");
 const OUT = option("out", ["--out"], "path", "Output path.");
 const FFPROBE = option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary.");
+const TEMPLATE = option(
+  "template",
+  ["--template"],
+  "string",
+  "Skeleton for the new draft. `auto` (the default when omitted): when the drafts folder holds projects from a newer CapCut major than the bundled template declares, seed the draft from the store's newest app-authored project — its version markers and settings, none of its content — because CapCut 8.4+/8.7 Windows/9.3 refuse the bundled 6.5.0 template's drafts as 'from an unusual path' (#67, #111); otherwise the bundled template. `bundled`: always the bundled template. A directory: copy that template (its Timelines/ mirrors, .bak files and undo history are never carried over).",
+);
 const STYLE_REF = option("style_ref", ["--style-ref"], "id", "Copy styling from this text segment.");
 const CLONE_STYLE = option(
   "clone_style",
@@ -222,7 +228,7 @@ const usages = {
   "text-ranges": "capcut text-ranges <project> <id> --styles <json-or-@file>",
   caption: "capcut caption <project> (--audio <path> | --from-segment <id>) [options]",
   translate: "capcut translate <project> --to <language> --out <path> [options]",
-  migrate: "capcut migrate <project> --from <version> --to <version>",
+  migrate: "capcut migrate <project> (--from <version> --to <version> | --like <project> | --from-store)",
   "add-sfx": "capcut add-sfx <project> <slug> <start> <duration> [options]",
   chroma: "capcut chroma <project> <id> (--color <hex> | --off) [options]",
   matting: "capcut matting <project> <id> [--off]",
@@ -250,10 +256,11 @@ const usages = {
   decrypt: "capcut decrypt <project-or-file>",
   export: "capcut export <drafts-dir> --batch [options]",
   "replace-media": "capcut replace-media <project> <segment-id> <new-file> [--retime]",
-  init: "capcut init <name> [--template <dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
+  init: "capcut init <name> [--template auto|bundled|<dir>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
   quickstart:
-    "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--ratio <r> | --width <px> --height <px>]",
-  compile: "capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl|->] [--check | --plan]",
+    "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto|bundled|<dir>] [--ratio <r> | --width <px> --height <px>]",
+  compile:
+    "capcut compile <spec.json> [--out <draftdir>] [--template auto|bundled|<dir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
   "detect-silence": "capcut detect-silence <media> [options]",
@@ -538,6 +545,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   migrate: [
     option("from", ["--from"], "string", "Source version."),
     option("to", ["--to"], "string", "Target version."),
+    option(
+      "like",
+      ["--like"],
+      "path",
+      "Donor project: copy its schema markers (version, new_version, platform, last_modified_platform, color_space, render flags) onto this draft so a build that refused it as 'from an unusual path' opens it (#67, #111). Timeline content is never touched.",
+    ),
+    option(
+      "from_store",
+      ["--from-store"],
+      "boolean",
+      "Like --like, with the newest app-authored project in this draft's own drafts folder as the donor.",
+    ),
   ],
   "add-sfx": [option("volume", ["--volume"], "number", "SFX volume."), TRACK_NAME],
   chroma: [
@@ -564,7 +583,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "materials",
       ["--materials"],
       "boolean",
-      "Also register the timeline's local media in draft_meta_info.json's draft_materials (the list CapCut 9.1 uses to decide what is imported; empty, every clip shows as 'file inaccessible'). Appends missing entries to the type-0 group, preserves existing ones, no-ops when complete.",
+      "Also register the timeline's local media in draft_meta_info.json's draft_materials (the list CapCut 9.1 uses to decide what is imported; empty, every clip shows as 'file inaccessible'). Appends missing entries to the type-0 group, preserves existing ones, no-ops when complete. Reports timeline materials whose local_material_id does not link to their entry; `capcut lint <project> --fix` writes that link.",
     ),
     option("drafts", ["--drafts"], "path", "Draft store root when the draft does not live inside a known one."),
   ],
@@ -677,24 +696,20 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("batch", ["--batch"], "boolean", "Export every draft."),
     option("app", ["--app"], "enum", "Target editor.", { values: ["capcut", "jianying"] }),
   ],
-  init: [
-    option("template", ["--template"], "path", "Template directory."),
-    option("drafts", ["--drafts"], "path", "Draft root directory."),
-    ...CANVAS,
-  ],
+  init: [TEMPLATE, option("drafts", ["--drafts"], "path", "Draft root directory."), ...CANVAS],
   quickstart: [
     option("video", ["--video"], "path", "Video or image to add."),
     option("audio", ["--audio"], "path", "Audio file to add."),
     option("srt", ["--srt"], "path", "SRT subtitles to add as caption segments."),
     option("drafts", ["--drafts"], "path", "Draft root directory."),
-    option("template", ["--template"], "path", "Template directory."),
+    TEMPLATE,
     option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary for duration detection."),
     ...CANVAS,
   ],
   compile: [
     OUT,
     option("drafts", ["--drafts"], "path", "Draft root directory."),
-    option("template", ["--template"], "path", "Template directory."),
+    TEMPLATE,
     option("check", ["--check"], "boolean", "Validate without writing."),
     option("plan", ["--plan"], "boolean", "Print the normalized build plan without writing."),
     option(
@@ -823,6 +838,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --script             -> caption (v0.22 transcript-guided alignment)
 //   --window, --similarity, --min-words -> detect-retakes (v0.22); --json also scopes there
 //   --soft-captions      -> render (v0.22 mov_text subtitle stream)
+//   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -837,6 +853,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--easing",
   "--encoder",
   "--format",
+  "--from-store",
   "--full",
   "--granularity",
   "--highlight-words",
@@ -847,6 +864,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keyword-color",
   "--keyword-size",
   "--kind",
+  "--like",
   "--limit",
   "--mask-field",
   "--materials",

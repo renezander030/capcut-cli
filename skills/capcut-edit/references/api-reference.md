@@ -110,14 +110,24 @@ array.
 
 ## Create
 
-### `capcut init <name> [--template <dir>] [--drafts <dir>]`
+### `capcut init <name> [--template auto|bundled|<dir>] [--drafts <dir>]`
 
-Copies a template draft directory into the drafts folder under the given name.
+Creates an empty draft in the drafts folder under the given name. By default
+(`auto`) the skeleton is seeded from the newest app-authored project already in
+that folder whenever it comes from a newer CapCut major than the bundled
+template — the app's own version markers and settings, none of its content —
+because CapCut 8.4+, 8.7 Windows and 9.3 refuse the bundled 6.5.0 template's
+drafts as "from an unusual path" (#67, #111). The JSON result's `template`
+field says which (`source: "store" | "path"`).
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--template <dir>` | `../CapCutAPI/template` (relative to capcut-cli) | Template source directory. |
+| `--template auto\|bundled\|<dir>` | `auto` | `auto`: seed from the store when it outgrows the bundled template; `bundled`: always the bundled template; a directory: copy that template (its `Timelines/` mirrors, `.bak` files and sidecar are never carried over; every timeline mirror is stamped with the new id). |
 | `--drafts <dir>` | `~/Movies/CapCut/User Data/Projects/com.lveditor.draft` | Drafts parent directory. |
+
+A draft built by an older release (markerless, `app_version: "6.5.0"`) is
+repaired in place with `capcut migrate <project> --from-store` (or `--like
+<project>`); `capcut lint` reports it as `template-stale`.
 
 ---
 
