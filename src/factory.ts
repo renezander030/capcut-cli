@@ -430,21 +430,24 @@ function readTemplateTimeline(templateDir: string): { file: string; draft: Draft
   return null;
 }
 
-/** Copy a template directory minus its per-project state; returns the top-level entries skipped. */
+/**
+ * Copy a template directory minus its per-project state; returns the
+ * top-level entries skipped. Entry by entry rather than one cpSync with a
+ * filter: the filter callback is not applied to directory children on every
+ * platform Node build (the Windows CI smoke copied Timelines/ through it), and
+ * the skip decision only ever concerns the template's top level anyway.
+ */
 function copyTemplateDir(templateDir: string, draftPath: string): string[] {
   const root = resolve(templateDir);
   const skipped: string[] = [];
-  cpSync(root, draftPath, {
-    recursive: true,
-    filter: (source) => {
-      const resolved = resolve(source);
-      if (resolved === root) return true;
-      const name = basename(resolved);
-      if (!templateSkipsEntry(name)) return true;
-      if (dirname(resolved) === root) skipped.push(name);
-      return false;
-    },
-  });
+  mkdirSync(draftPath, { recursive: true });
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (templateSkipsEntry(entry.name)) {
+      skipped.push(entry.name);
+      continue;
+    }
+    cpSync(resolve(root, entry.name), resolve(draftPath, entry.name), { recursive: true });
+  }
   return skipped;
 }
 
