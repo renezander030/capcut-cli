@@ -53,6 +53,8 @@ export {
 } from "./lint.js";
 export type { RunCommandRequest, RunCommandResult } from "./runner.js";
 export { runCommand } from "./runner.js";
+export type { GroupingDefaults } from "./script.js";
+export { groupingDefaults, wordSeparator } from "./script.js";
 export {
   fromStoredOffset,
   rangesLookDoubled,

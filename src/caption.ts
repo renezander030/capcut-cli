@@ -14,6 +14,7 @@ import {
 import type { Draft, Segment, Track } from "./draft.js";
 import { findSegment } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
+import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } from "./script.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
 
@@ -72,6 +73,9 @@ export interface CaptionResult {
   color_cycle?: number;
   /** --script alignment quality (only when a script was given). */
   script?: AlignmentReport;
+  /** The script the transcript is written in, which chose the word separator
+   * and the --max-words / --max-chars defaults (see script.ts). */
+  caption_script: CaptionScript;
 }
 
 /**
@@ -95,6 +99,15 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
   const audio = resolveAudio(draft, opts);
   const transcription = runWhisper(audio, opts);
   const recognizedWords = transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues);
+  // The transcript's script decides how words join into a cue (no space inside
+  // Chinese or Japanese) and how many of them make one when the caller set no
+  // --max-words / --max-chars; the script file's wording when one was given,
+  // since that is the text the cues will carry.
+  const textScript = captionScript(
+    opts.scriptText !== undefined ? opts.scriptText : recognizedWords.map((word) => word.word).join(""),
+  );
+  const separator = wordSeparator(textScript);
+  const grouping = groupingDefaults(textScript);
   let scriptReport: AlignmentReport | undefined;
   let cues: CaptionCue[];
   if (opts.scriptText !== undefined) {
@@ -106,15 +119,33 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     const aligned = alignScript(lines, recognizedWords);
     scriptReport = aligned.report;
     cues = opts.karaoke
-      ? groupWords(aligned.words, opts.maxWords ?? 4, opts.maxChars ?? 28, (opts.maxGapMs ?? 500) * 1000)
+      ? groupWords(
+          aligned.words,
+          opts.maxWords ?? grouping.karaokeMaxWords,
+          opts.maxChars ?? grouping.karaokeMaxChars,
+          (opts.maxGapMs ?? 500) * 1000,
+          separator,
+        )
       : // One cue per script line — the author's chunking — split only when a
         // line outgrows --max-chars (words and gaps never split a line).
         aligned.lines.flatMap((line) =>
-          groupWords(line, Number.POSITIVE_INFINITY, opts.maxChars ?? 42, Number.POSITIVE_INFINITY),
+          groupWords(
+            line,
+            Number.POSITIVE_INFINITY,
+            opts.maxChars ?? grouping.lineMaxChars,
+            Number.POSITIVE_INFINITY,
+            separator,
+          ),
         );
   } else {
     cues = opts.karaoke
-      ? groupWords(recognizedWords, opts.maxWords ?? 4, opts.maxChars ?? 28, (opts.maxGapMs ?? 500) * 1000)
+      ? groupWords(
+          recognizedWords,
+          opts.maxWords ?? grouping.karaokeMaxWords,
+          opts.maxChars ?? grouping.karaokeMaxChars,
+          (opts.maxGapMs ?? 500) * 1000,
+          separator,
+        )
       : transcription.cues;
   }
   if (cues.length === 0) {
@@ -166,7 +197,7 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
         presetRanges,
       });
     if (opts.karaoke && cue.words && cue.words.length > 0) {
-      const fullText = cue.words.map((word) => word.word).join(" ");
+      const fullText = cue.words.map((word) => word.word).join(separator);
       let cursor = 0;
       let cueMatches = 0;
       for (const word of cue.words) {
@@ -188,7 +219,7 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
         } else {
           setTextRanges(draft, segmentId, [karaokeRange]);
         }
-        cursor = end + 1;
+        cursor = end + separator.length;
         created++;
       }
       keywordMatches += cueMatches;
@@ -212,6 +243,7 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     source_audio: audio,
     engine: opts.whisperCmd ? "shell" : "whisper-cli",
     engine_name: transcription.engine,
+    caption_script: textScript,
     words: transcription.words.length,
     karaoke: opts.karaoke ?? false,
     // undefined when the flags are off, so JSON output stays byte-identical.
@@ -432,7 +464,21 @@ export function wordsFromCues(cues: CaptionCue[]): CaptionWord[] {
   return words;
 }
 
-export function groupWords(words: CaptionWord[], maxWords = 4, maxChars = 28, maxGapUs = 500_000): CaptionCue[] {
+/**
+ * Group timed words into cues: a cue closes when the next word would exceed
+ * maxWords, would push the joined text past maxChars, or starts after a gap
+ * longer than maxGapUs. `separator` is what joins the words into the cue's
+ * text — a space for Latin and Korean, nothing for Chinese and Japanese
+ * (wordSeparator in script.ts) — and counts towards maxChars like any other
+ * character.
+ */
+export function groupWords(
+  words: CaptionWord[],
+  maxWords = 4,
+  maxChars = 28,
+  maxGapUs = 500_000,
+  separator = " ",
+): CaptionCue[] {
   const cues: CaptionCue[] = [];
   let group: CaptionWord[] = [];
   const flush = () => {
@@ -440,7 +486,7 @@ export function groupWords(words: CaptionWord[], maxWords = 4, maxChars = 28, ma
     cues.push({
       startUs: group[0].startUs,
       endUs: group[group.length - 1].endUs,
-      text: group.map((word) => word.word).join(" "),
+      text: group.map((word) => word.word).join(separator),
       words: group,
     });
     group = [];
@@ -450,7 +496,9 @@ export function groupWords(words: CaptionWord[], maxWords = 4, maxChars = 28, ma
     const gap = group.length === 0 ? 0 : word.startUs - group[group.length - 1].endUs;
     if (
       group.length > 0 &&
-      (candidate.length > maxWords || candidate.map((item) => item.word).join(" ").length > maxChars || gap > maxGapUs)
+      (candidate.length > maxWords ||
+        candidate.map((item) => item.word).join(separator).length > maxChars ||
+        gap > maxGapUs)
     ) {
       flush();
     }

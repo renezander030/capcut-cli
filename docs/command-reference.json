@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -3659,7 +3659,16 @@
           ],
           "type": "number",
           "required": false,
-          "description": "Maximum words per cue."
+          "description": "Maximum words per karaoke cue. Unset: 4; for Chinese and Japanese transcripts unlimited (the character cap bounds the cue)."
+        },
+        {
+          "name": "max_chars",
+          "flags": [
+            "--max-chars"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Maximum characters per cue (karaoke) or per script line. Unset: 28 / 42; Chinese 16 / 16, Japanese 13 / 13, Korean 16 / 16."
         },
         {
           "name": "max_gap_ms",

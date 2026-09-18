@@ -7,10 +7,16 @@ import { type Category, listEnum, type Namespace } from "./enums.js";
 import { copyAssetDeduped, effectCatalogue, filterCatalogue, storeOutgrowsTemplate } from "./factory.js";
 import { linkLocalMaterialIds, readSidecar, unlinkedMaterials } from "./materials-register.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
+import { type CaptionScript, CJK_SCRIPT_LIMITS, captionScript, type ScriptLimit, type ScriptLimits } from "./script.js";
 import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
+
+export type { CaptionScript, ScriptLimit, ScriptLimits } from "./script.js";
+// The script detection and its limit table live in script.ts (caption shares
+// them); re-exported here so lint stays the one import for lint callers.
+export { CJK_SCRIPT_LIMITS, captionScript } from "./script.js";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -63,79 +69,6 @@ const FIXABLE_CODES = new Set<string>([
 // the corresponding caption-gap-too-small issue is reported with
 // fixable:false instead.
 export const MIN_CAPTION_DURATION_US = 100_000;
-
-/** The script a caption is written in, as far as the line-length and
- * reading-speed rules care: Latin (and everything else), or one of the three
- * CJK scripts whose subtitling conventions differ from Latin ones. */
-export type CaptionScript = "latin" | "zh" | "ja" | "ko";
-
-export interface ScriptLimit {
-  maxCharsPerLine?: number;
-  maxCharsPerSecond?: number;
-}
-
-/** Caption limits that replace `maxCharsPerLine` / `maxCharsPerSecond` for a
- * cue written in the given script. An absent key falls back to the Latin
- * value for that rule. */
-export type ScriptLimits = Partial<Record<Exclude<CaptionScript, "latin">, ScriptLimit>>;
-
-/**
- * Where the Latin defaults (42 characters per line, 20 per second) come from
- * a Latin alphabet, a CJK character carries a syllable or a word, so a line
- * a third as long is already full and a third the speed is already fast:
- * the streaming style guides sit at 16 characters per line and 9 per second
- * for Simplified Chinese, 13 and 4 for Japanese, 16 and 12 for Korean. A
- * 30-character Chinese line passing a 42-character check is the failure this
- * table exists for.
- */
-export const CJK_SCRIPT_LIMITS: ScriptLimits = {
-  zh: { maxCharsPerLine: 16, maxCharsPerSecond: 9 },
-  ja: { maxCharsPerLine: 13, maxCharsPerSecond: 4 },
-  ko: { maxCharsPerLine: 16, maxCharsPerSecond: 12 },
-};
-
-const KANA = /[\u3040-\u30ff]/;
-const HANGUL = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/;
-const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
-// Full-width punctuation and symbols travel with the CJK scripts and count
-// towards the share, without deciding which script it is.
-const CJK_ANY =
-  /[\u3000-\u303f\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/;
-
-/**
- * The script a caption's limits should follow: CJK when at least half of its
- * visible characters are CJK, then Japanese if any kana is present, Korean if
- * any hangul, else Chinese. A mixed caption below that share (a Latin line
- * with one CJK name) keeps the Latin limits.
- */
-export function captionScript(text: string): CaptionScript {
-  let total = 0;
-  let cjk = 0;
-  let kana = 0;
-  let hangul = 0;
-  let han = 0;
-  for (const ch of text) {
-    if (/\s/.test(ch)) continue;
-    total++;
-    if (KANA.test(ch)) {
-      kana++;
-      cjk++;
-    } else if (HANGUL.test(ch)) {
-      hangul++;
-      cjk++;
-    } else if (HAN.test(ch)) {
-      han++;
-      cjk++;
-    } else if (CJK_ANY.test(ch)) {
-      cjk++;
-    }
-  }
-  if (total === 0 || cjk * 2 < total) return "latin";
-  if (kana > 0) return "ja";
-  if (hangul > 0) return "ko";
-  if (han > 0) return "zh";
-  return "latin";
-}
 
 /** The line-length and reading-speed limits for one caption's text, with the
  * suffix its messages carry when a script-specific default applied. */

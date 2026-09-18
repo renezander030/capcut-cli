@@ -40,6 +40,8 @@ capcut info ./my-first/ -H
 
 有用的话，[给 capcut-cli 加个 Star](https://github.com/renezander030/capcut-cli)，帮助更多剪辑师和 Agent 开发者发现它。
 
+入选[《科技爱好者周刊》第 413 期](https://github.com/ruanyf/weekly/blob/master/docs/issue-413.md)。
+
 想了解更多实用的 AI Agent 工具，从视频自动化到交付前的检查，[在 GitHub 上关注 René](https://github.com/renezander030)。
 
 也可以从源码构建：`git clone https://github.com/renezander030/capcut-cli && cd capcut-cli && npm install && npm run build`（然后用 `npm link` 暴露出 `capcut`）。或者不安装，直接运行任意命令：`npx capcut-cli <command>`。
@@ -78,9 +80,9 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
-> **v0.24.0 新增：** 中文、日文、韩文字幕按各自的规范检查 —— `lint` 会指出 32 字的中文单行和每秒 15 字的字幕（拉丁默认的 42 字 / 每秒 20 字会放过它们），`--fix` 按字重新折行（zh 16/9、ja 13/4、ko 16/12；显式传入 `--max-chars` / `--max-cps` 仍对所有文字生效）。在剪映 6.0+ 的草稿目录里（应用写出的项目全部加密），`init` / `quickstart` / `compile` 现在会明确说明没有任何项目可作为种子（`template.store` 与 WARNING），`lint` 会报告 `template-unverified-store` 而不是沉默。另外，一条命令即可把它装进 Agent：`npx skills add renezander030/capcut-cli`。完整说明见[更新日志](./CHANGELOG.md)。
+> **v0.25.0 新增：** `caption` 按转写文本的文字来分句。Whisper 对中文、日文给出的"词"是单个字或很短的片段，按拉丁默认（每句 4 词、用空格连接）会生成字与字之间带空格的碎片；现在中日文按字直接连接、只按字数上限分句，上限就是 `lint` 对字幕的行宽（zh 16、ja 13、ko 16），结果里会报告 `caption_script`。显式传入的 `--max-words` / `--max-chars` 仍然优先。完整说明见[更新日志](./CHANGELOG.md)。
 
-> **v0.23.0 新增：** 生成的草稿能在你实际安装的 CapCut 里打开。用内置 6.5.0 模板生成的草稿会被 CapCut 8.4+、8.7 Windows 和 9.3 以"项目来自异常路径"拒绝（[#67](https://github.com/renezander030/capcut-cli/issues/67)、[#111](https://github.com/renezander030/capcut-cli/issues/111)——这是等待已久的 8.7 Windows 真机验证：内置模板失败，从已安装应用捕获的模板成功）。`init`、`quickstart` 与 `compile` 现在默认以草稿目录中最新的应用生成项目为种子（保留其版本标记与设置，不带任何内容，绝不复制其 `Timelines/` 镜像）；`migrate --from-store` 为旧版本生成的草稿重新盖上标记，`lint` 以 `template-stale` 报告过期签名。素材在添加时即写入 `draft_materials` 并回填 `local_material_id`——剪映 5.9+ 与 CapCut 9.3 正是靠这个键定位本地素材（[JmsLdrn/capcut-mcp#1](https://github.com/JmsLdrn/capcut-mcp/issues/1)），已有草稿可用 `lint --fix` 补链（`media-unlinked`）。另有 `source-range-exceeds-material` 检查、能指出扁平 `text-style` 键的 `compile --check`（[#110](https://github.com/renezander030/capcut-cli/issues/110)）、`media-outside-draft` 的 macOS 权限提示，以及 `init` 同时盖章两份时间线镜像，使 `register` 接受自己生成的草稿。没有删除任何命令，现有输出结构均未改变。详见[更新日志](./CHANGELOG.md)。
+> **v0.24.0 新增：** 中文、日文、韩文字幕按各自的规范检查 —— `lint` 会指出 32 字的中文单行和每秒 15 字的字幕（拉丁默认的 42 字 / 每秒 20 字会放过它们），`--fix` 按字重新折行（zh 16/9、ja 13/4、ko 16/12；显式传入 `--max-chars` / `--max-cps` 仍对所有文字生效）。在剪映 6.0+ 的草稿目录里（应用写出的项目全部加密），`init` / `quickstart` / `compile` 现在会明确说明没有任何项目可作为种子（`template.store` 与 WARNING），`lint` 会报告 `template-unverified-store` 而不是沉默。另外，一条命令即可把它装进 Agent：`npx skills add renezander030/capcut-cli`。完整说明见[更新日志](./CHANGELOG.md)。
 
 
 ## 常用命令

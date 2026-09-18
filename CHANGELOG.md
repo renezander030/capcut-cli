@@ -4,6 +4,18 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-09-18
+
+### Added
+
+- `caption` follows the transcript's script. Whisper's "words" for Chinese and Japanese are single characters or short tokens, so the Latin defaults (four words per cue, joined with spaces) produced fragments with spaces between the characters. Cues in Chinese and Japanese are now joined without spaces and bounded by characters alone, at the width `lint` holds captions to (16 zh, 13 ja; Korean keeps spaces and four words at 16); karaoke ranges follow the new offsets. The result reports `caption_script` (`latin` | `zh` | `ja` | `ko`). An explicit `--max-words` / `--max-chars` applies as given. Library: `groupWords` takes a `separator`; `wordSeparator`, `groupingDefaults` and `GroupingDefaults` are exported; the script detection moved to `script.ts` (still exported from the lint entry points).
+- `caption --max-chars` is documented in the command reference alongside `--max-words`.
+- The Chinese README notes the feature in 科技爱好者周刊 issue 413.
+
+### Unchanged
+
+- `--script` alignment still tokenizes the script file on whitespace; a Chinese script line is one token to it.
+
 ## [0.24.0] — 2026-09-18
 
 ### Added
