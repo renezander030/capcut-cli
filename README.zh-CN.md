@@ -84,6 +84,12 @@ Claude Code 也可以把它作为插件加载：
 
 > **v0.24.0 新增：** 中文、日文、韩文字幕按各自的规范检查 —— `lint` 会指出 32 字的中文单行和每秒 15 字的字幕（拉丁默认的 42 字 / 每秒 20 字会放过它们），`--fix` 按字重新折行（zh 16/9、ja 13/4、ko 16/12；显式传入 `--max-chars` / `--max-cps` 仍对所有文字生效）。在剪映 6.0+ 的草稿目录里（应用写出的项目全部加密），`init` / `quickstart` / `compile` 现在会明确说明没有任何项目可作为种子（`template.store` 与 WARNING），`lint` 会报告 `template-unverified-store` 而不是沉默。另外，一条命令即可把它装进 Agent：`npx skills add renezander030/capcut-cli`。完整说明见[更新日志](./CHANGELOG.md)。
 
+## 使用 capcut-cli 构建
+
+- [OpenChatCut](https://github.com/0xsline/OpenChatCut) — 将 Agent 编辑后的时间线、本地视频、音频和字幕导出为可在 CapCut / 剪映中继续审阅和渲染的真实草稿。
+
+项目描述须经其维护者确认。收录不代表背书或关联。
+
 
 ## 常用命令
 
