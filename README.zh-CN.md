@@ -88,6 +88,8 @@ Claude Code 也可以把它作为插件加载：
 
 - [OpenChatCut](https://github.com/0xsline/OpenChatCut) — 将 Agent 编辑后的时间线、本地视频、音频和字幕导出为可在 CapCut / 剪映中继续审阅和渲染的真实草稿。
 
+使用 capcut-cli 构建了公开项目？请[提交 showcase issue](https://github.com/renezander030/capcut-cli/issues/new?template=showcase.yml)，附上公开链接、一句话说明，以及可选的截图或演示。
+
 项目描述须经其维护者确认。收录不代表背书或关联。
 
 

@@ -1,0 +1,45 @@
+name: "Built with capcut-cli / 使用 capcut-cli 构建"
+description: "Add your public project to the README showcase. / 把你的公开项目加入 README 展示。"
+title: "[Showcase] "
+labels: ["showcase"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Cards in **Built with capcut-cli** are text only and use the sentence you approve below. Inclusion does not imply endorsement or affiliation.
+        **使用 capcut-cli 构建** 中的卡片只包含文字，并使用你在下方确认的描述。收录不代表背书或关联。
+  - type: input
+    id: link
+    attributes:
+      label: "Public project link / 公开项目链接"
+      placeholder: "https://github.com/owner/repo"
+    validations:
+      required: true
+  - type: textarea
+    id: sentence
+    attributes:
+      label: "One sentence about what it does / 一句话说明"
+      description: "Published as written. / 将按原文发布。"
+      placeholder: "exports an agent-edited timeline into an editable CapCut / JianYing draft for review."
+    validations:
+      required: true
+  - type: textarea
+    id: sentence_zh
+    attributes:
+      label: "Chinese sentence for README.zh-CN (optional) / 用于 README.zh-CN 的中文描述（可选）"
+    validations:
+      required: false
+  - type: textarea
+    id: media
+    attributes:
+      label: "Screenshot or demo (optional) / 截图或演示（可选）"
+      description: "Only media you have the right to publish. / 仅限你有权发布的素材。"
+    validations:
+      required: false
+  - type: checkboxes
+    id: approval
+    attributes:
+      label: "Approval / 确认"
+      options:
+        - label: "I maintain this project and approve the wording above for the capcut-cli README. / 我是该项目的维护者，同意在 capcut-cli README 中使用以上描述。"
+          required: true

@@ -111,6 +111,8 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 - [OpenChatCut](https://github.com/0xsline/OpenChatCut) — exports an agent-edited timeline, local media, audio, and captions into a real CapCut / JianYing draft for review and rendering.
 
+Built something with capcut-cli? [Open a showcase issue](https://github.com/renezander030/capcut-cli/issues/new?template=showcase.yml) with a public link, one sentence about what it does, and an optional screenshot or demo.
+
 Project descriptions are approved by their maintainers. Inclusion does not imply endorsement or affiliation.
 
 
