@@ -1,6 +1,6 @@
 ---
 name: capcut-edit
-description: Edit CapCut / JianYing video projects — read and write subtitles, timing, speed, volume, templates, animations (fade/ken-burns), and cut long-form to shorts. Use when the user mentions capcut, jianying, subtitles, video editing, draft_content.json, draft_info.json, or cutting videos.
+description: Edit CapCut / JianYing video projects — read and write subtitles, timing, speed, volume, templates, animations (fade/ken-burns), and cut long-form to shorts. Use when the user mentions capcut, jianying, subtitles, video editing, draft_content.json, draft_info.json, or cutting videos — in English or Chinese (剪映, 字幕, 草稿, 剪辑, 切片, 视频编辑).
 ---
 
 # capcut-edit

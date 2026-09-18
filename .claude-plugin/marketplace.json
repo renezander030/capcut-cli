@@ -8,7 +8,7 @@
     {
       "name": "capcut-cli",
       "source": "./",
-      "description": "Edit CapCut and JianYing projects from Claude Code — subtitles, timing, speed, volume, transitions, masks, templates, cut long-form to shorts."
+      "description": "Edit CapCut and JianYing (剪映) projects from Claude Code — subtitles and SRT/ASS import, timing, speed, volume, keyframes, masks, filters and effects, templates, lint --fix, render previews, and cutting long-form to shorts."
     }
   ]
 }

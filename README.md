@@ -62,6 +62,23 @@ JSON in, JSON out: every command reads and writes the local draft store directly
 - **Queue runner** — `capcut serve` reads JSONL jobs from stdin, for [n8n / Make / Coze](./examples/serve-automation.md)
 - **Agent sandbox (experimental)** — build [`capcut-core.wasm`](https://github.com/renezander030/capcut-cli/tree/master/wasm/capcut-core) for three read-only MCP tools with zero filesystem, network, environment, clock, random, stdio, or process imports
 
+### Give your agent the skill
+
+One command installs the `capcut-edit` skill into Claude Code, Codex, Cursor, OpenCode and the other agents the [`skills`](https://skills.sh) installer supports:
+
+```bash
+npx skills add renezander030/capcut-cli
+```
+
+Claude Code can also load it as a plugin:
+
+```
+/plugin marketplace add renezander030/capcut-cli
+/plugin install capcut-cli@capcut-cli
+```
+
+The skill teaches the agent every command, the progressive-disclosure habit (inspect first, never dump a whole draft), where the draft store lives on macOS and Windows, and the deterministic scripts for fades, Ken Burns and long-to-short cuts. It triggers on English and Chinese requests alike (剪映, 字幕, 草稿).
+
 ### Capability-free Wasm tools for agents
 
 **Using an AI assistant with capcut-cli? Give it a safer “look, don’t touch” mode.**
@@ -86,7 +103,7 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
-> **New in v0.22.0:** nine items mined from what users are hitting across this repo, its forks and the wider CapCut/JianYing tooling. `register --materials` writes the `draft_materials` registration CapCut 9.1 reads to decide what is imported — the fix for every clip showing as "file inaccessible" with a relink prompt ([pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13)). `export-timeline --captions markers` carries caption cues into the NLE as OTIO timeline markers, and `import-timeline` rebuilds the text track from them (OTIO has no title schema — [OpenTimelineIO#62](https://github.com/AcademySoftwareFoundation/OpenTimelineIO/issues/62), open since 2017). `caption --script` keeps whisper's word timing but uses your script's wording. `detect-retakes` finds the sentence the speaker fluffed and said again, with the window / min-words / similarity guards that keep it from collapsing a timeline. Plus `render --soft-captions` (a toggleable mov_text stream), `matting` (smart background removal on a clip's material), `init --ratio 9:16` for portrait drafts, IR-style keyframe aliases (`scale`, `x`, `y`, `opacity`) and `--easing hold`. No command was removed and no existing output changed shape. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.24.0:** captions in Chinese, Japanese and Korean are held to their own limits — `lint` flags a 32-character Chinese line and a 15 chars/s cue that the Latin defaults (42, 20) let through, and `--fix` re-wraps between characters (zh 16/9, ja 13/4, ko 16/12; an explicit `--max-chars` / `--max-cps` still applies everywhere). On a JianYing 6.0+ drafts folder, where every app-written project is encrypted, `init` / `quickstart` / `compile` now say that none could seed the new draft (`template.store`, a WARNING) and `lint` reports `template-unverified-store` instead of nothing. Plus a one-command agent install: `npx skills add renezander030/capcut-cli`. Full details in the [changelog](./CHANGELOG.md).
 
 > **New in v0.23.0:** drafts that open on the CapCut you actually have. A draft built from the bundled 6.5.0 template is refused by CapCut 8.4+, 8.7 Windows and 9.3 as "from an unusual path" ([#67](https://github.com/renezander030/capcut-cli/issues/67), [#111](https://github.com/renezander030/capcut-cli/issues/111) — the real 8.7 Windows round-trip, negative with the bundled template and positive with one captured from the installed app). `init`, `quickstart` and `compile` now seed new drafts from the newest app-authored project in your drafts folder by default (its version markers and settings, none of its content, never its `Timelines/` mirrors); `migrate --from-store` restamps drafts built earlier, and `lint` reports the stale signature as `template-stale`. Media gets its `local_material_id` link to `draft_materials` at add time — the key JianYing 5.9+ and CapCut 9.3 resolve local clips by ([JmsLdrn/capcut-mcp#1](https://github.com/JmsLdrn/capcut-mcp/issues/1)) — and `lint --fix` writes it for existing drafts (`media-unlinked`). Plus `source-range-exceeds-material`, a `compile --check` that names flat `text-style` keys ([#110](https://github.com/renezander030/capcut-cli/issues/110)), the macOS permission hint on `media-outside-draft`, and `init` stamping both timeline mirrors so `register` accepts its own drafts. No command was removed and no existing output changed shape. Full details in the [changelog](./CHANGELOG.md).
 

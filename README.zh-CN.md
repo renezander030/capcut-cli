@@ -59,9 +59,26 @@ JSON 进、JSON 出：每个命令都直接读写本地草稿存储，不用 MCP
 - **库（Library）** —— `import { loadDraft, lintDraft, saveDraft } from "capcut-cli"`（带类型、零依赖）
 - **队列执行器** —— `capcut serve` 从 stdin 读取 JSONL 任务，对接 [n8n / Make / Coze](./examples/serve-automation.md)
 
+### 把它装进你的 Agent
+
+一条命令即可把 `capcut-edit` 技能装进 Claude Code、Codex、Cursor、OpenCode 以及 [`skills`](https://skills.sh) 安装器支持的其他 Agent：
+
+```bash
+npx skills add renezander030/capcut-cli
+```
+
+Claude Code 也可以把它作为插件加载：
+
+```
+/plugin marketplace add renezander030/capcut-cli
+/plugin install capcut-cli@capcut-cli
+```
+
+这个技能会教 Agent 每条命令、渐进式读取的习惯（先看概要，绝不整份倒出草稿）、macOS 与 Windows 上草稿目录的位置，以及淡入淡出、Ken Burns、长视频切短的确定性脚本。中英文请求都能触发（剪映、字幕、草稿）。
+
 ## 发布说明
 
-> **v0.22.0 新增：** 九项来自本仓库、其分支及更广泛 CapCut/剪映工具生态中真实用户痛点的功能。`register --materials` 会写入 CapCut 9.1 用来判断素材是否已导入的 `draft_materials` 登记——修复所有片段显示为"文件无法访问"并要求重新链接的问题（[pyCapCut#13](https://github.com/GuanYixuan/pyCapCut/issues/13)）。`export-timeline --captions markers` 把字幕作为 OTIO 时间线标记带进 NLE，`import-timeline` 再由这些标记重建文本轨道（OTIO 没有字幕/标题 schema——[OpenTimelineIO#62](https://github.com/AcademySoftwareFoundation/OpenTimelineIO/issues/62)，自 2017 年悬而未决）。`caption --script` 保留 whisper 的逐词时间，但采用你的脚本文字。`detect-retakes` 找出说错后重说的句子，并以窗口、最少词数、相似度三道守卫防止误剪整条时间线。另有 `render --soft-captions`（可开关的 mov_text 字幕流）、`matting`（对片段素材开启智能抠像）、`init --ratio 9:16`（竖版草稿）、IR 风格的关键帧属性别名（`scale`、`x`、`y`、`opacity`）与 `--easing hold`。没有删除任何命令，现有输出结构均未改变。详见[更新日志](./CHANGELOG.md)。
+> **v0.24.0 新增：** 中文、日文、韩文字幕按各自的规范检查 —— `lint` 会指出 32 字的中文单行和每秒 15 字的字幕（拉丁默认的 42 字 / 每秒 20 字会放过它们），`--fix` 按字重新折行（zh 16/9、ja 13/4、ko 16/12；显式传入 `--max-chars` / `--max-cps` 仍对所有文字生效）。在剪映 6.0+ 的草稿目录里（应用写出的项目全部加密），`init` / `quickstart` / `compile` 现在会明确说明没有任何项目可作为种子（`template.store` 与 WARNING），`lint` 会报告 `template-unverified-store` 而不是沉默。另外，一条命令即可把它装进 Agent：`npx skills add renezander030/capcut-cli`。完整说明见[更新日志](./CHANGELOG.md)。
 
 > **v0.23.0 新增：** 生成的草稿能在你实际安装的 CapCut 里打开。用内置 6.5.0 模板生成的草稿会被 CapCut 8.4+、8.7 Windows 和 9.3 以"项目来自异常路径"拒绝（[#67](https://github.com/renezander030/capcut-cli/issues/67)、[#111](https://github.com/renezander030/capcut-cli/issues/111)——这是等待已久的 8.7 Windows 真机验证：内置模板失败，从已安装应用捕获的模板成功）。`init`、`quickstart` 与 `compile` 现在默认以草稿目录中最新的应用生成项目为种子（保留其版本标记与设置，不带任何内容，绝不复制其 `Timelines/` 镜像）；`migrate --from-store` 为旧版本生成的草稿重新盖上标记，`lint` 以 `template-stale` 报告过期签名。素材在添加时即写入 `draft_materials` 并回填 `local_material_id`——剪映 5.9+ 与 CapCut 9.3 正是靠这个键定位本地素材（[JmsLdrn/capcut-mcp#1](https://github.com/JmsLdrn/capcut-mcp/issues/1)），已有草稿可用 `lint --fix` 补链（`media-unlinked`）。另有 `source-range-exceeds-material` 检查、能指出扁平 `text-style` 键的 `compile --check`（[#110](https://github.com/renezander030/capcut-cli/issues/110)）、`media-outside-draft` 的 macOS 权限提示，以及 `init` 同时盖章两份时间线镜像，使 `register` 接受自己生成的草稿。没有删除任何命令，现有输出结构均未改变。详见[更新日志](./CHANGELOG.md)。
 
