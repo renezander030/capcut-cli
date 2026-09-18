@@ -64,6 +64,114 @@ const FIXABLE_CODES = new Set<string>([
 // fixable:false instead.
 export const MIN_CAPTION_DURATION_US = 100_000;
 
+/** The script a caption is written in, as far as the line-length and
+ * reading-speed rules care: Latin (and everything else), or one of the three
+ * CJK scripts whose subtitling conventions differ from Latin ones. */
+export type CaptionScript = "latin" | "zh" | "ja" | "ko";
+
+export interface ScriptLimit {
+  maxCharsPerLine?: number;
+  maxCharsPerSecond?: number;
+}
+
+/** Caption limits that replace `maxCharsPerLine` / `maxCharsPerSecond` for a
+ * cue written in the given script. An absent key falls back to the Latin
+ * value for that rule. */
+export type ScriptLimits = Partial<Record<Exclude<CaptionScript, "latin">, ScriptLimit>>;
+
+/**
+ * Where the Latin defaults (42 characters per line, 20 per second) come from
+ * a Latin alphabet, a CJK character carries a syllable or a word, so a line
+ * a third as long is already full and a third the speed is already fast:
+ * the streaming style guides sit at 16 characters per line and 9 per second
+ * for Simplified Chinese, 13 and 4 for Japanese, 16 and 12 for Korean. A
+ * 30-character Chinese line passing a 42-character check is the failure this
+ * table exists for.
+ */
+export const CJK_SCRIPT_LIMITS: ScriptLimits = {
+  zh: { maxCharsPerLine: 16, maxCharsPerSecond: 9 },
+  ja: { maxCharsPerLine: 13, maxCharsPerSecond: 4 },
+  ko: { maxCharsPerLine: 16, maxCharsPerSecond: 12 },
+};
+
+const KANA = /[\u3040-\u30ff]/;
+const HANGUL = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/;
+const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+// Full-width punctuation and symbols travel with the CJK scripts and count
+// towards the share, without deciding which script it is.
+const CJK_ANY =
+  /[\u3000-\u303f\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/;
+
+/**
+ * The script a caption's limits should follow: CJK when at least half of its
+ * visible characters are CJK, then Japanese if any kana is present, Korean if
+ * any hangul, else Chinese. A mixed caption below that share (a Latin line
+ * with one CJK name) keeps the Latin limits.
+ */
+export function captionScript(text: string): CaptionScript {
+  let total = 0;
+  let cjk = 0;
+  let kana = 0;
+  let hangul = 0;
+  let han = 0;
+  for (const ch of text) {
+    if (/\s/.test(ch)) continue;
+    total++;
+    if (KANA.test(ch)) {
+      kana++;
+      cjk++;
+    } else if (HANGUL.test(ch)) {
+      hangul++;
+      cjk++;
+    } else if (HAN.test(ch)) {
+      han++;
+      cjk++;
+    } else if (CJK_ANY.test(ch)) {
+      cjk++;
+    }
+  }
+  if (total === 0 || cjk * 2 < total) return "latin";
+  if (kana > 0) return "ja";
+  if (hangul > 0) return "ko";
+  if (han > 0) return "zh";
+  return "latin";
+}
+
+/** The line-length and reading-speed limits for one caption's text, with the
+ * suffix its messages carry when a script-specific default applied. */
+export function captionLimits(
+  text: string,
+  opts: LintOptions,
+): { script: CaptionScript; maxCharsPerLine: number; maxCharsPerSecond: number | undefined; note: string } {
+  const script = captionScript(text);
+  const limit = script === "latin" ? undefined : opts.scriptLimits?.[script];
+  const maxCharsPerLine = limit?.maxCharsPerLine ?? opts.maxCharsPerLine;
+  const maxCharsPerSecond = limit?.maxCharsPerSecond ?? opts.maxCharsPerSecond;
+  const applied = limit !== undefined && (limit.maxCharsPerLine !== undefined || limit.maxCharsPerSecond !== undefined);
+  return { script, maxCharsPerLine, maxCharsPerSecond, note: applied ? `, ${script} default` : "" };
+}
+
+/**
+ * The script table minus the rules the caller set explicitly: `--max-chars 30`
+ * means 30 for every script, while the reading-speed defaults still follow
+ * the script (and vice versa). Null when nothing script-specific is left.
+ */
+export function scriptLimitsExcept(
+  limits: ScriptLimits | null,
+  explicit: { maxCharsPerLine?: boolean; maxCharsPerSecond?: boolean },
+): ScriptLimits | null {
+  if (!limits) return null;
+  const out: ScriptLimits = {};
+  for (const [script, limit] of Object.entries(limits) as [Exclude<CaptionScript, "latin">, ScriptLimit][]) {
+    const kept: ScriptLimit = {};
+    if (!explicit.maxCharsPerLine && limit.maxCharsPerLine !== undefined) kept.maxCharsPerLine = limit.maxCharsPerLine;
+    if (!explicit.maxCharsPerSecond && limit.maxCharsPerSecond !== undefined)
+      kept.maxCharsPerSecond = limit.maxCharsPerSecond;
+    if (Object.keys(kept).length > 0) out[script] = kept;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 export interface LintOptions {
   maxCharsPerLine: number;
   maxCueDurationUs: number;
@@ -101,6 +209,14 @@ export interface LintOptions {
    * a newer app major is the draft CapCut refuses as "from an unusual path"
    * (#67, #111). Library callers with no store simply omit it. */
   storeAppVersion?: string | null;
+  /** How many projects in that drafts folder are JianYing 6.0+ encrypted
+   * payloads the CLI could neither seed from nor compare against. With no
+   * readable project at all, a bundled-template draft cannot be called stale
+   * — only unverified for the app that wrote those projects. */
+  storeEncryptedProjects?: number;
+  /** Script-specific replacements for maxCharsPerLine / maxCharsPerSecond
+   * (see CJK_SCRIPT_LIMITS). Null applies the Latin values to every script. */
+  scriptLimits?: ScriptLimits | null;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -111,6 +227,7 @@ export const DEFAULT_LINT_OPTIONS: LintOptions = {
   probeMedia: true,
   maxCharsPerSecond: 20, // upper end of the BBC/Netflix reading-speed range
   safeAreaFraction: 0.85, // |transform.y| past this is under the platform UI
+  scriptLimits: CJK_SCRIPT_LIMITS,
 };
 
 export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS): LintIssue[] {
@@ -199,7 +316,8 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
       // catches the opposite failure, a caption that is gone before it can be
       // read. Only meaningful with both text and a real duration, and counted
       // on visible characters (whitespace is not read).
-      const cps = opts.maxCharsPerSecond;
+      const limits = captionLimits(text, opts);
+      const cps = limits.maxCharsPerSecond;
       if (cps !== undefined && cps > 0 && text.length > 0 && s.target_timerange.duration > 0) {
         const visible = text.replace(/\s+/g, "").length;
         const seconds = s.target_timerange.duration / 1_000_000;
@@ -209,7 +327,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           issues.push({
             severity: "warning",
             code: "caption-too-fast",
-            message: `Caption ${shortId(s.id)} runs at ${rate.toFixed(1)} chars/s (>${cps}) — ${visible} characters in ${Math.round(seconds * 1000)}ms`,
+            message: `Caption ${shortId(s.id)} runs at ${rate.toFixed(1)} chars/s (>${cps}${limits.note}) — ${visible} characters in ${Math.round(seconds * 1000)}ms`,
             // Report-only: the repair is either more screen time (which moves
             // every later caption) or fewer words (an authoring decision).
             fixable: false,
@@ -248,15 +366,15 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
       }
 
       for (const line of text.split(/\r?\n/)) {
-        if (line.length > opts.maxCharsPerLine) {
+        if (line.length > limits.maxCharsPerLine) {
           issues.push({
             severity: "warning",
             code: "line-too-long",
-            message: `Caption ${shortId(s.id)} has ${line.length}-char line (>${opts.maxCharsPerLine}): "${line.slice(0, 50)}…"`,
+            message: `Caption ${shortId(s.id)} has ${line.length}-char line (>${limits.maxCharsPerLine}${limits.note}): "${line.slice(0, 50)}…"`,
             fixable:
               FIXABLE_CODES.has("line-too-long") &&
               mat !== undefined &&
-              canFixLineTooLong(mat.content, opts.maxCharsPerLine),
+              canFixLineTooLong(mat.content, limits.maxCharsPerLine),
             location: { track: track.name, segment_id: s.id },
           });
           break;
@@ -605,6 +723,27 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
         fixable: false,
         suggested_command:
           "capcut migrate <project> --from-store  # restamps the markers from the store's newest project",
+      });
+    } else if (
+      !opts.storeAppVersion &&
+      opts.storeEncryptedProjects !== undefined &&
+      opts.storeEncryptedProjects > 0 &&
+      typeof app === "string" &&
+      markerless
+    ) {
+      // The JianYing counterpart: the store's projects are all encrypted, so
+      // there is no version to compare against and nothing that could have
+      // seeded this draft. Not stale — unverified for the app that wrote them.
+      const n = opts.storeEncryptedProjects;
+      issues.push({
+        severity: "info",
+        code: "template-unverified-store",
+        message:
+          `Draft declares CapCut ${app} and carries no version/new_version markers (the bundled template), and the ` +
+          `${n} project(s) in this drafts folder are encrypted (JianYing 6.0+), so nothing could seed it or say which ` +
+          "app version wrote them — whether this JianYing build opens the draft is unverified (JianYing 11.4 macOS is " +
+          "reported to open and upgrade it in place; see docs/jianying-encryption.md)",
+        fixable: false,
       });
     }
   }
@@ -1081,7 +1220,7 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
       if (!mat) continue;
       const undoubled = undoubleContent(mat.content);
       if (undoubled !== null) mat.content = undoubled;
-      const rewrapped = rewrapContent(mat.content, opts.maxCharsPerLine);
+      const rewrapped = rewrapContent(mat.content, captionLimits(extractText(mat.content), opts).maxCharsPerLine);
       if (rewrapped !== null) mat.content = rewrapped;
     }
   }

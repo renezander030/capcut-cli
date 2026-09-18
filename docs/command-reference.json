@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -134,7 +134,7 @@
           ],
           "type": "number",
           "required": false,
-          "description": "Maximum caption characters per line.",
+          "description": "Maximum caption characters per line. Unset, CJK captions use their own defaults: 16 (zh), 13 (ja), 16 (ko).",
           "default": 42
         },
         {
@@ -164,7 +164,7 @@
           ],
           "type": "number",
           "required": false,
-          "description": "Maximum caption reading speed in characters per second (0 disables).",
+          "description": "Maximum caption reading speed in characters per second (0 disables). Unset, CJK captions use 9 (zh), 4 (ja), 12 (ko).",
           "default": 20
         },
         {

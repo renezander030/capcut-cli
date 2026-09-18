@@ -3662,8 +3662,16 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
 }
 
 async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ exitCode: number }> {
-  const { DEFAULT_LINT_OPTIONS, buildPipReport, fixDraft, lintDraft, lintExitCode, pipLintIssues, summarize } =
-    await import("./lint.js");
+  const {
+    DEFAULT_LINT_OPTIONS,
+    buildPipReport,
+    fixDraft,
+    lintDraft,
+    lintExitCode,
+    pipLintIssues,
+    scriptLimitsExcept,
+    summarize,
+  } = await import("./lint.js");
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -3672,6 +3680,12 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
       flags.minGapMs !== undefined ? flags.minGapMs * 1000 : DEFAULT_LINT_OPTIONS.minGapBetweenCaptionsUs,
     maxCharsPerSecond: flags.maxCps ?? DEFAULT_LINT_OPTIONS.maxCharsPerSecond,
     safeAreaFraction: flags.safeArea ?? DEFAULT_LINT_OPTIONS.safeAreaFraction,
+    // An explicit --max-chars / --max-cps applies to every script; otherwise
+    // CJK captions follow their own defaults (CJK_SCRIPT_LIMITS).
+    scriptLimits: scriptLimitsExcept(DEFAULT_LINT_OPTIONS.scriptLimits ?? null, {
+      maxCharsPerLine: flags.maxChars !== undefined,
+      maxCharsPerSecond: flags.maxCps !== undefined,
+    }),
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
     probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
     ffprobeCmd: flags.ffprobeCmd,
@@ -3699,8 +3713,13 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
       const inStore =
         existsSync(path.join(storeDir, "root_meta_info.json")) || isManagedDraftPath(path.resolve(filePath));
       if (inStore) {
-        const { detectStoreAppVersion } = await import("./factory.js");
-        opts.storeAppVersion = detectStoreAppVersion(storeDir);
+        const { scanStore } = await import("./factory.js");
+        // The linted draft is no evidence about its own store: excluded, so a
+        // bundled-template draft alone in a JianYing store is not its own
+        // "readable 6.5.0 project".
+        const scan = scanStore(storeDir, { exclude: path.dirname(path.resolve(filePath)) });
+        opts.storeAppVersion = scan.newestVersion;
+        opts.storeEncryptedProjects = scan.store.encrypted;
       }
     }
   }

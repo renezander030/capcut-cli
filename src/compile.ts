@@ -424,6 +424,7 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
     seed: opts.seed,
   });
   const { filePath } = init;
+  if (init.template.warning) warnings.push(init.template.warning);
   const { draft } = loadDraft(filePath);
 
   // Canvas + fps from the spec.

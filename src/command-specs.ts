@@ -276,12 +276,22 @@ export function commandNames(): CommandName[] {
 
 const optionsByCommand: Record<string, OptionSpec[]> = {
   lint: [
-    option("max_chars", ["--max-chars"], "number", "Maximum caption characters per line.", { default: 42 }),
+    option(
+      "max_chars",
+      ["--max-chars"],
+      "number",
+      "Maximum caption characters per line. Unset, CJK captions use their own defaults: 16 (zh), 13 (ja), 16 (ko).",
+      { default: 42 },
+    ),
     option("max_cue_secs", ["--max-cue-secs"], "number", "Maximum caption duration in seconds.", { default: 7 }),
     option("min_gap_ms", ["--min-gap-ms"], "number", "Minimum caption gap in milliseconds.", { default: 0 }),
-    option("max_cps", ["--max-cps"], "number", "Maximum caption reading speed in characters per second (0 disables).", {
-      default: 20,
-    }),
+    option(
+      "max_cps",
+      ["--max-cps"],
+      "number",
+      "Maximum caption reading speed in characters per second (0 disables). Unset, CJK captions use 9 (zh), 4 (ja), 12 (ko).",
+      { default: 20 },
+    ),
     option("safe_area", ["--safe-area"], "number", "Vertical safe-area fraction for captions (0 disables).", {
       default: 0.85,
     }),

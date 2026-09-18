@@ -87,3 +87,8 @@ Revisit only if **all** of these hold:
    decryptor that silently breaks is worse than an honest "not supported."
 
 Until then: detect, explain, and collect fixtures. Do not decrypt.
+
+## What the CLI says on such a store (0.24.0)
+
+- `init`, `quickstart` and `compile` count the folder's projects in `template.store` (`encrypted` is the JianYing 6.0+ payloads). When none could seed the new draft, a WARNING names the fallback to the bundled template and `template.warning` carries the same text.
+- `lint` reports `template-unverified-store` (info) for such a draft: not stale, since there is no readable version to compare against, but unverified for the app that wrote those projects. Opening the draft in JianYing is the test; 11.4 (macOS) is reported to open and upgrade it in place.

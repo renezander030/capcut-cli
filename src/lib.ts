@@ -40,11 +40,15 @@ export {
   saveDraft,
   updateTextContent,
 } from "./draft.js";
-export type { LintIssue, LintOptions, Severity } from "./lint.js";
+export type { CaptionScript, LintIssue, LintOptions, ScriptLimit, ScriptLimits, Severity } from "./lint.js";
 export {
+  CJK_SCRIPT_LIMITS,
+  captionLimits,
+  captionScript,
   DEFAULT_LINT_OPTIONS,
   lintDraft,
   lintExitCode,
+  scriptLimitsExcept,
   summarize,
 } from "./lint.js";
 export type { RunCommandRequest, RunCommandResult } from "./runner.js";

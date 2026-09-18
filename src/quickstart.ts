@@ -97,7 +97,9 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
   const templateNote =
     init.template.source === "store"
       ? ` Skeleton seeded from the store's CapCut ${init.template.app_version} project (${init.template.path}).`
-      : "";
+      : init.template.warning
+        ? ` ${init.template.warning}`
+        : "";
   steps.push({
     step: "create",
     ok: true,

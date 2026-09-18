@@ -13,6 +13,7 @@ import {
 import { basename, dirname, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
+import { detectEncryption } from "./decrypt.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
@@ -229,23 +230,47 @@ export interface StoreScan {
   seed: StoreSeed | null;
   /** Newest `platform.app_version` across every readable project (the #67 comparison value). */
   newestVersion: string | null;
+  /** What the folder held, project by project — the part of the scan the
+   * template report shows the user when nothing could seed. */
+  store: StoreScanSummary;
+}
+
+/**
+ * Per-project outcome of a store scan. A project is a sub-folder holding a
+ * draft_info.json or draft_content.json. `readable` parsed and declares an
+ * app version (the only kind that can seed or be compared against);
+ * `markerless` parsed without one; `encrypted` is the JianYing 6.0+ payload
+ * this CLI deliberately does not read (docs/jianying-encryption.md) — on a
+ * JianYing store that is every project the app wrote; `unreadable` is any
+ * other document JSON.parse rejects.
+ */
+export interface StoreScanSummary {
+  projects: number;
+  readable: number;
+  markerless: number;
+  encrypted: number;
+  unreadable: number;
 }
 
 export function scanStore(draftsDir: string, options: { exclude?: string } = {}): StoreScan {
+  const store: StoreScanSummary = { projects: 0, readable: 0, markerless: 0, encrypted: 0, unreadable: 0 };
   let dirs: string[];
   try {
     dirs = readdirSync(draftsDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
   } catch {
-    return { seed: null, newestVersion: null }; // fresh or unreadable store — nothing to seed from
+    return { seed: null, newestVersion: null, store }; // fresh or unreadable store — nothing to seed from
   }
   const excluded = options.exclude ? resolve(options.exclude) : null;
-
   let best: StoreSeed | null = null;
   let newest: string | null = null;
   for (const dir of dirs) {
     if (excluded !== null && resolve(draftsDir, dir) === excluded) continue; // the draft being repaired is no donor for itself
+    // The first timeline document present, kept so a project none of whose
+    // documents parsed can still be told apart: encrypted, or merely broken.
+    let firstDocument: string | null = null;
+    let outcome: "readable" | "markerless" | null = null;
     for (const name of ["draft_info.json", "draft_content.json"]) {
       const filePath = resolve(draftsDir, dir, name);
       let candidate: ReturnType<typeof parseCandidate>;
@@ -254,10 +279,14 @@ export function scanStore(draftsDir: string, options: { exclude?: string } = {})
       } catch {
         continue; // a sibling vanishing or unreadable mid-scan is not this draft's problem
       }
+      if (candidate.exists && firstDocument === null) firstDocument = filePath;
       const draft = candidate.draft;
       if (!draft) continue;
       const version = draft.platform?.app_version;
-      if (typeof version !== "string" || version.length === 0) break; // markerless: nothing to rank on
+      if (typeof version !== "string" || version.length === 0) {
+        outcome = "markerless"; // nothing to rank on
+        break;
+      }
       if (newest === null || atLeast(version, newest)) newest = version;
       const seed: StoreSeed = {
         projectDir: resolve(draftsDir, dir),
@@ -268,10 +297,43 @@ export function scanStore(draftsDir: string, options: { exclude?: string } = {})
         mtimeMs: candidate.mtime ? Date.parse(candidate.mtime) : 0,
       };
       if (best === null || seedOutranks(seed, best)) best = seed;
+      outcome = "readable";
       break; // one reading per project folder
     }
+    if (firstDocument === null) continue; // no timeline document: not a project folder
+    store.projects++;
+    if (outcome === "readable") store.readable++;
+    else if (outcome === "markerless") store.markerless++;
+    else if (detectEncryption(firstDocument).encrypted) store.encrypted++;
+    else store.unreadable++;
   }
-  return { seed: best, newestVersion: newest };
+  return { seed: best, newestVersion: newest, store };
+}
+
+/**
+ * A JianYing 6.0+ store holds nothing the CLI can seed from: every project
+ * the app wrote is an encrypted payload (docs/jianying-encryption.md), so
+ * `init` falls back to the bundled template — and until now said nothing
+ * about the projects it skipped, leaving the user to learn whether the app
+ * accepts that draft by opening it. Name the fallback and what is known
+ * about it. Fires only when the store holds encrypted projects and no
+ * readable seed at all: a readable donor is covered by seeding, and an
+ * explicit `--template` (seed off) is the caller's own choice.
+ */
+export function encryptedStoreWarning(
+  scan: StoreScan,
+  seedMode: "auto" | "always" | "off",
+  templateVersion: string | null,
+): string | null {
+  if (seedMode === "off" || scan.seed !== null || scan.store.encrypted === 0) return null;
+  const { projects, encrypted } = scan.store;
+  const which = encrypted === projects ? `all ${projects}` : `${encrypted} of the ${projects}`;
+  return (
+    `This drafts folder holds ${projects} project(s) and ${which} are encrypted — JianYing 6.0+ writes draft_content.json as an ` +
+    "encrypted payload, which this CLI does not read — so none could seed the new draft; it was built from the bundled " +
+    `CapCut ${templateVersion ?? "6.5.0"} template instead. JianYing 11.4 (macOS) is reported to open such a plaintext draft ` +
+    "and upgrade it in place; other builds are unverified. Open the draft in JianYing to confirm, and see docs/jianying-encryption.md."
+  );
 }
 
 export function findStoreSeed(draftsDir: string, options: { exclude?: string } = {}): StoreSeed | null {
@@ -341,6 +403,13 @@ export interface TemplateReport {
   skipped: string[];
   /** Top-level keys reset to empty when seeding from a store project. */
   reset: string[];
+  /** What the drafts folder held when the skeleton was chosen (see StoreScanSummary). */
+  store: StoreScanSummary;
+  /** Why the app may still refuse this skeleton, when the scan could tell: the
+   * bundled template in a store the app has outgrown (#67, #111), or a store
+   * whose projects are all encrypted and could not seed. Also written to
+   * stderr; carried here so quickstart / compile / library callers see it. */
+  warning?: string;
 }
 
 // Top-level keys that hold a project's CONTENT rather than its schema/settings.
@@ -507,10 +576,19 @@ export function initDraft(opts: InitOptions): {
     const content = JSON.stringify(draft, null, 0);
     for (const file of files) writeFileSync(resolve(draftPath, file), content, "utf-8");
     filePath = resolve(draftPath, files[0]);
-    template = { source: "store", path: seed.projectDir, app_version: seed.appVersion, skipped: [], reset };
+    template = {
+      source: "store",
+      path: seed.projectDir,
+      app_version: seed.appVersion,
+      skipped: [],
+      reset,
+      store: scan.store,
+    };
   } else {
     const skipped = copyTemplateDir(opts.templateDir, draftPath);
-    const versionWarning = templateVersionWarning(templateVersion, scan.newestVersion);
+    const versionWarning =
+      templateVersionWarning(templateVersion, scan.newestVersion) ??
+      encryptedStoreWarning(scan, seedMode, templateVersion);
     if (versionWarning) process.stderr.write(`WARNING: ${versionWarning}\n`);
 
     // Identity (and the canvas override) land in EVERY plain timeline document
@@ -541,7 +619,15 @@ export function initDraft(opts: InitOptions): {
     // init writes), else draft_info.json, else whatever was stamped.
     const identityFile = ["draft_content.json", "draft_info.json"].find((file) => stamped.includes(file));
     filePath = resolve(draftPath, identityFile ?? stamped[0] ?? templateDoc.file);
-    template = { source: "path", path: resolve(opts.templateDir), app_version: templateVersion, skipped, reset: [] };
+    template = {
+      source: "path",
+      path: resolve(opts.templateDir),
+      app_version: templateVersion,
+      skipped,
+      reset: [],
+      store: scan.store,
+      ...(versionWarning ? { warning: versionWarning } : {}),
+    };
   }
 
   // CapCut's GUI does not scan the Projects folder — it lists drafts from a
