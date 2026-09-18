@@ -4,9 +4,19 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-09-18
+
+### Added
+
+- `lint` holds captions written in Chinese, Japanese or Korean to their own limits: 16 characters per line and 9 per second for Chinese, 13 and 4 for Japanese, 16 and 12 for Korean, in place of the Latin 42 and 20 that let a 32-character Chinese line pass. Messages name the applied default (`>16, zh default`), `--fix` re-wraps between characters, and an explicit `--max-chars` / `--max-cps` applies to every script. Library: `captionScript`, `captionLimits`, `scriptLimitsExcept`, `CJK_SCRIPT_LIMITS`, and `LintOptions.scriptLimits` (`null` keeps the Latin limits everywhere).
+- `init`, `quickstart` and `compile` report what the drafts folder held when the skeleton was chosen (`template.store`: `projects`, `readable`, `markerless`, `encrypted`, `unreadable`). When every project is encrypted (JianYing 6.0+) and nothing could seed the draft, they say so — a WARNING on stderr, `template.warning` in the JSON, the quickstart `create` step and the compile `warnings` list — and name what is known about the bundled template on that app.
+- `lint` reports `template-unverified-store` (info) for a bundled-template draft in a drafts folder whose projects are all encrypted: nothing could have seeded it and no version can be compared, so it is unverified for that app rather than stale.
+- README (English and Chinese) documents the one-command agent install, `npx skills add renezander030/capcut-cli`, and the Claude Code plugin route. The `capcut-edit` skill also triggers on Chinese requests (剪映, 字幕, 草稿).
+
 ### Changed
 
 - English and Chinese quickstarts now link to the maintainer's GitHub profile for more practical AI agent tools.
+- Claude Code plugin manifest 0.2.0: description and keywords match the current command surface.
 
 ## [0.23.0] — 2026-09-11
 
