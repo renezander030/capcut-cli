@@ -32,6 +32,8 @@ https://github.com/user-attachments/assets/4e6ee99c-0745-4cfb-8e9b-ad873fb1259b
 npm install -g capcut-cli
 ```
 
+From Python: `pip install capcut` wraps the same binary — `capcut.run("quickstart", "my-short", video="clip.mp4", ratio="9:16")` — see [python/README.md](https://github.com/renezander030/capcut-cli/blob/master/python/README.md).
+
 ```bash
 capcut doctor
 capcut quickstart my-first --video clip.mp4 --srt captions.srt

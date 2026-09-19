@@ -1,3 +1,9 @@
 node_modules/
 dist/
 *.bak
+
+# python/ client package build artifacts
+python/dist/
+python/build/
+python/*.egg-info/
+__pycache__/
