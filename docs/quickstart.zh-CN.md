@@ -95,6 +95,7 @@ capcut transition <草稿> <片段ID> "_3D空间" --jianying
 
 ## 接下来
 
+- 想直接出一条带旁白和字幕的 9:16 短视频草稿：[短视频旁白示例](../examples/short-video-narration.zh-CN.md)（`quickstart` → `tts` → `caption` → `lint`，一个脚本串起来）。
 - [命令参考（简体中文）](./command-reference.zh-CN.md) —— 全部命令一览
 - [中文 README](../README.zh-CN.md) —— 项目总览、安装与赞助
 - [examples/](../examples/) —— 端到端示例（英文：配音对齐、serve 自动化、批量字幕修正）

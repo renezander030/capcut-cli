@@ -7,6 +7,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 ### Added
 
 - `doctor` reports what each draft store holds — for every default CapCut/JianYing project directory it finds (or the one folder named with the new `--drafts <dir>`), a `draft-store` check counts the projects as readable, markerless, encrypted or unreadable. A JianYing 6.0+ store, where every project the app wrote is an encrypted payload, is now named once and up front (warn) with what still works — `init`, `quickstart` and `compile` build plaintext drafts from the bundled template — instead of being discovered one failed command at a time. Same classification as the `template.store` report of `init`/`quickstart`/`compile`. `capcut doctor --drafts <dir>` also makes the check usable on a machine without the app, and in CI.
+- `examples/short-video-narration.md` (+ zh-CN) — silent clip → 9:16 draft with a TTS voiceover and script-accurate captions, as four commands (`quickstart --ratio 9:16` → `tts --text-file` → `caption --from-segment --script` → `lint`) and as one script, `examples/scripts/narrate-short.sh`. `examples/scripts/edge-tts-wav.sh` bridges edge-tts (MP3 only) to the WAV `tts` expects at `{out}`; any other engine plugs in through `--tts-cmd`. The vision-model step that writes the script is optional and stays outside the CLI: the script is a text file.
 
 ## [0.25.0] — 2026-09-18
 

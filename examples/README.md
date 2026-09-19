@@ -13,10 +13,11 @@ Copy-paste recipes for common CapCut / JianYing workflows. Every recipe is one s
 | [keyframe-pan.md](./keyframe-pan.md) | Unfinished-pan keyframe pattern for epilogue / payoff stills |
 | [verify-vo-alignment.md](./verify-vo-alignment.md) | Pre-flight check on ElevenLabs voiceover + word-level timestamps |
 | [serve-automation.md](./serve-automation.md) | Wire the stateless JSONL queue runner into n8n / Make / Coze / Docker |
+| [short-video-narration.md](./short-video-narration.md) · [中文](./short-video-narration.zh-CN.md) | Silent clip → 9:16 draft with a TTS voiceover and script-accurate captions |
 
 All shell-only recipes assume `capcut` is on your `$PATH` (`npm install -g capcut-cli`).
-The three keyframe / VO recipes ship with companion Python scripts under [`./scripts/`](./scripts/) — Python 3.9+, no external deps.
+The three keyframe / VO recipes ship with companion Python scripts under [`./scripts/`](./scripts/) — Python 3.9+, no external deps. The narration recipe ships two shell scripts there (`narrate-short.sh`, `edge-tts-wav.sh`).
 
 > **JianYing (剪映) users:** every recipe works on JianYing projects too — point `<project>` at the JianYing draft directory.
 
-> **中文 / Chinese:** the project README has a Chinese translation at [`README.zh-CN.md`](../README.zh-CN.md). Translation of these recipes is pending.
+> **中文 / Chinese:** the project README has a Chinese translation at [`README.zh-CN.md`](../README.zh-CN.md). The short-video narration recipe is written in both languages ([中文](./short-video-narration.zh-CN.md)); translation of the others is pending.
