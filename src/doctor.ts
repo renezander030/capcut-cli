@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { platform, release } from "node:os";
 import { delimiter, join } from "node:path";
 import { appVersionsPath, scanTrackedStores } from "./app-versions.js";
+import { scanStore } from "./factory.js";
 import { probeFfmpegCapabilities } from "./render.js";
 import { draftDirCandidates } from "./store.js";
 
@@ -46,7 +47,50 @@ export function draftDirs(): { label: string; path: string }[] {
   return draftDirCandidates();
 }
 
-export function runDoctor(): DoctorReport {
+export interface DoctorOptions {
+  /** Draft library root to inspect instead of the per-OS default directories. */
+  drafts?: string;
+}
+
+// Structural, not factory's StoreScanSummary: `lib.d.ts` exposes this module,
+// and a type import would pull factory (and its enums/wikimedia graph) into the
+// packaged declarations for no consumer benefit.
+type StoreCounts = { projects: number; readable: number; markerless: number; encrypted: number; unreadable: number };
+
+/**
+ * What a drafts folder holds, project by project, as one doctor check. A
+ * JianYing 6.0+ store is the ecosystem's most repeated pain (pyJianYingDraft
+ * #92/#115/#174): every project the app wrote is an encrypted payload, and
+ * users learn it one failed command at a time. Say it once, up front, with
+ * what still works: new drafts from the bundled template are plaintext until
+ * the app opens them.
+ */
+function storeCheck(label: string, path: string, store: StoreCounts): DoctorCheck {
+  const { projects, readable, markerless, encrypted, unreadable } = store;
+  const counts = `${readable} readable, ${markerless} markerless, ${encrypted} encrypted, ${unreadable} unreadable`;
+  if (projects === 0) {
+    return { name: "draft-store", status: "ok", detail: `${label}: no projects yet (${path})` };
+  }
+  if (encrypted === 0) {
+    return { name: "draft-store", status: "ok", detail: `${label}: ${projects} project(s) — ${counts} (${path})` };
+  }
+  const which = encrypted === projects ? `all ${projects}` : `${encrypted} of ${projects}`;
+  return {
+    name: "draft-store",
+    status: "warn",
+    detail:
+      `${label}: ${which} project(s) are encrypted (JianYing 6.0+ writes draft_content.json as an encrypted payload this CLI does not read) — ` +
+      `${counts} (${path})`,
+    affects: ["every command that reads an existing encrypted project"],
+    fix:
+      "Existing encrypted projects cannot be edited here. New drafts still work: `init`, `quickstart` and `compile` build " +
+      "plaintext drafts from the bundled template, which JianYing is reported to open and upgrade in place (11.4 on macOS; " +
+      "other builds unverified). To keep editing app-made projects, pin JianYing to 5.9.x (docs/version-support.md). " +
+      "Details: docs/jianying-encryption.md; one project: `capcut decrypt <project>`.",
+  };
+}
+
+export function runDoctor(options: DoctorOptions = {}): DoctorReport {
   const checks: DoctorCheck[] = [];
 
   // Node runtime — hard requirement.
@@ -113,8 +157,10 @@ export function runDoctor(): DoctorReport {
     fix: hasKey ? undefined : "export ANTHROPIC_API_KEY=… (or pass --api-key) to use `translate`.",
   });
 
-  // CapCut / JianYing project directories — informational.
-  const dirs = draftDirs();
+  // CapCut / JianYing project directories — informational. `--drafts` names
+  // one folder to inspect instead (custom stores, CI, and a machine where the
+  // app is not installed).
+  const dirs = options.drafts ? [{ label: "drafts", path: options.drafts }] : draftDirs();
   if (dirs.length === 0) {
     checks.push({
       name: "draft-dir",
@@ -128,8 +174,15 @@ export function runDoctor(): DoctorReport {
         name: "draft-dir",
         status: found ? "ok" : "warn",
         detail: `${d.label}: ${found ? "found" : "not found"} (${d.path})`,
-        fix: found ? undefined : "Open a project in CapCut/JianYing once, or pass the draft path directly.",
+        fix: found
+          ? undefined
+          : options.drafts
+            ? "Pass a folder that contains the project directories (the one holding root_meta_info.json)."
+            : "Open a project in CapCut/JianYing once, or pass the draft path directly.",
       });
+      // What the folder holds — readable, markerless, encrypted, unreadable —
+      // so a JianYing 6.0+ store is named before the first command fails on it.
+      if (found) checks.push(storeCheck(d.label, d.path, scanStore(d.path).store));
     }
   }
 

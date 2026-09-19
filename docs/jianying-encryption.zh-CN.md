@@ -55,3 +55,4 @@
 
 - `init`、`quickstart` 与 `compile` 会在 `template.store` 里统计目录中的项目（`encrypted` 即剪映 6.0+ 的加密文件）。当没有任何项目可作为新草稿的种子时，会用 WARNING 说明已回退到内置模板，`template.warning` 携带同样的文字。
 - `lint` 会对这样的草稿报告 `template-unverified-store`（info）：它不算"过期"（没有可读的版本可比较），但对写出这些项目的应用来说尚未验证。在剪映里打开草稿才是真正的检验；据报告 11.4（macOS）能打开并就地升级。
+- `doctor` 会为它找到的每个项目目录（或用 `--drafts <dir>` 指定的那一个文件夹）追加一项 `draft-store` 检查：目录里有多少项目可读、无版本标记、已加密或无法读取。加密目录会以 warning 的形式说明哪些操作仍然可用，这样问题只需被指出一次，而不是等到第一条命令失败时才发现。

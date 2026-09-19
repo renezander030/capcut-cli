@@ -75,7 +75,7 @@
 | `completions` | `capcut completions <bash\|zsh\|fish>` | 否 | 生成 shell 补全（bash\|zsh\|fish）。 |
 | `enums` | `capcut enums <category-flag> [--jianying]` | 否 | 按类别列出枚举 slug（转场、蒙版、特效等）。 |
 | `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | 否 | 把商店资源 ID 学习进用户级素材目录：来源可以是单个草稿、整个草稿库（--sync），或手动添加（--add）。 |
-| `doctor` | `capcut doctor` | 否 | 环境预检（Node、whisper、API key、项目目录）。 |
+| `doctor` | `capcut doctor [--drafts <dir>]` | 否 | 环境预检（Node、whisper、API key、项目目录），并统计草稿目录中可读 / 无标记 / 已加密 / 无法读取的项目。 |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | 否 | 检查草稿的规范文件、文件间分歧与编辑器写入安全性。 |
 | `fixture` | `capcut fixture <project> --out <dir>` | 否 | 构建可分享、已脱敏的兼容性包（仅时间线 JSON），用于版本支持 issue，内含蒙版关键帧证据报告（#44）。 |
 | `sync-timelines` | `capcut sync-timelines <project-dir> [--apply]` | 是 | 从只读的 draft_content.json 出发，协调已漂移的时间线镜像文件（template-2.tmp、draft_info.json）（默认输出带 mtime 的计划；--apply 只重写发生漂移的镜像）。 |

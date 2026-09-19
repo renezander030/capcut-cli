@@ -247,7 +247,7 @@ const usages = {
   catalogue: "capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]",
   "harvest-enums":
     "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
-  doctor: "capcut doctor",
+  doctor: "capcut doctor [--drafts <dir>]",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
   fixture: "capcut fixture <project> --out <dir> [--check]",
   "sync-timelines": "capcut sync-timelines <project-dir> [--nested] [--apply]",
@@ -668,6 +668,14 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("names", ["--names"], "boolean", "Read project display names."),
   ],
   concat: [OUT],
+  doctor: [
+    option(
+      "drafts",
+      ["--drafts"],
+      "path",
+      "Draft library root to inspect for readable / markerless / encrypted / unreadable projects (default: the per-OS CapCut/JianYing dirs).",
+    ),
+  ],
   diagnose: [option("bundle", ["--bundle"], "path", "Write a redacted JSON diagnostic bundle.")],
   fixture: [
     option("out", ["--out"], "path", "Output directory for the sanitized bundle."),

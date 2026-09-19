@@ -4685,9 +4685,25 @@
     {
       "name": "doctor",
       "summary": "Environment preflight (Node, whisper, API key, project dir).",
-      "usage": "capcut doctor",
-      "positionals": [],
-      "options": [],
+      "usage": "capcut doctor [--drafts <dir>]",
+      "positionals": [
+        {
+          "name": "dir",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "drafts",
+          "flags": [
+            "--drafts"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Draft library root to inspect for readable / markerless / encrypted / unreadable projects (default: the per-OS CapCut/JianYing dirs)."
+        }
+      ],
       "mutates": false,
       "prerequisites": [],
       "output": {

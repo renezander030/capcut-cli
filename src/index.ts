@@ -743,10 +743,13 @@ Encryption (v0.6 — detection scaffold):
   decrypt    <project>
              Detect JianYing 6.0+ encryption and report next steps.
              (Decryption algorithm not bundled; clear error UX + workaround docs.)
-  doctor
+  doctor     [--drafts <dir>]
              Check the environment, not a draft: Node version, whisper binary
              (for caption), ANTHROPIC_API_KEY (for translate), and the default
-             CapCut/JianYing project directory. Exit 1 only on hard failures.
+             CapCut/JianYing project directory — plus what that folder holds
+             (readable / markerless / encrypted / unreadable projects), so a
+             JianYing 6.0+ store is named before a command fails on it.
+             --drafts inspects one folder instead. Exit 1 only on hard failures.
 
 Stateless queue runner (v0.5):
   serve      [--queue <path>] [--fail-fast]
@@ -4127,7 +4130,7 @@ function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
 
 async function cmdDoctor(flags: Flags): Promise<boolean> {
   const { runDoctor } = await import("./doctor.js");
-  const report = runDoctor();
+  const report = runDoctor({ drafts: flags.drafts });
   if (flags.human) {
     const glyph: Record<DoctorCheck["status"], string> = { ok: "✓", warn: "!", missing: "✗" };
     console.log(`Platform:  ${report.platform}`);
