@@ -127,6 +127,10 @@ capcut-cli 采用 MIT 协议，永久免费。赞助会加速版本发布、让�
 
 > 在工作中用 capcut-cli 吗？团队版只要帮工程师省下一个下午，当天就回本了。
 
+## 商业合作
+
+与赞助无关：如果你正在把 capcut-cli 集成进自己的产品，或者需要它实现目前还不支持的功能，我会承接少量集成项目。请发邮件至 rene@renezander.com，写明你在做什么。
+
 ## 工作原理
 
 CapCut / 剪映把每个项目存为本地 JSON。capcut-cli 加载这个存储，按版本感知的 schema 校验，应用你的编辑，再原子写回（并留 `.bak`）。不上传任何项目文件，也不以服务方式运行。支持的 CapCut / 剪映版本与 schema 标志见 [docs/version-support.md](./docs/version-support.md)。
