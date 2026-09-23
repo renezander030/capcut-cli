@@ -14,9 +14,10 @@ Copy-paste recipes for common CapCut / JianYing workflows. Every recipe is one s
 | [verify-vo-alignment.md](./verify-vo-alignment.md) | Pre-flight check on ElevenLabs voiceover + word-level timestamps |
 | [serve-automation.md](./serve-automation.md) | Wire the stateless JSONL queue runner into n8n / Make / Coze / Docker |
 | [short-video-narration.md](./short-video-narration.md) · [中文](./short-video-narration.zh-CN.md) | Silent clip → 9:16 draft with a TTS voiceover and script-accurate captions |
+| [fal-to-draft.md](./fal-to-draft.md) | Prompt + script → fal image, video and voiceover → one 9:16 draft, every piece its own track |
 
 All shell-only recipes assume `capcut` is on your `$PATH` (`npm install -g capcut-cli`).
-The three keyframe / VO recipes ship with companion Python scripts under [`./scripts/`](./scripts/) — Python 3.9+, no external deps. The narration recipe ships two shell scripts there (`narrate-short.sh`, `edge-tts-wav.sh`).
+The three keyframe / VO recipes ship with companion Python scripts under [`./scripts/`](./scripts/) — Python 3.9+, no external deps. The narration recipe ships two shell scripts there (`narrate-short.sh`, `edge-tts-wav.sh`). The fal recipe ships `fal-to-draft.py` (stdlib only, needs `FAL_KEY`).
 
 > **JianYing (剪映) users:** every recipe works on JianYing projects too — point `<project>` at the JianYing draft directory.
 
