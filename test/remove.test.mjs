@@ -20,6 +20,34 @@ const TXT2 = "cccccc02";
 const TXT3 = "cccccc03";
 
 describe("remove — clean segment removal", () => {
+  it("--ripple closes the removed span across the remaining tracks", (t) => {
+    const fix = tmpDraft();
+    t.after(() => fix.cleanup());
+    const draft = loadDraft(fix.path);
+    draft.tracks = draft.tracks.filter((track) => track.type === "video");
+    draft.materials.audios = [];
+    draft.materials.texts = [];
+    writeFileSync(fix.path, JSON.stringify(draft, null, 2));
+
+    const r = spawnCli(["remove", fix.path, VID1, "--ripple"]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(r.json.ripple_shifted, 1);
+    const remaining = loadDraft(fix.path).tracks[0].segments;
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].target_timerange.start, 0);
+    assert.equal(loadDraft(fix.path).duration, 5_000_000);
+  });
+
+  it("--ripple refuses a span crossed by aligned content and writes nothing", (t) => {
+    const fix = tmpDraft();
+    t.after(() => fix.cleanup());
+    const before = readFileSync(fix.path, "utf-8");
+    const r = spawnCli(["remove", fix.path, VID1, "--ripple"]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /crosses .* other segment/);
+    assert.equal(readFileSync(fix.path, "utf-8"), before);
+  });
+
   it("removes a segment in place, keeps its non-empty track, sweeps its materials", () => {
     const fix = tmpDraft();
     after(() => fix.cleanup());

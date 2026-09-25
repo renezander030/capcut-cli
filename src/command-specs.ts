@@ -185,7 +185,7 @@ const usages = {
   texts: "capcut texts <project>",
   "set-text": "capcut set-text <project> <id> <text>",
   shift: "capcut shift <project> <id> <offset>",
-  "shift-all": "capcut shift-all <project> <offset> [--track <type>]",
+  "shift-all": "capcut shift-all <project> <offset> [--track <type>] [--from <time>]",
   speed: "capcut speed <project> <id> <multiplier>",
   volume: "capcut volume <project> <id> <level>",
   trim: "capcut trim <project> <id> <start> <duration>",
@@ -204,12 +204,13 @@ const usages = {
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
   cut: "capcut cut <project> <start> <end> --out <path>",
   duplicate: "capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]",
-  remove: "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]",
+  remove: "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]",
   keyframe: "capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] | --batch",
   transition: "capcut transition <project> <id> <slug> [--duration <time>]",
   mask: "capcut mask <project> <id> <slug> [options] | --off",
   "bg-blur": "capcut bg-blur <project> <id> <level> | --off",
   "text-style": "capcut text-style <project> <id> [options]",
+  restyle: "capcut restyle <project> --preset <preset.json> [--track-name <name>] [options]",
   "text-anim": "capcut text-anim <project> <id> [options]",
   "image-anim": "capcut image-anim <project> <id> [options]",
   "add-sticker": "capcut add-sticker <project> <resource-id> <start> <duration> [options]",
@@ -297,6 +298,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     }),
     option("no_check_paths", ["--no-check-paths"], "boolean", "Skip local media path checks."),
     option("fix", ["--fix"], "boolean", "Mechanically repair fixable issues and write the draft."),
+    option(
+      "frame_grid",
+      ["--frame-grid"],
+      "boolean",
+      "Check target ranges against draft.fps; --fix snaps boundaries and derives duration.",
+    ),
     option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
     option(
       "pip",
@@ -308,7 +315,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     FFPROBE,
   ],
   segments: [TRACK],
-  "shift-all": [TRACK],
+  "shift-all": [
+    TRACK,
+    option(
+      "from_time",
+      ["--from"],
+      "time",
+      "Shift only segments starting at or after this boundary; refuses a segment crossing it.",
+    ),
+  ],
   materials: [TRACK],
   "add-audio": [
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
@@ -370,6 +385,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   remove: [
     option("keep_track", ["--keep-track"], "boolean", "Keep the segment's track even when it becomes empty."),
     option("keep_materials", ["--keep-materials"], "boolean", "Skip the orphan-material sweep (run prune later)."),
+    option(
+      "ripple",
+      ["--ripple"],
+      "boolean",
+      "Close the removed time span across every track; refuses crossing segments.",
+    ),
   ],
   keyframe: [
     option("batch", ["--batch"], "boolean", "Read JSONL keyframes from stdin."),
@@ -405,6 +426,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   "bg-blur": [option("off", ["--off"], "boolean", "Remove background blur.")],
   "text-style": [...TEXT_STYLE, PRESET],
+  restyle: [TRACK_NAME, ...TEXT_STYLE, PRESET],
   "text-anim": [
     option("intro", ["--intro"], "enum", "Intro animation."),
     option("outro", ["--outro"], "enum", "Outro animation."),
@@ -530,6 +552,13 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Known transcript (plain text). Whisper's word timing is kept, the script's wording is used; each non-empty line is a cue boundary. The result's `script` block reports matched/substituted/inserted words.",
     ),
     option("audio", ["--audio"], "path", "Audio input."),
+    option(
+      "audio_stream",
+      ["--audio-stream"],
+      "number",
+      "Zero-based audio stream to extract from the input container before transcription.",
+    ),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream."),
     option("from_segment", ["--from-segment"], "id", "Audio segment input."),
     option("whisper_cmd", ["--whisper-cmd"], "path", "Whisper binary."),
     option("whisper_engine", ["--whisper-engine"], "enum", "Whisper CLI dialect.", {
@@ -538,6 +567,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("whisper_model", ["--whisper-model"], "string", "Whisper model."),
     option("language", ["--language"], "string", "Language code."),
     option("karaoke", ["--karaoke"], "boolean", "Create word-highlight caption ranges."),
+    option(
+      "word_reveal",
+      ["--word-reveal"],
+      "boolean",
+      "Build each cue progressively, adding one timed word at a time.",
+    ),
+    option(
+      "min_script_match",
+      ["--min-script-match"],
+      "number",
+      "Refuse before writing when caption --script exact-token match ratio is below 0..1.",
+    ),
     option(
       "max_words",
       ["--max-words"],
@@ -765,6 +806,21 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "string",
       "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering.",
     ),
+    option(
+      "crf",
+      ["--crf"],
+      "number",
+      "Constant-quality value 0..51 (default 28; mutually exclusive with --video-bitrate).",
+      {
+        default: 28,
+      },
+    ),
+    option(
+      "video_bitrate",
+      ["--video-bitrate"],
+      "string",
+      "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode.",
+    ),
     option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
     option(
       "soft_captions",
@@ -855,6 +911,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
 //   --into               -> import-timeline (v0.17 append target)
 //   --encoder            -> render (v0.20 proxy video encoder)
+//   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
@@ -868,10 +925,14 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --window, --similarity, --min-words -> detect-retakes (v0.22); --json also scopes there
 //   --soft-captions      -> render (v0.22 mov_text subtitle stream)
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
+//   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
+//   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
+//   --frame-grid -> lint (v0.26 exact integer timeline preflight)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--add",
+  "--audio-stream",
   "--apply",
   "--bind",
   "--captions",
@@ -881,8 +942,15 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--data",
   "--easing",
   "--encoder",
+  "--crf",
   "--format",
   "--from-store",
+  "--word-reveal",
+  "--video-bitrate",
+  "--min-script-match",
+  "--from",
+  "--ripple",
+  "--frame-grid",
   "--full",
   "--granularity",
   "--highlight-words",
@@ -949,6 +1017,7 @@ const mutating = new Set([
   "mask",
   "bg-blur",
   "text-style",
+  "restyle",
   "text-anim",
   "image-anim",
   "add-sticker",
@@ -1034,7 +1103,7 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
     if (["add-video", "add-audio", "tts", "compile", "detect-scenes", "detect-silence"].includes(name)) {
       prerequisites.push("ffprobe (optional)");
     }
-    if (name === "caption") prerequisites.push("whisper CLI");
+    if (name === "caption") prerequisites.push("whisper CLI", "ffmpeg (only with --audio-stream)");
     if (name === "tts") prerequisites.push("a local TTS CLI via --tts-cmd");
     if (name === "translate") prerequisites.push("ANTHROPIC_API_KEY or --api-key");
     if (["add-video", "add-audio"].includes(name)) prerequisites.push("network for Wikimedia URLs only");

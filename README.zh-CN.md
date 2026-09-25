@@ -82,6 +82,8 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
+> **v0.26.0 新增：** 精确帧网格检查/修复；中日文按字对齐脚本并可设置匹配率门槛；字幕音轨选择；安全波纹删除和边界平移；大型 FFmpeg 滤镜脚本；嵌套 OTIO 导入；CRF/码率预览控制；逐词显现字幕；以及整轨原子化 `restyle`。完整说明见[更新日志](./CHANGELOG.md)。
+
 > **v0.25.0 新增：** `caption` 按转写文本的文字来分句。Whisper 对中文、日文给出的"词"是单个字或很短的片段，按拉丁默认（每句 4 词、用空格连接）会生成字与字之间带空格的碎片；现在中日文按字直接连接、只按字数上限分句，上限就是 `lint` 对字幕的行宽（zh 16、ja 13、ko 16），结果里会报告 `caption_script`。显式传入的 `--max-words` / `--max-chars` 仍然优先。完整说明见[更新日志](./CHANGELOG.md)。
 
 > **v0.24.0 新增：** 中文、日文、韩文字幕按各自的规范检查 —— `lint` 会指出 32 字的中文单行和每秒 15 字的字幕（拉丁默认的 42 字 / 每秒 20 字会放过它们），`--fix` 按字重新折行（zh 16/9、ja 13/4、ko 16/12；显式传入 `--max-chars` / `--max-cps` 仍对所有文字生效）。在剪映 6.0+ 的草稿目录里（应用写出的项目全部加密），`init` / `quickstart` / `compile` 现在会明确说明没有任何项目可作为种子（`template.store` 与 WARNING），`lint` 会报告 `template-unverified-store` 而不是沉默。另外，一条命令即可把它装进 Agent：`npx skills add renezander030/capcut-cli`。完整说明见[更新日志](./CHANGELOG.md)。

@@ -107,6 +107,7 @@ export const COMMANDS = [
   "mask",
   "bg-blur",
   "text-style",
+  "restyle",
   "text-anim",
   "image-anim",
   "add-sticker",
@@ -186,7 +187,9 @@ Overview (start here):
   materials  <project> --type <type>            List items of one material type
   version    <project>                          Detect CapCut/JianYing version + schema flags + support status
   lint       <project>                          Schema-aware checks (overlaps, line length, missing
-             files, main-track gaps, media outside the draft folder)
+             files, main-track gaps, media outside the draft folder).
+             --frame-grid checks every segment boundary against draft fps;
+             combine with --fix to snap start/end together.
              Options:
                --max-chars <n>     Caption line cap (default 42)
                --max-cue-secs <n>  Caption duration cap (default 7)
@@ -266,6 +269,8 @@ Preview:
                                   has no mov_text encoder.
                --ffmpeg-cmd <p>   ffmpeg binary (default ffmpeg)
                --encoder <name>   Video encoder for -c:v (default libx264)
+               --crf <0..51>      Constant quality (default 28)
+               --video-bitrate <r> Target bitrate such as 2500k or 4M
                --dry-run          Print the ffmpeg plan; do not execute
 
 Analyze:
@@ -378,7 +383,9 @@ Add:
 Edit:
   set-text   <project> <id> <text>              Change text content
   shift      <project> <id> <offset>            Shift segment timing (e.g. +0.5s, -1s)
-  shift-all  <project> <offset> [--track <type>] Shift all segments on a track
+  shift-all  <project> <offset> [--track <type>] [--from <time>]
+                                               Shift all segments, optionally
+                                               only from an exact boundary
   speed      <project> <id> <multiplier>        Set playback speed
   volume     <project> <id> <level>             Set volume (0.0-1.0)
   trim       <project> <id> <start> <duration>  Trim segment (times in seconds)
@@ -408,13 +415,15 @@ Edit:
              per-segment companion (speed, canvas, mask, ...) are cloned with
              fresh ids, so edits like crop/mix-mode on the copy never touch
              the source segment.
-  remove     <project> <segment-id> [--keep-track] [--keep-materials]
+  remove     <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]
              Delete a segment in place. A track left empty by the removal is
              dropped too (--keep-track keeps it). Materials no surviving
              segment references are swept in the same pass prune runs —
              including materials that were already orphaned (--keep-materials
              skips the sweep). Recomputes the project duration to the max
-             remaining segment end across all tracks. Undo with restore.
+             remaining segment end across all tracks. --ripple closes the
+             removed span across every track and refuses crossing segments.
+             Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   export-ass <project> [--karaoke] [--out <f.ass>]  Export styled subtitles as ASS
   export-timeline <project> [--out <f.otio>] [--captions markers]  Export the cut as OpenTimelineIO for an NLE
@@ -548,6 +557,9 @@ Animate:
                --bg-width --bg-height --bg-h-offset --bg-v-offset
                --preset <file>  Apply a make-preset style preset; explicit
                                 flags override preset values
+  restyle    <project> --preset <file> [--track-name <name>] [options]
+             Apply one preset atomically to every text segment, or only the
+             named caption track. Explicit style flags override the preset.
   text-ranges <project> <id> --styles @path.json  |  --styles '<inline-json>'
              Multi-colour text — write multiple styles to one text segment.
              JSON array of { "start": int, "end": int,
@@ -671,6 +683,8 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
              Options:
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
+               --audio-stream <n>   Zero-based audio stream in the input
+               --ffmpeg-cmd <cmd>   ffmpeg used to extract --audio-stream
                --language <code>    ISO code or "auto" (default)
                --track-name <s>     Caption track name (default: "captions")
                --style-ref <seg-id> Mirror styling from existing text segment
@@ -698,6 +712,10 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                                     substituted / inserted words; below 50%
                                     matched it warns that the script probably
                                     belongs to other audio.
+               --min-script-match <0..1>
+                                    Refuse before writing when the script's
+                                    exact-token match ratio is below this floor
+               --word-reveal       Progressive one-word-at-a-time captions
              Precedence: --color-cycle wins over the style-ref/preset base
              colour per cue; keyword emphasis sits on top of base/karaoke
              styling and overrides the matched words' colour/size; with
@@ -866,6 +884,8 @@ interface Flags {
   batch: boolean;
   like?: string;
   fromStore?: boolean;
+  fromTime?: string;
+  ripple?: boolean;
   track?: string;
   out?: string;
   fontSize?: number;
@@ -887,6 +907,8 @@ interface Flags {
   captions?: string;
   // caption --script
   script?: string;
+  wordReveal?: boolean;
+  minScriptMatch?: number;
   // detect-retakes
   window?: number;
   similarity?: number;
@@ -895,6 +917,7 @@ interface Flags {
   softCaptions?: boolean;
   // lint
   pip?: boolean;
+  frameGrid?: boolean;
   // catalogue
   kind?: string;
   // import-srt / import-ass
@@ -983,6 +1006,7 @@ interface Flags {
   fix?: boolean;
   // caption
   audio?: string;
+  audioStream?: number;
   fromSegment?: string;
   whisperCmd?: string;
   whisperEngine?: "auto" | "openai" | "whisper-cpp" | "faster-whisper";
@@ -1040,6 +1064,8 @@ interface Flags {
   fps?: number;
   ffmpegCmd?: string;
   encoder?: string;
+  crf?: number;
+  videoBitrate?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
   progress?: boolean;
@@ -1197,10 +1223,20 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.like = args[++i];
     } else if (a === "--from-store") {
       flags.fromStore = true;
+    } else if (a === "--from" && command === "shift-all" && i + 1 < args.length) {
+      flags.fromTime = args[++i];
+    } else if (a === "--ripple") {
+      flags.ripple = true;
     } else if (a === "--captions" && i + 1 < args.length) {
       flags.captions = args[++i];
     } else if (a === "--script" && i + 1 < args.length) {
       flags.script = args[++i];
+    } else if (a === "--word-reveal") {
+      flags.wordReveal = true;
+    } else if (a === "--min-script-match" && i + 1 < args.length) {
+      flags.minScriptMatch = parseFloat(args[++i]);
+    } else if (a === "--audio-stream" && i + 1 < args.length) {
+      flags.audioStream = Number(args[++i]);
     } else if (a === "--window" && i + 1 < args.length) {
       flags.window = parseFloat(args[++i]);
     } else if (a === "--similarity" && i + 1 < args.length) {
@@ -1445,6 +1481,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.ffmpegCmd = args[++i];
     } else if (a === "--encoder" && i + 1 < args.length) {
       flags.encoder = args[++i];
+    } else if (a === "--crf" && i + 1 < args.length) {
+      flags.crf = parseFloat(args[++i]);
+    } else if (a === "--video-bitrate" && i + 1 < args.length) {
+      flags.videoBitrate = args[++i];
     } else if (a === "--burn-captions") {
       flags.burnCaptions = true;
     } else if (a === "--all-video-tracks") {
@@ -1469,6 +1509,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.nested = true;
     } else if (a === "--pip") {
       flags.pip = true;
+    } else if (a === "--frame-grid") {
+      flags.frameGrid = true;
     } else if (a === "--kind" && i + 1 < args.length) {
       flags.kind = args[++i];
     } else if (a === "--clone-style") {
@@ -1800,16 +1842,66 @@ function cmdShift(draft: Draft, filePath: string, segId: string, offsetStr: stri
 
 function cmdShiftAll(draft: Draft, filePath: string, offsetStr: string, flags: Flags, save = true): void {
   const offset = parseTimeInput(offsetStr);
+  const boundary = flags.fromTime === undefined ? null : parseTimeInput(flags.fromTime);
   const tracks = flags.track ? getTracksByType(draft, flags.track) : draft.tracks;
+  if (boundary !== null) {
+    const blocker = tracks
+      .flatMap((track) => track.segments)
+      .find(
+        (seg) =>
+          seg.target_timerange.start < boundary &&
+          seg.target_timerange.start + seg.target_timerange.duration > boundary,
+      );
+    if (blocker) {
+      die(`--from ${flags.fromTime} crosses segment ${blocker.id}; trim or split it first. Nothing was changed.`);
+    }
+    for (const track of tracks) {
+      const beforeBoundary = track.segments.filter((seg) => seg.target_timerange.start < boundary);
+      const moved = track.segments
+        .filter((seg) => seg.target_timerange.start >= boundary)
+        .sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+      const preceding = beforeBoundary.reduce<Segment | null>((latest, seg) => {
+        const end = seg.target_timerange.start + seg.target_timerange.duration;
+        const latestEnd = latest ? latest.target_timerange.start + latest.target_timerange.duration : -1;
+        return end > latestEnd ? seg : latest;
+      }, null);
+      if (preceding && moved.length > 0) {
+        const precedingEnd = preceding.target_timerange.start + preceding.target_timerange.duration;
+        const firstStart = Math.max(0, moved[0].target_timerange.start + offset);
+        if (firstStart < precedingEnd) {
+          die(
+            `--from shift would overlap segments ${preceding.id} and ${moved[0].id} on track "${track.name}". ` +
+              "Use a smaller negative offset or move the boundary; nothing was changed.",
+          );
+        }
+      }
+      for (let index = 1; index < moved.length; index++) {
+        const previous = moved[index - 1];
+        const current = moved[index];
+        const oldPreviousEnd = previous.target_timerange.start + previous.target_timerange.duration;
+        const oldOverlap = oldPreviousEnd > current.target_timerange.start;
+        const newPreviousEnd =
+          Math.max(0, previous.target_timerange.start + offset) + previous.target_timerange.duration;
+        const newCurrentStart = Math.max(0, current.target_timerange.start + offset);
+        if (!oldOverlap && newPreviousEnd > newCurrentStart) {
+          die(
+            `--from shift would overlap segments ${previous.id} and ${current.id} on track "${track.name}". ` +
+              "Use a smaller negative offset; nothing was changed.",
+          );
+        }
+      }
+    }
+  }
   let count = 0;
   for (const track of tracks) {
     for (const seg of track.segments) {
+      if (boundary !== null && seg.target_timerange.start < boundary) continue;
       seg.target_timerange.start = Math.max(0, seg.target_timerange.start + offset);
       count++;
     }
   }
   if (save) saveDraft(filePath, draft);
-  out({ ok: true, shifted: count, offset_us: offset }, flags);
+  out({ ok: true, shifted: count, offset_us: offset, ...(boundary === null ? {} : { from_us: boundary }) }, flags);
 }
 
 function cmdSpeed(draft: Draft, filePath: string, segId: string, multiplier: string, flags: Flags, save = true): void {
@@ -2935,7 +3027,7 @@ async function cmdTextStyle(draft: Draft, filePath: string, positional: string[]
   const applied: string[] = [];
   let materialId = "";
   if (flags.preset) {
-    const presetResult = applyTextPreset(draft, segId, loadPresetFile(flags.preset));
+    const presetResult = applyTextPreset(draft, segId, presetWithFlagOverrides(loadPresetFile(flags.preset), flags));
     materialId = presetResult.materialId;
     applied.push(...presetResult.applied);
   }
@@ -2946,6 +3038,45 @@ async function cmdTextStyle(draft: Draft, filePath: string, positional: string[]
   if (applied.length === 0) die(`No styling flags provided. See 'capcut --help'.`);
   saveDraft(filePath, draft);
   out({ ok: true, id: segId, material_id: materialId, applied }, flags);
+}
+
+async function cmdRestyle(draft: Draft, filePath: string, flags: Flags): Promise<void> {
+  const { setTextStyle } = await import("./decorators.js");
+  const { applyTextPreset, loadPresetFile } = await import("./preset.js");
+  if (!flags.preset) die("restyle requires --preset <preset.json>.");
+  const tracks = draft.tracks.filter(
+    (track) => track.type === "text" && (flags.trackName === undefined || track.name === flags.trackName),
+  );
+  if (tracks.length === 0) {
+    die(flags.trackName ? `No text track named: ${flags.trackName}` : "Draft has no text tracks.");
+  }
+  const preset = presetWithFlagOverrides(loadPresetFile(flags.preset), flags);
+  const styleOpts = textStyleOptsFromFlags(flags);
+  const segments = tracks.flatMap((track) => track.segments);
+  const applied = new Set<string>();
+  for (const segment of segments) {
+    for (const field of applyTextPreset(draft, segment.id, preset).applied) applied.add(field);
+    for (const field of setTextStyle(draft, segment.id, styleOpts).applied) applied.add(field);
+    if ((flags.x !== undefined || flags.y !== undefined) && segment.clip) {
+      segment.clip.transform = {
+        x: flags.x ?? segment.clip.transform.x,
+        y: flags.y ?? segment.clip.transform.y,
+      };
+      applied.add("transform");
+    }
+  }
+  saveDraft(filePath, draft);
+  out(
+    {
+      ok: true,
+      preset: flags.preset,
+      track_name: flags.trackName ?? null,
+      tracks: tracks.length,
+      segments: segments.length,
+      applied: [...applied],
+    },
+    flags,
+  );
 }
 
 async function cmdTextAnim(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
@@ -3225,6 +3356,7 @@ async function cmdRemove(draft: Draft, filePath: string, positional: string[], f
   const result = removeSegment(draft, positional[2], {
     keepTrack: flags.keepTrack,
     keepMaterials: flags.keepMaterials,
+    ripple: flags.ripple,
   });
   saveDraft(filePath, draft);
   out(
@@ -3239,6 +3371,7 @@ async function cmdRemove(draft: Draft, filePath: string, positional: string[], f
       materials_by_type: result.materialsByType,
       duration_before_us: result.durationBefore,
       duration_after_us: result.durationAfter,
+      ripple_shifted: flags.ripple ? result.rippleShifted : undefined,
     },
     flags,
   );
@@ -3694,6 +3827,7 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     ffprobeCmd: flags.ffprobeCmd,
     draftDir: path.dirname(path.resolve(filePath)),
     dryRun: isDryRun(),
+    frameGrid: flags.frameGrid,
   };
   // template-stale (#67, #111) needs the store's newest app version, which
   // costs one timeline read per sibling project — so it is looked up only for
@@ -3815,6 +3949,19 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
   if (!flags.audio && !flags.fromSegment) {
     die("Missing --audio <path> or --from-segment <id>. One is required.");
   }
+  if (flags.karaoke && flags.wordReveal) die("--karaoke and --word-reveal are mutually exclusive.");
+  if (
+    flags.minScriptMatch !== undefined &&
+    (!Number.isFinite(flags.minScriptMatch) || flags.minScriptMatch < 0 || flags.minScriptMatch > 1)
+  ) {
+    die("--min-script-match must be a number in range 0..1.");
+  }
+  if (flags.minScriptMatch !== undefined && flags.script === undefined) {
+    die("--min-script-match requires --script <file>.");
+  }
+  if (flags.audioStream !== undefined && (!Number.isInteger(flags.audioStream) || flags.audioStream < 0)) {
+    die("--audio-stream must be a zero-based non-negative integer.");
+  }
   const emphasis = await keywordEmphasisFromFlags(flags);
   let scriptText: string | undefined;
   if (flags.script !== undefined) {
@@ -3823,6 +3970,8 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
   }
   const result = captionDraft(draft, {
     audio: flags.audio,
+    audioStream: flags.audioStream,
+    ffmpegCmd: flags.ffmpegCmd,
     fromSegment: flags.fromSegment,
     scriptText,
     whisperCmd: flags.whisperCmd,
@@ -3833,6 +3982,8 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     styleRef: flags.styleRef,
     preset: flags.preset ? loadPresetFile(flags.preset) : undefined,
     karaoke: flags.karaoke,
+    wordReveal: flags.wordReveal,
+    minScriptMatch: flags.minScriptMatch,
     maxWords: flags.maxWords,
     maxChars: flags.maxChars,
     maxGapMs: flags.maxGapMs,
@@ -4960,7 +5111,7 @@ const SUMMARIES: Record<string, string> = {
   texts: "List all text/subtitle content.",
   "set-text": "Change a text segment's content.",
   shift: "Shift one segment's timing by an offset (e.g. +0.5s).",
-  "shift-all": "Shift all segments (optionally on one --track) by an offset.",
+  "shift-all": "Shift segments by an offset, optionally filtering by track and start time.",
   speed: "Set a segment's playback speed.",
   volume: "Set a segment's volume (0.0-1.0).",
   trim: "Trim a segment to a start/duration window.",
@@ -4970,7 +5121,7 @@ const SUMMARIES: Record<string, string> = {
   "export-timeline":
     "Export video/audio tracks as OpenTimelineIO JSON for NLE handoff (DaVinci Resolve imports .otio natively).",
   "import-timeline":
-    "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
+    "Import OpenTimelineIO JSON, flattening nested Timeline/Stack/Track sequences, as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
   "harvest-enums":
     "Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add).",
   materials: "List material types and counts; filter with --type.",
@@ -4989,6 +5140,7 @@ const SUMMARIES: Record<string, string> = {
   mask: "Apply a mask (linear/circle/heart/...) with geometry flags, or --off.",
   "bg-blur": "Set background blur level 1-4, or --off.",
   "text-style": "Style text (alpha/shadow/border/background box).",
+  restyle: "Apply one text-style preset atomically to a whole caption track or every text segment.",
   "text-anim": "Add intro/outro/combo text animation.",
   "image-anim": "Add intro/outro/combo animation to an image/video segment.",
   "add-sticker": "Add a sticker on its own track with transform.",
@@ -5437,12 +5589,23 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
 async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   const { buildRenderPlan, renderDraft } = await import("./render.js");
+  if (flags.crf !== undefined && flags.videoBitrate !== undefined) {
+    die("--crf and --video-bitrate are mutually exclusive.");
+  }
+  if (flags.crf !== undefined && (!Number.isInteger(flags.crf) || flags.crf < 0 || flags.crf > 51)) {
+    die("--crf must be an integer in range 0..51.");
+  }
+  if (flags.videoBitrate !== undefined && !/^(?:0\.\d*[1-9]\d*|[1-9]\d*(?:\.\d+)?)[kKmM]?$/.test(flags.videoBitrate)) {
+    die("--video-bitrate must be a positive ffmpeg rate such as 2500k or 4M.");
+  }
   const opts = {
     out: flags.out,
     scale: flags.scale,
     fps: flags.fps,
     ffmpegCmd: flags.ffmpegCmd,
     encoder: flags.encoder,
+    crf: flags.crf,
+    videoBitrate: flags.videoBitrate,
     burnCaptions: flags.burnCaptions,
     softCaptions: flags.softCaptions,
     allVideoTracks: flags.allVideoTracks,
@@ -6091,7 +6254,7 @@ async function main(): Promise<void> {
       await cmdDuplicate(draft, filePath, positional, flags);
       break;
     case "remove":
-      requireArgs(positional, 3, "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]");
+      requireArgs(positional, 3, "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]");
       await cmdRemove(draft, filePath, positional, flags);
       break;
     case "keyframe":
@@ -6113,6 +6276,9 @@ async function main(): Promise<void> {
     case "text-style":
       requireArgs(positional, 3, "capcut text-style <project> <id> [flags]");
       await cmdTextStyle(draft, filePath, positional, flags);
+      break;
+    case "restyle":
+      await cmdRestyle(draft, filePath, flags);
       break;
     case "text-anim":
       requireArgs(positional, 3, "capcut text-anim <project> <id> [--intro <slug>] [--outro <slug>]");

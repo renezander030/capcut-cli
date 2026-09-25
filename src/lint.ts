@@ -10,6 +10,7 @@ import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
 import { type CaptionScript, CJK_SCRIPT_LIMITS, captionScript, type ScriptLimit, type ScriptLimits } from "./script.js";
 import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
+import { quantizeToFrame } from "./time.js";
 import { allUserEnumIds } from "./user-enums.js";
 import { atLeast } from "./version.js";
 
@@ -60,6 +61,7 @@ const FIXABLE_CODES = new Set<string>([
   "media-outside-draft",
   "media-unlinked",
   "text-range-doubled",
+  "segment-off-frame-grid",
 ]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
@@ -150,6 +152,11 @@ export interface LintOptions {
   /** Script-specific replacements for maxCharsPerLine / maxCharsPerSecond
    * (see CJK_SCRIPT_LIMITS). Null applies the Latin values to every script. */
   scriptLimits?: ScriptLimits | null;
+  /** Validate every target start/end against draft.fps. Opt-in because older
+   * app-authored drafts commonly carry millisecond timestamps. With --fix,
+   * start and end are snapped together so duration is derived, never rounded
+   * independently into a 1us overlap. */
+  frameGrid?: boolean;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -173,6 +180,28 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     if (materialIds === null) materialIds = materialIdSet(draft);
     return materialIds.has(id);
   };
+
+  if (opts.frameGrid) {
+    const fps = typeof draft.fps === "number" && Number.isFinite(draft.fps) && draft.fps > 0 ? draft.fps : 30;
+    for (const track of draft.tracks) {
+      for (const segment of track.segments) {
+        const start = segment.target_timerange.start;
+        const end = start + segment.target_timerange.duration;
+        const snappedStart = quantizeToFrame(start, fps);
+        const snappedEnd = quantizeToFrame(end, fps);
+        if (start === snappedStart && end === snappedEnd) continue;
+        issues.push({
+          severity: "warning",
+          code: "segment-off-frame-grid",
+          message:
+            `Segment ${shortId(segment.id)} is off the ${fps}fps frame grid: ` +
+            `${start}us-${end}us -> ${snappedStart}us-${snappedEnd}us; independently rounded ranges can create 1us overlaps`,
+          fixable: snappedEnd > snappedStart,
+          location: { track: track.name, segment_id: segment.id },
+        });
+      }
+    }
+  }
 
   for (const seg of allSegments(draft)) {
     const s = seg.segment;
@@ -1026,6 +1055,39 @@ export interface FixResult {
 export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS): FixResult {
   const before = lintDraft(draft, opts);
   const fixed: LintIssue[] = [];
+
+  // Pass -2: snap the two boundaries, then derive duration. Rounding start
+  // and duration independently is the exact 1us-overlap failure this fixes.
+  if (opts.frameGrid) {
+    const fps = typeof draft.fps === "number" && Number.isFinite(draft.fps) && draft.fps > 0 ? draft.fps : 30;
+    const timelineEnd = (): number => {
+      let maxEnd = 0;
+      for (const track of draft.tracks) {
+        for (const segment of track.segments) {
+          maxEnd = Math.max(maxEnd, segment.target_timerange.start + segment.target_timerange.duration);
+        }
+      }
+      return maxEnd;
+    };
+    const oldMaxEnd = timelineEnd();
+    for (const track of draft.tracks) {
+      for (const segment of track.segments) {
+        const oldStart = segment.target_timerange.start;
+        const oldDuration = segment.target_timerange.duration;
+        const newStart = quantizeToFrame(oldStart, fps);
+        const newEnd = quantizeToFrame(oldStart + oldDuration, fps);
+        if (newEnd <= newStart) continue;
+        segment.target_timerange.start = newStart;
+        segment.target_timerange.duration = newEnd - newStart;
+        if (segment.source_timerange?.duration === oldDuration && (segment.speed ?? 1) === 1) {
+          segment.source_timerange.duration = newEnd - newStart;
+        }
+      }
+    }
+    if (draft.duration === oldMaxEnd) {
+      draft.duration = timelineEnd();
+    }
+  }
 
   // Pass -1: link timeline materials to their draft_materials entries
   // (media-unlinked). Pure JSON on the draft — the sidecar is only read — so

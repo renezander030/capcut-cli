@@ -29,7 +29,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Mapping, Optional, Sequence, Union
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [
     "CapcutError",
     "CliNotFound",

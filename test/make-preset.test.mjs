@@ -217,6 +217,48 @@ describe("--preset precedence and validation", () => {
   });
 });
 
+describe("capcut restyle", () => {
+  it("applies one preset to every caption on the selected text track in one command", (t) => {
+    const fix = tmpDraft();
+    const out = tmpDir();
+    t.after(() => fix.cleanup());
+    t.after(out.cleanup);
+    const presetPath = join(out.dir, "bulk.json");
+    writeFileSync(
+      presetPath,
+      JSON.stringify({
+        capcutCliPreset: 1,
+        style: { font_size: 30, text_color: "#FF0000", bold: true },
+      }),
+    );
+
+    const r = spawnCli([
+      "restyle",
+      fix.path,
+      "--preset",
+      presetPath,
+      "--track-name",
+      "Subtitles",
+      "--color",
+      "#00CCFF",
+      "--y",
+      "-0.4",
+    ]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(r.json.tracks, 1);
+    assert.equal(r.json.segments, 3);
+    const draft = loadDraft(fix.path);
+    const track = draft.tracks.find((candidate) => candidate.name === "Subtitles");
+    for (const segment of track.segments) {
+      const material = draft.materials.texts.find((candidate) => candidate.id === segment.material_id);
+      assert.equal(material.text_color, "#00CCFF", "explicit colour wins over the bulk preset");
+      assert.equal(material.font_size, 30);
+      assert.equal(material.bold, true);
+      assert.equal(segment.clip.transform.y, -0.4, "an explicit position works even when the preset has no transform");
+    }
+  });
+});
+
 describe("capcut make-preset errors", () => {
   const fix = tmpDraft();
   const out = tmpDir();

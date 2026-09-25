@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { alignScript, normalizeToken, tokenizeScript } from "../dist/align.js";
+import { alignScript, normalizeToken, tokenizeCjkText, tokenizeScript } from "../dist/align.js";
 import { extractText } from "../dist/draft.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
@@ -126,6 +126,24 @@ describe("align.ts — transcript alignment", () => {
       ],
     );
     assert.equal(report.dropped, 2);
+    assert.equal(report.match_ratio, 1);
+  });
+
+  it("aligns Chinese/Japanese text on characters even when whisper returns a multi-character token", () => {
+    assert.deepEqual(tokenizeCjkText("今天，世界！"), ["今", "天，", "世", "界！"]);
+    const { words, report } = alignScript(tokenizeScript("今天，世界！"), [
+      { word: "今天世界", startUs: 0, endUs: 800_000 },
+    ]);
+    assert.deepEqual(
+      words.map((word) => [word.word, word.startUs, word.endUs]),
+      [
+        ["今", 0, 200_000],
+        ["天，", 200_000, 400_000],
+        ["世", 400_000, 600_000],
+        ["界！", 600_000, 800_000],
+      ],
+    );
+    assert.equal(report.matched, 4);
     assert.equal(report.match_ratio, 1);
   });
 });
@@ -273,6 +291,38 @@ describe("capcut caption --script (fake whisper)", { skip: isWindows }, () => {
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.equal(r.json.script, undefined);
     assert.equal(r.json.cues, 1);
+  });
+
+  it("--min-script-match refuses before changing the draft", (t) => {
+    const fix = tmpDraft();
+    t.after(() => fix.cleanup());
+    const s = scratch();
+    t.after(s.cleanup);
+    const audio = join(s.dir, "voice.wav");
+    const heard = join(s.dir, "heard.srt");
+    const script = join(s.dir, "wrong.txt");
+    writeFileSync(audio, "stub");
+    writeFileSync(heard, "1\n00:00:00,000 --> 00:00:01,000\nhello world\n");
+    writeFileSync(script, "quarterly revenue grew quickly\n");
+    const before = readFileSync(fix.path, "utf-8");
+    const r = spawnCli(
+      [
+        "caption",
+        fix.path,
+        "--audio",
+        audio,
+        "--whisper-cmd",
+        FAKE_WHISPER,
+        "--script",
+        script,
+        "--min-script-match",
+        "0.75",
+      ],
+      { env: { FAKE_WHISPER_SOURCE: heard } },
+    );
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /below --min-script-match 0\.75/);
+    assert.equal(readFileSync(fix.path, "utf-8"), before);
   });
 });
 

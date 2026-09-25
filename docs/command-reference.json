@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -196,6 +196,15 @@
           "description": "Mechanically repair fixable issues and write the draft."
         },
         {
+          "name": "frame_grid",
+          "flags": [
+            "--frame-grid"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Check target ranges against draft.fps; --fix snaps boundaries and derives duration."
+        },
+        {
           "name": "no_probe",
           "flags": [
             "--no-probe"
@@ -388,8 +397,8 @@
     },
     {
       "name": "shift-all",
-      "summary": "Shift all segments (optionally on one --track) by an offset.",
-      "usage": "capcut shift-all <project> <offset> [--track <type>]",
+      "summary": "Shift segments by an offset, optionally filtering by track and start time.",
+      "usage": "capcut shift-all <project> <offset> [--track <type>] [--from <time>]",
       "positionals": [
         {
           "name": "project",
@@ -405,6 +414,11 @@
           "name": "type",
           "type": "string",
           "required": false
+        },
+        {
+          "name": "time",
+          "type": "time",
+          "required": false
         }
       ],
       "options": [
@@ -417,6 +431,15 @@
           "type": "string",
           "required": false,
           "description": "Track or material type filter."
+        },
+        {
+          "name": "from_time",
+          "flags": [
+            "--from"
+          ],
+          "type": "time",
+          "required": false,
+          "description": "Shift only segments starting at or after this boundary; refuses a segment crossing it."
         }
       ],
       "mutates": true,
@@ -720,7 +743,7 @@
     },
     {
       "name": "import-timeline",
-      "summary": "Import OpenTimelineIO JSON (the export-timeline schema set) as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
+      "summary": "Import OpenTimelineIO JSON, flattening nested Timeline/Stack/Track sequences, as a new draft (--out) or append it onto an existing one (--into); unsupported OTIO features are reported, never silent.",
       "usage": "capcut import-timeline <file.otio> (--out <new-project> | --into <project>)",
       "positionals": [
         {
@@ -1433,7 +1456,7 @@
     {
       "name": "remove",
       "summary": "Remove a segment, its emptied track, and the materials that orphans.",
-      "usage": "capcut remove <project> <segment-id> [--keep-track] [--keep-materials]",
+      "usage": "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]",
       "positionals": [
         {
           "name": "project",
@@ -1464,6 +1487,15 @@
           "type": "boolean",
           "required": false,
           "description": "Skip the orphan-material sweep (run prune later)."
+        },
+        {
+          "name": "ripple",
+          "flags": [
+            "--ripple"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Close the removed time span across every track; refuses crossing segments."
         }
       ],
       "mutates": true,
@@ -1789,6 +1821,293 @@
         }
       ],
       "options": [
+        {
+          "name": "font_size",
+          "flags": [
+            "--font-size"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Font size."
+        },
+        {
+          "name": "color",
+          "flags": [
+            "--color"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Text colour as #RRGGBB."
+        },
+        {
+          "name": "align",
+          "flags": [
+            "--align"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "Text alignment.",
+          "values": [
+            "0",
+            "1",
+            "2"
+          ]
+        },
+        {
+          "name": "x",
+          "flags": [
+            "--x"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Horizontal position."
+        },
+        {
+          "name": "y",
+          "flags": [
+            "--y"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Vertical position."
+        },
+        {
+          "name": "alpha",
+          "flags": [
+            "--alpha"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Text alpha."
+        },
+        {
+          "name": "vertical",
+          "flags": [
+            "--vertical"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Use vertical text."
+        },
+        {
+          "name": "fixed_width",
+          "flags": [
+            "--fixed-width"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Fixed text-box width."
+        },
+        {
+          "name": "fixed_height",
+          "flags": [
+            "--fixed-height"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Fixed text-box height."
+        },
+        {
+          "name": "shadow",
+          "flags": [
+            "--shadow",
+            "--no-shadow"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Enable or disable shadow."
+        },
+        {
+          "name": "shadow_alpha",
+          "flags": [
+            "--shadow-alpha"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shadow alpha."
+        },
+        {
+          "name": "shadow_angle",
+          "flags": [
+            "--shadow-angle"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shadow angle."
+        },
+        {
+          "name": "shadow_color",
+          "flags": [
+            "--shadow-color"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Shadow colour."
+        },
+        {
+          "name": "shadow_distance",
+          "flags": [
+            "--shadow-distance"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shadow distance."
+        },
+        {
+          "name": "shadow_smoothing",
+          "flags": [
+            "--shadow-smoothing"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shadow smoothing."
+        },
+        {
+          "name": "border_width",
+          "flags": [
+            "--border-width"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Border width."
+        },
+        {
+          "name": "border_color",
+          "flags": [
+            "--border-color"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Border colour."
+        },
+        {
+          "name": "border_alpha",
+          "flags": [
+            "--border-alpha"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Border alpha."
+        },
+        {
+          "name": "bg_color",
+          "flags": [
+            "--bg-color"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Background colour."
+        },
+        {
+          "name": "bg_alpha",
+          "flags": [
+            "--bg-alpha"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background alpha."
+        },
+        {
+          "name": "bg_style",
+          "flags": [
+            "--bg-style"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background style identifier."
+        },
+        {
+          "name": "bg_round_radius",
+          "flags": [
+            "--bg-round-radius"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background corner radius."
+        },
+        {
+          "name": "bg_width",
+          "flags": [
+            "--bg-width"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background width."
+        },
+        {
+          "name": "bg_height",
+          "flags": [
+            "--bg-height"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background height."
+        },
+        {
+          "name": "bg_h_offset",
+          "flags": [
+            "--bg-h-offset"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background horizontal offset."
+        },
+        {
+          "name": "bg_v_offset",
+          "flags": [
+            "--bg-v-offset"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Background vertical offset."
+        },
+        {
+          "name": "preset",
+          "flags": [
+            "--preset"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Apply a make-preset style preset; explicit flags override preset values."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "restyle",
+      "summary": "Apply one text-style preset atomically to a whole caption track or every text segment.",
+      "usage": "capcut restyle <project> --preset <preset.json> [--track-name <name>] [options]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "track_name",
+          "flags": [
+            "--track-name"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Target track name."
+        },
         {
           "name": "font_size",
           "flags": [
@@ -3594,6 +3913,24 @@
           "description": "Audio input."
         },
         {
+          "name": "audio_stream",
+          "flags": [
+            "--audio-stream"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Zero-based audio stream to extract from the input container before transcription."
+        },
+        {
+          "name": "ffmpeg_cmd",
+          "flags": [
+            "--ffmpeg-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "FFmpeg binary used by --audio-stream."
+        },
+        {
           "name": "from_segment",
           "flags": [
             "--from-segment"
@@ -3651,6 +3988,24 @@
           "type": "boolean",
           "required": false,
           "description": "Create word-highlight caption ranges."
+        },
+        {
+          "name": "word_reveal",
+          "flags": [
+            "--word-reveal"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Build each cue progressively, adding one timed word at a time."
+        },
+        {
+          "name": "min_script_match",
+          "flags": [
+            "--min-script-match"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Refuse before writing when caption --script exact-token match ratio is below 0..1."
         },
         {
           "name": "max_words",
@@ -3747,7 +4102,8 @@
       ],
       "mutates": true,
       "prerequisites": [
-        "whisper CLI"
+        "whisper CLI",
+        "ffmpeg (only with --audio-stream)"
       ],
       "output": {
         "type": "object",
@@ -5415,6 +5771,25 @@
           "type": "string",
           "required": false,
           "description": "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering."
+        },
+        {
+          "name": "crf",
+          "flags": [
+            "--crf"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Constant-quality value 0..51 (default 28; mutually exclusive with --video-bitrate).",
+          "default": 28
+        },
+        {
+          "name": "video_bitrate",
+          "flags": [
+            "--video-bitrate"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode."
         },
         {
           "name": "burn_captions",

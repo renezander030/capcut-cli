@@ -20,6 +20,8 @@ import { storedTextLength } from "./text-offsets.js";
 
 export interface CaptionOptions {
   audio?: string; // path to audio file; if absent, derived from --from-segment
+  audioStream?: number; // zero-based audio stream inside the input container
+  ffmpegCmd?: string; // ffmpeg binary used only when audioStream is selected
   fromSegment?: string; // segment ID of an audio segment in the draft to caption
   whisperCmd?: string; // shell-out command; e.g. "whisper" or "whisper-cli" or "faster-whisper"
   whisperModel?: string; // model name; default "base"
@@ -29,6 +31,8 @@ export interface CaptionOptions {
   preset?: TextStylePreset; // make-preset file whose base style to apply
   whisperEngine?: "auto" | "openai" | "whisper-cpp" | "faster-whisper";
   karaoke?: boolean;
+  wordReveal?: boolean;
+  minScriptMatch?: number;
   maxWords?: number;
   maxChars?: number;
   maxGapMs?: number;
@@ -69,6 +73,8 @@ export interface CaptionResult {
   engine_name?: string;
   words?: number;
   karaoke?: boolean;
+  word_reveal?: boolean;
+  audio_stream?: number;
   keyword_matches?: number;
   color_cycle?: number;
   /** --script alignment quality (only when a script was given). */
@@ -96,8 +102,30 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
   if (opts.styleRef && opts.preset) {
     throw new Error("--style-ref and --preset are mutually exclusive. Pass one style source.");
   }
-  const audio = resolveAudio(draft, opts);
-  const transcription = runWhisper(audio, opts);
+  if (opts.karaoke && opts.wordReveal) throw new Error("--karaoke and --word-reveal are mutually exclusive.");
+  if (
+    opts.minScriptMatch !== undefined &&
+    (!Number.isFinite(opts.minScriptMatch) || opts.minScriptMatch < 0 || opts.minScriptMatch > 1)
+  ) {
+    throw new Error("--min-script-match must be a number in range 0..1.");
+  }
+  if (opts.minScriptMatch !== undefined && opts.scriptText === undefined) {
+    throw new Error("--min-script-match requires --script <file>.");
+  }
+  if (opts.audioStream !== undefined && (!Number.isInteger(opts.audioStream) || opts.audioStream < 0)) {
+    throw new Error("--audio-stream must be a zero-based non-negative integer.");
+  }
+  const sourceAudio = resolveAudio(draft, opts);
+  const selectedAudio =
+    opts.audioStream === undefined
+      ? undefined
+      : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
+  let transcription: TranscriptionResult;
+  try {
+    transcription = runWhisper(selectedAudio?.path ?? sourceAudio, opts);
+  } finally {
+    selectedAudio?.cleanup();
+  }
   const recognizedWords = transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues);
   // The transcript's script decides how words join into a cue (no space inside
   // Chinese or Japanese) and how many of them make one when the caller set no
@@ -118,6 +146,12 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     }
     const aligned = alignScript(lines, recognizedWords);
     scriptReport = aligned.report;
+    if (opts.minScriptMatch !== undefined && aligned.report.match_ratio < opts.minScriptMatch) {
+      throw new Error(
+        `Script match ${aligned.report.match_ratio.toFixed(3)} is below --min-script-match ${opts.minScriptMatch}. ` +
+          `No captions were written; check that --script belongs to this audio.`,
+      );
+    }
     cues = opts.karaoke
       ? groupWords(
           aligned.words,
@@ -138,15 +172,16 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
           ),
         );
   } else {
-    cues = opts.karaoke
-      ? groupWords(
-          recognizedWords,
-          opts.maxWords ?? grouping.karaokeMaxWords,
-          opts.maxChars ?? grouping.karaokeMaxChars,
-          (opts.maxGapMs ?? 500) * 1000,
-          separator,
-        )
-      : transcription.cues;
+    cues =
+      opts.karaoke || opts.wordReveal
+        ? groupWords(
+            recognizedWords,
+            opts.maxWords ?? grouping.karaokeMaxWords,
+            opts.maxChars ?? grouping.karaokeMaxChars,
+            (opts.maxGapMs ?? 500) * 1000,
+            separator,
+          )
+        : transcription.cues;
   }
   if (cues.length === 0) {
     throw new Error("Whisper produced no cues. Check the audio file is not silent and the model name is valid.");
@@ -196,7 +231,19 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
         baseBold: Boolean(cueStyle.bold ?? false),
         presetRanges,
       });
-    if (opts.karaoke && cue.words && cue.words.length > 0) {
+    if (opts.wordReveal && cue.words && cue.words.length > 0) {
+      for (let wordIndex = 0; wordIndex < cue.words.length; wordIndex++) {
+        const visible = cue.words
+          .slice(0, wordIndex + 1)
+          .map((word) => word.word)
+          .join(separator);
+        const word = cue.words[wordIndex];
+        const next = cue.words[wordIndex + 1];
+        const endUs = next?.startUs ?? cue.endUs;
+        addCaptionSegment(draft, track, visible, word.startUs, Math.max(word.startUs + 1, endUs), cueStyle);
+        created++;
+      }
+    } else if (opts.karaoke && cue.words && cue.words.length > 0) {
       const fullText = cue.words.map((word) => word.word).join(separator);
       let cursor = 0;
       let cueMatches = 0;
@@ -240,17 +287,49 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     track_name: trackName,
     first_cue: { start_us: cues[0].startUs, text: cues[0].text },
     last_cue: { start_us: cues[cues.length - 1].startUs, text: cues[cues.length - 1].text },
-    source_audio: audio,
+    source_audio: sourceAudio,
     engine: opts.whisperCmd ? "shell" : "whisper-cli",
     engine_name: transcription.engine,
     caption_script: textScript,
     words: transcription.words.length,
     karaoke: opts.karaoke ?? false,
+    word_reveal: opts.wordReveal || undefined,
+    audio_stream: opts.audioStream,
     // undefined when the flags are off, so JSON output stays byte-identical.
     keyword_matches: highlightWords.length > 0 ? keywordMatches : undefined,
     color_cycle: colorCycle.length > 0 ? colorCycle.length : undefined,
     script: scriptReport,
   };
+}
+
+export function buildAudioStreamInvocation(audio: string, stream: number, output: string): string[] {
+  return ["-y", "-i", audio, "-map", `0:a:${stream}`, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", output];
+}
+
+function extractAudioStream(audio: string, stream: number, command: string): { path: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "capcut-caption-audio-"));
+  const output = join(dir, "selected.wav");
+  const cleanup = () => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  };
+  const args = buildAudioStreamInvocation(audio, stream, output);
+  try {
+    const r = spawnSync(command, args, { encoding: "utf-8", timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
+    if (r.error || r.status !== 0 || !existsSync(output)) {
+      const detail = r.stderr || r.error?.message || `ffmpeg exited ${r.status}`;
+      throw new Error(
+        `Could not extract audio stream ${stream} from ${audio}: ${detail}\n` + `Tried: ${command} ${args.join(" ")}`,
+      );
+    }
+    return { path: output, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 function addCaptionSegment(
@@ -365,7 +444,7 @@ function runWhisper(audio: string, opts: CaptionOptions): TranscriptionResult {
   const engine = detectEngine(opts);
   const tmpdirPath = mkdtempSync(join(tmpdir(), "capcut-caption-"));
   try {
-    const json = opts.karaoke === true;
+    const json = opts.karaoke === true || opts.wordReveal === true;
     const invocation = buildWhisperInvocation(engine, audio, model, language, tmpdirPath, json);
     const { args, prefix, extension } = invocation;
     const r = spawnSync(cmd, args, { encoding: "utf-8", timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });

@@ -178,7 +178,6 @@ describe("import-timeline (OTIO)", () => {
       assert.deepEqual(types, [
         "FreezeFrame.1",
         "GeneratorReference.1",
-        "Stack.1",
         "Title",
         "Transition.1",
         "global_start_time",
@@ -189,6 +188,64 @@ describe("import-timeline (OTIO)", () => {
       const clip = plan.tracks.find((t) => t.clips.length > 0).clips[0];
       assert.equal(clip.mediaPath, null);
       assert.equal(clip.speed, 1);
+    });
+
+    it("flattens nested Stack/Track sequences while preserving their parent offset", () => {
+      const rt = (value) => ({ OTIO_SCHEMA: "RationalTime.1", rate: 30, value });
+      const range = (start, duration) => ({
+        OTIO_SCHEMA: "TimeRange.1",
+        start_time: rt(start),
+        duration: rt(duration),
+      });
+      const clip = (name, duration) => ({
+        OTIO_SCHEMA: "Clip.1",
+        name,
+        source_range: range(0, duration),
+        effects: [],
+        markers: [],
+        media_reference: { OTIO_SCHEMA: "MissingReference.1", name },
+      });
+      const doc = {
+        OTIO_SCHEMA: "Timeline.1",
+        global_start_time: rt(0),
+        name: "nested-edit",
+        tracks: {
+          OTIO_SCHEMA: "Stack.1",
+          name: "tracks",
+          children: [
+            {
+              OTIO_SCHEMA: "Track.1",
+              kind: "Video",
+              name: "outer",
+              children: [
+                { OTIO_SCHEMA: "Gap.1", source_range: range(0, 30) },
+                {
+                  OTIO_SCHEMA: "Stack.1",
+                  name: "scene",
+                  children: [
+                    {
+                      OTIO_SCHEMA: "Track.1",
+                      kind: "Video",
+                      name: "angle-a",
+                      children: [clip("nested", 60)],
+                    },
+                  ],
+                },
+                clip("after", 30),
+              ],
+            },
+          ],
+        },
+      };
+      const plan = otioToImportPlan(doc);
+      assert.equal(plan.clips, 2);
+      assert.equal(plan.gaps, 1);
+      assert.deepEqual(plan.skipped, []);
+      const nested = plan.tracks.find((track) => track.name === "outer / scene / angle-a");
+      const outer = plan.tracks.find((track) => track.name === "outer");
+      assert.equal(nested.clips[0].targetStartUs, 1_000_000, "nested clip starts after the outer gap");
+      assert.equal(nested.clips[0].targetDurationUs, 2_000_000);
+      assert.equal(outer.clips[0].targetStartUs, 3_000_000, "the following clip starts after the nested sequence");
     });
   });
 

@@ -4,7 +4,19 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-09-25
+
 ### Added
+
+- `lint --frame-grid` validates every segment start and end against the draft's fps. `lint --frame-grid --fix` snaps the two boundaries and derives the duration from them, avoiding the one-microsecond overlaps that independent start/duration rounding can create; an unchanged 1x source range follows the repaired duration.
+- `caption --script` now aligns Chinese and Japanese at character granularity, including when Whisper returns several characters as one timed token. `--min-script-match <0..1>` turns the alignment report into a write gate: a mismatched script is refused before the draft changes.
+- `caption --audio-stream <n>` selects a zero-based audio stream from a multi-stream input. FFmpeg extracts that stream to a temporary mono 16 kHz WAV before Whisper runs; `--ffmpeg-cmd` selects the binary and the result reports `audio_stream` while keeping `source_audio` pointed at the original container.
+- Boundary-safe ripple editing: `remove --ripple` closes the removed span across every track and refuses before writing when another segment crosses it; `shift-all --from <time>` moves only segments at or after an exact boundary and likewise refuses a boundary that cuts through a segment.
+- Large proxy renders automatically pass filter chains longer than 8 KiB through FFmpeg's filter-script input instead of the process command line, then remove the temporary script after the render. Dry-run plans expose the script path and content without writing it.
+- `import-timeline` flattens nested OTIO `Timeline.1`, `Stack.1`, and `Track.1` sequences into editable CapCut tracks while preserving parent gaps, offsets, durations, and nested caption markers. Unsupported effects and items remain explicitly reported.
+- `render --crf <0..51>` controls constant quality (default 28); `render --video-bitrate <rate>` selects a target bitrate such as `2500k` or `4M`. The two modes are mutually exclusive and the render plan reports which one it uses.
+- `caption --word-reveal` writes progressive, word-timed caption prefixes (`one` → `one two` → `one two three`) without flattening them into pixels. It is mutually exclusive with karaoke.
+- `restyle <project> --preset <file> [--track-name <name>]` applies one text-style preset atomically to every text segment or to one caption track. Explicit style flags override the preset and the result reports affected track/segment counts.
 
 - `doctor` reports what each draft store holds — for every default CapCut/JianYing project directory it finds (or the one folder named with the new `--drafts <dir>`), a `draft-store` check counts the projects as readable, markerless, encrypted or unreadable. A JianYing 6.0+ store, where every project the app wrote is an encrypted payload, is now named once and up front (warn) with what still works — `init`, `quickstart` and `compile` build plaintext drafts from the bundled template — instead of being discovered one failed command at a time. Same classification as the `template.store` report of `init`/`quickstart`/`compile`. `capcut doctor --drafts <dir>` also makes the check usable on a machine without the app, and in CI.
 - `examples/short-video-narration.md` (+ zh-CN) — silent clip → 9:16 draft with a TTS voiceover and script-accurate captions, as four commands (`quickstart --ratio 9:16` → `tts --text-file` → `caption --from-segment --script` → `lint`) and as one script, `examples/scripts/narrate-short.sh`. `examples/scripts/edge-tts-wav.sh` bridges edge-tts (MP3 only) to the WAV `tts` expects at `{out}`; any other engine plugs in through `--tts-cmd`. The vision-model step that writes the script is optional and stays outside the CLI: the script is a text file.

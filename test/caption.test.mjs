@@ -29,6 +29,13 @@ describe("capcut caption — input validation", () => {
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /Segment not found/);
   });
+
+  it("rejects a non-integer --audio-stream without touching ffmpeg", () => {
+    const r = spawnCli(["caption", fix.path, "--audio", "/nonexistent/audio.mov", "--audio-stream", "1x"]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /zero-based non-negative integer/);
+    assert.doesNotMatch(r.stderr, /Audio file not found/);
+  });
 });
 
 describe("caption engine adapters and karaoke grouping", () => {

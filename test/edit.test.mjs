@@ -120,6 +120,50 @@ describe("capcut shift-all", () => {
       assert.equal(after[i].start_us, oldStarts[i] + 500_000);
     }
   });
+
+  it("--from shifts only segments at or after an exact boundary", () => {
+    const boundary = tmpDraft();
+    try {
+      const before = spawnCli(["segments", boundary.path, "--track", "text"]).json;
+      const r = spawnCli(["shift-all", boundary.path, "+500ms", "--track", "text", "--from", "7.7s"]);
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.equal(r.json.from_us, 7_700_000);
+      assert.equal(r.json.shifted, 1);
+      const after = spawnCli(["segments", boundary.path, "--track", "text"]).json;
+      assert.deepEqual(
+        after.map((segment) => segment.start_us),
+        before.map((segment) => (segment.start_us >= 7_700_000 ? segment.start_us + 500_000 : segment.start_us)),
+      );
+    } finally {
+      boundary.cleanup();
+    }
+  });
+
+  it("--from refuses to split a segment and leaves the draft unchanged", () => {
+    const boundary = tmpDraft();
+    try {
+      const before = loadDraft(boundary.path);
+      const r = spawnCli(["shift-all", boundary.path, "+500ms", "--track", "text", "--from", "5s"]);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /crosses segment/);
+      assert.deepEqual(loadDraft(boundary.path), before);
+    } finally {
+      boundary.cleanup();
+    }
+  });
+
+  it("--from refuses a negative shift that would overlap earlier content", () => {
+    const boundary = tmpDraft();
+    try {
+      const before = loadDraft(boundary.path);
+      const r = spawnCli(["shift-all", boundary.path, "-1s", "--track", "text", "--from", "7.7s"]);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /would overlap segments/);
+      assert.deepEqual(loadDraft(boundary.path), before);
+    } finally {
+      boundary.cleanup();
+    }
+  });
 });
 
 describe("capcut speed / volume / opacity", () => {

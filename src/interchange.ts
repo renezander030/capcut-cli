@@ -183,9 +183,10 @@ function clipForSegment(draft: Draft, segment: Segment, rate: number, toFrames: 
  * Reads the exact schema set the exporter emits (Timeline.1 / Stack.1 /
  * Track.1 / Clip.1 / Gap.1, ExternalReference / MissingReference,
  * LinearTimeWarp) into a flat plan the command applies through the same
- * factory functions `add-video` / `add-audio` use. Everything the CLI cannot
- * represent — unknown track kinds, transitions, nested stacks, other effects,
- * generator references, markers, a non-zero global start — is REPORTED in
+ * factory functions `add-video` / `add-audio` use. Nested Timeline/Stack/Track
+ * sequences are flattened into ordinary tracks with their offsets preserved.
+ * Everything the CLI cannot represent — unknown track kinds, transitions,
+ * other effects, generator references, markers, a non-zero global start — is REPORTED in
  * `skipped`, never silently dropped (the export-timeline house rule).
  *
  * Speed inverts the exporter's documented LinearTimeWarp relationship
@@ -418,17 +419,122 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
     skipped,
   };
 
-  for (const child of (stack as { children: unknown[] }).children) {
-    const schema = schemaOf(child);
-    const track = child as OtioObject;
-    const label = typeof track.name === "string" && track.name ? track.name : schema || "(unnamed)";
-    if (schema !== "Track.1") {
+  const nestedLabel = (parent: string, node: OtioObject, fallback: string): string => {
+    const own = typeof node.name === "string" && node.name ? node.name : fallback;
+    return parent ? `${parent} / ${own}` : own;
+  };
+
+  const declaredDuration = (node: OtioObject, where: string): number | null => {
+    if (node.source_range === null || node.source_range === undefined) return null;
+    return timeRangeUs(node.source_range, rate, `${where} source_range`).durationUs;
+  };
+
+  const compositionDuration = (value: unknown): number => {
+    const node = value as OtioObject;
+    const schema = schemaOf(node);
+    if (schema === "Gap.1") return timeRangeUs(node.source_range, rate, "nested gap source_range").durationUs;
+    if (schema === "Clip.1") {
+      const source = timeRangeUs(node.source_range, rate, "nested clip source_range").durationUs;
+      const warp = (Array.isArray(node.effects) ? node.effects : []).find(
+        (effect) =>
+          schemaOf(effect) === "LinearTimeWarp.1" &&
+          typeof (effect as { time_scalar?: unknown }).time_scalar === "number" &&
+          Number((effect as { time_scalar: number }).time_scalar) > 0,
+      ) as { time_scalar?: number } | undefined;
+      return Math.round(source / (warp?.time_scalar ?? 1));
+    }
+    if (schema === "Timeline.1") return compositionDuration(node.tracks);
+    if (schema === "Track.1") {
+      const rangeDuration = declaredDuration(node, "nested track");
+      if (rangeDuration !== null) return rangeDuration;
+      return (Array.isArray(node.children) ? node.children : []).reduce(
+        (total, child) => total + compositionDuration(child),
+        0,
+      );
+    }
+    if (schema === "Stack.1") {
+      const rangeDuration = declaredDuration(node, "nested stack");
+      if (rangeDuration !== null) return rangeDuration;
+      return (Array.isArray(node.children) ? node.children : []).reduce(
+        (longest, child) => Math.max(longest, compositionDuration(child)),
+        0,
+      );
+    }
+    return 0;
+  };
+
+  const walkStack = (node: OtioObject, startUs: number, parent: string, root = false): number => {
+    const label = root ? parent : nestedLabel(parent, node, "stack");
+    const rangeDuration = root ? null : declaredDuration(node, label);
+    if (rangeDuration !== null) {
       skipped.push({
         track: label,
-        type: schema || "unknown",
-        reason: "unsupported stack child — only Track.1 imports",
+        type: "source_range",
+        reason:
+          "nested stack source_range trimming is not applied; its declared duration still positions following items",
       });
-      continue;
+    }
+    if (!root) {
+      const nestedCaptions = captionsFromStackMarkers(node.markers, rate, skipped);
+      plan.captions.push(...nestedCaptions.map((caption) => ({ ...caption, startUs: caption.startUs + startUs })));
+    }
+    if (Array.isArray(node.effects) && node.effects.length > 0) {
+      skipped.push({ track: label, type: "effects", reason: "stack-level effects have no CapCut equivalent" });
+    }
+    let durationUs = 0;
+    for (const child of Array.isArray(node.children) ? node.children : []) {
+      const schema = schemaOf(child);
+      if (schema === "Track.1") {
+        durationUs = Math.max(durationUs, walkTrack(child as OtioObject, startUs, label));
+      } else if (schema === "Stack.1") {
+        durationUs = Math.max(durationUs, walkStack(child as OtioObject, startUs, label));
+      } else if (schema === "Timeline.1") {
+        durationUs = Math.max(durationUs, walkTimeline(child as OtioObject, startUs, label));
+      } else {
+        const childLabel = nestedLabel(label, child as OtioObject, schema || "unknown");
+        skipped.push({
+          track: childLabel,
+          type: schema || "unknown",
+          reason: "unsupported stack child — expected Track.1, Stack.1, or Timeline.1",
+        });
+        durationUs = Math.max(durationUs, compositionDuration(child));
+      }
+    }
+    return rangeDuration ?? durationUs;
+  };
+
+  const walkTimeline = (node: OtioObject, startUs: number, parent: string): number => {
+    const label = nestedLabel(parent, node, "timeline");
+    const nestedStart = node.global_start_time;
+    if (
+      nestedStart &&
+      schemaOf(nestedStart) === "RationalTime.1" &&
+      typeof (nestedStart as { value?: unknown }).value === "number" &&
+      (nestedStart as { value: number }).value !== 0
+    ) {
+      skipped.push({ track: label, type: "global_start_time", reason: "non-zero nested timeline start is ignored" });
+    }
+    const tracks = node.tracks;
+    if (schemaOf(tracks) !== "Stack.1") {
+      skipped.push({
+        track: label,
+        type: schemaOf(tracks) || "tracks",
+        reason: "nested timeline has no Stack.1 tracks",
+      });
+      return 0;
+    }
+    return walkStack(tracks as OtioObject, startUs, label);
+  };
+
+  const walkTrack = (track: OtioObject, startUs: number, parent: string): number => {
+    const label = nestedLabel(parent, track, "track");
+    const rangeDuration = declaredDuration(track, label);
+    if (rangeDuration !== null) {
+      skipped.push({
+        track: label,
+        type: "source_range",
+        reason: "track source_range trimming is not applied; its declared duration still positions following items",
+      });
     }
     const kind = IMPORTABLE_TRACK_KINDS[String(track.kind)];
     if (!kind) {
@@ -437,7 +543,7 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
         type: String(track.kind ?? "unknown"),
         reason: "unsupported track kind — only Video and Audio tracks import",
       });
-      continue;
+      return rangeDuration ?? compositionDuration(track);
     }
     if (Array.isArray(track.effects) && track.effects.length > 0) {
       skipped.push({ track: label, type: "effects", reason: "track-level effects have no CapCut equivalent" });
@@ -447,7 +553,7 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
     }
 
     const clips: ImportClipPlan[] = [];
-    let cursorUs = 0;
+    let cursorUs = startUs;
     for (const item of Array.isArray(track.children) ? (track.children as unknown[]) : []) {
       const itemSchema = schemaOf(item);
       if (itemSchema === "Gap.1") {
@@ -455,24 +561,41 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
         plan.gaps++;
         continue;
       }
-      if (itemSchema !== "Clip.1") {
-        skipped.push({
-          track: label,
-          type: itemSchema || "unknown",
-          reason:
-            "unsupported timeline item — only Clip.1 and Gap.1 import (transitions overlap, they consume no time)",
-        });
+      if (itemSchema === "Clip.1") {
+        const clip = clipPlan(item as OtioObject, rate, label, skipped);
+        if (!clip) continue;
+        clip.targetStartUs = cursorUs;
+        cursorUs += clip.targetDurationUs;
+        clips.push(clip);
+        plan.clips++;
         continue;
       }
-      const clip = clipPlan(item as OtioObject, rate, label, skipped);
-      if (!clip) continue;
-      clip.targetStartUs = cursorUs;
-      cursorUs += clip.targetDurationUs;
-      clips.push(clip);
-      plan.clips++;
+      if (itemSchema === "Stack.1") {
+        cursorUs += walkStack(item as OtioObject, cursorUs, label);
+        continue;
+      }
+      if (itemSchema === "Track.1") {
+        cursorUs += walkTrack(item as OtioObject, cursorUs, label);
+        continue;
+      }
+      if (itemSchema === "Timeline.1") {
+        cursorUs += walkTimeline(item as OtioObject, cursorUs, label);
+        continue;
+      }
+      skipped.push({
+        track: label,
+        type: itemSchema || "unknown",
+        reason:
+          "unsupported timeline item — clips, gaps, and nested timelines import (transitions overlap, they consume no time)",
+      });
     }
-    plan.tracks.push({ kind, name: typeof track.name === "string" ? track.name : "", clips });
-  }
+    if (clips.length > 0 || (Array.isArray(track.children) && track.children.length === 0)) {
+      plan.tracks.push({ kind, name: label, clips });
+    }
+    return rangeDuration ?? cursorUs - startUs;
+  };
+
+  walkStack(stack as OtioObject, 0, "", true);
 
   return plan;
 }

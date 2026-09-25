@@ -56,6 +56,47 @@ export function normalizeToken(token: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
+const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * Split a Chinese/Japanese line the way speech recognisers timestamp it:
+ * Han/kana characters are individual alignment units, while Latin/digit runs
+ * stay together. Punctuation is kept with the preceding spoken unit so the
+ * author's visible wording survives even though normalizeToken ignores it.
+ */
+export function tokenizeCjkText(text: string): string[] {
+  const tokens: string[] = [];
+  let latin = "";
+  let leadingPunctuation = "";
+  const flushLatin = () => {
+    if (!latin) return;
+    tokens.push(`${leadingPunctuation}${latin}`);
+    latin = "";
+    leadingPunctuation = "";
+  };
+  for (const ch of text) {
+    if (CJK_CHAR.test(ch)) {
+      flushLatin();
+      tokens.push(`${leadingPunctuation}${ch}`);
+      leadingPunctuation = "";
+    } else if (WORD_CHAR.test(ch)) {
+      latin += ch;
+    } else if (/\s/u.test(ch)) {
+      flushLatin();
+    } else if (latin) {
+      flushLatin();
+      tokens[tokens.length - 1] += ch;
+    } else if (tokens.length > 0) {
+      tokens[tokens.length - 1] += ch;
+    } else {
+      leadingPunctuation += ch;
+    }
+  }
+  flushLatin();
+  return tokens.filter((token) => normalizeToken(token).length > 0);
+}
+
 /**
  * Script text → lines → words. Blank lines are dropped; a line is a unit the
  * caller may keep together as one cue. Tokens with no letters or digits
@@ -64,10 +105,10 @@ export function normalizeToken(token: string): string {
 export function tokenizeScript(text: string): string[][] {
   const lines: string[][] = [];
   for (const rawLine of text.split(/\r?\n/)) {
-    const words = rawLine
-      .trim()
-      .split(/\s+/)
-      .filter((w) => w.length > 0 && normalizeToken(w).length > 0);
+    const trimmed = rawLine.trim();
+    const words = CJK_CHAR.test(trimmed)
+      ? tokenizeCjkText(trimmed)
+      : trimmed.split(/\s+/).filter((w) => w.length > 0 && normalizeToken(w).length > 0);
     if (words.length > 0) lines.push(words);
   }
   return lines;
@@ -197,11 +238,27 @@ export function alignScript(
     for (const word of line) flat.push({ word, line: index });
   });
   const scriptNorm = flat.map((w) => normalizeToken(w.word));
-  const recognizedNorm = recognized.map((w) => normalizeToken(w.word));
+  // Whisper commonly emits a Chinese/Japanese "word" as several characters.
+  // When the script uses character units, expand those recogniser tokens and
+  // divide their measured interval evenly so both sides share one token grid.
+  const cjkScript = flat.some((w) => CJK_CHAR.test(w.word));
+  const timedRecognized = cjkScript
+    ? recognized.flatMap((word) => {
+        const pieces = tokenizeCjkText(word.word);
+        if (pieces.length <= 1) return [word];
+        const span = Math.max(pieces.length, word.endUs - word.startUs);
+        return pieces.map((piece, index) => ({
+          word: piece,
+          startUs: Math.round(word.startUs + (span * index) / pieces.length),
+          endUs: Math.round(word.startUs + (span * (index + 1)) / pieces.length),
+        }));
+      })
+    : recognized;
+  const recognizedNorm = timedRecognized.map((w) => normalizeToken(w.word));
   const { pair, exact } = alignTokens(scriptNorm, recognizedNorm);
 
   const words: AlignedWord[] = flat.map((w, i) => {
-    const r = pair[i] >= 0 ? recognized[pair[i]] : null;
+    const r = pair[i] >= 0 ? timedRecognized[pair[i]] : null;
     return {
       word: w.word,
       line: w.line,
@@ -212,7 +269,7 @@ export function alignScript(
   });
 
   // Interpolate the untimed runs between their timed neighbours.
-  const durations = recognized.map((w) => Math.max(1, w.endUs - w.startUs));
+  const durations = timedRecognized.map((w) => Math.max(1, w.endUs - w.startUs));
   const typical = median(durations) || DEFAULT_WORD_DURATION_US;
   let i = 0;
   while (i < words.length) {
@@ -270,11 +327,11 @@ export function alignScript(
   }
   const report: AlignmentReport = {
     script_words: words.length,
-    recognized_words: recognized.length,
+    recognized_words: timedRecognized.length,
     matched,
     substituted,
     inserted,
-    dropped: recognized.length - usedRecognized.size,
+    dropped: timedRecognized.length - usedRecognized.size,
     match_ratio: words.length === 0 ? 0 : Math.round((matched / words.length) * 1000) / 1000,
   };
   return { words, lines, report };

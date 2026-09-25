@@ -2251,6 +2251,10 @@ export function pruneOrphanMaterials(draft: Draft): {
 export interface RemoveSegmentOptions {
   keepTrack?: boolean;
   keepMaterials?: boolean;
+  /** Close the removed time span across every track. Refuses when another
+   * segment crosses that span, because silently slicing it would change
+   * source media; remove/trim the named blocker explicitly first. */
+  ripple?: boolean;
 }
 
 export interface RemoveSegmentResult {
@@ -2263,6 +2267,7 @@ export interface RemoveSegmentResult {
   materialsByType: Record<string, { removed: number; kept: number }>;
   durationBefore: number;
   durationAfter: number;
+  rippleShifted: number;
 }
 
 /**
@@ -2279,12 +2284,47 @@ export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOp
   if (!found) throw new Error(`Segment not found: ${segId}`);
   const { track, segment, index } = found;
   const durationBefore = draft.duration;
+  const removedStart = segment.target_timerange.start;
+  const removedEnd = removedStart + segment.target_timerange.duration;
+
+  if (opts.ripple) {
+    const blockers = draft.tracks.flatMap((candidateTrack) =>
+      candidateTrack.segments.filter((candidate) => {
+        if (candidate === segment) return false;
+        const start = candidate.target_timerange.start;
+        const end = start + candidate.target_timerange.duration;
+        return start < removedEnd && end > removedStart;
+      }),
+    );
+    if (blockers.length > 0) {
+      throw new Error(
+        `Ripple delete ${removedStart}us-${removedEnd}us crosses ${blockers.length} other segment(s): ` +
+          `${blockers
+            .slice(0, 5)
+            .map((s) => s.id)
+            .join(", ")}. Remove or trim them first; nothing was changed.`,
+      );
+    }
+  }
 
   track.segments.splice(index, 1);
   let trackRemoved = false;
   if (track.segments.length === 0 && !opts.keepTrack) {
     draft.tracks = draft.tracks.filter((t) => t !== track);
     trackRemoved = true;
+  }
+
+  let rippleShifted = 0;
+  if (opts.ripple) {
+    const amount = removedEnd - removedStart;
+    for (const candidateTrack of draft.tracks) {
+      for (const candidate of candidateTrack.segments) {
+        if (candidate.target_timerange.start >= removedEnd) {
+          candidate.target_timerange.start -= amount;
+          rippleShifted++;
+        }
+      }
+    }
   }
 
   let materialsRemoved = 0;
@@ -2314,6 +2354,7 @@ export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOp
     materialsByType,
     durationBefore,
     durationAfter: maxEnd,
+    rippleShifted,
   };
 }
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capcut"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python client for capcut-cli: create and edit CapCut / JianYing (剪映) drafts from Python. JSON in, JSON out, no server."
 readme = "README.md"
 requires-python = ">=3.9"

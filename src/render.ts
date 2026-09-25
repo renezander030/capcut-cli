@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
@@ -31,6 +31,8 @@ export interface RenderOptions {
   fps?: number; // output fps override (default draft.fps or 30)
   ffmpegCmd?: string; // ffmpeg binary (default "ffmpeg")
   encoder?: string; // -c:v video encoder (default libx264; e.g. h264_videotoolbox/h264_nvenc/h264_qsv)
+  crf?: number; // constant-quality value; default 28, mutually exclusive with videoBitrate
+  videoBitrate?: string; // target video bitrate such as 4M; switches from CRF to bitrate mode
   burnCaptions?: boolean; // draw text-track segments onto the video
   softCaptions?: boolean; // mux the text-track cues as a mov_text subtitle stream (see softCaptionsFor)
   allVideoTracks?: boolean; // composite overlay video tracks
@@ -78,6 +80,15 @@ const RENDER_TIMEOUT_MS = 600_000;
  * was the one media spawn that did not.
  */
 const RENDER_MAX_BUFFER = 64 * 1024 * 1024;
+
+// Keep ordinary plans easy to inspect while moving caption-heavy graphs off
+// the command line well before Windows' practical argv ceiling.
+export const FILTER_SCRIPT_THRESHOLD = 8_192;
+const VIDEO_BITRATE = /^(?:0\.\d*[1-9]\d*|[1-9]\d*(?:\.\d+)?)[kKmM]?$/;
+
+export function filterScriptPathFor(output: string): string {
+  return `${output}.filtergraph.txt`;
+}
 
 const FFMPEG_FAILURE_HINTS: Array<{ pattern: RegExp; explain: (match: RegExpMatchArray) => string }> = [
   {
@@ -146,6 +157,9 @@ export interface RenderPlan {
   capabilities?: FfmpegCapabilities;
   /** Present only with --soft-captions and at least one cue. */
   softCaptions?: SoftCaptionsPlan;
+  /** Long graphs are supplied through a file so Windows command-line limits cannot truncate them. */
+  filterScript?: { path: string; content: string };
+  quality: { mode: "crf"; crf: number } | { mode: "bitrate"; bitrate: string };
 }
 
 export interface RenderResult extends RenderPlan {
@@ -418,6 +432,15 @@ function escapeDrawtext(s: string): string {
  * draft + options (no uuids, no clock) so it can be asserted in tests.
  */
 export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
+  if (opts.crf !== undefined && opts.videoBitrate !== undefined) {
+    throw new Error("render: crf and videoBitrate are mutually exclusive");
+  }
+  if (opts.crf !== undefined && (!Number.isInteger(opts.crf) || opts.crf < 0 || opts.crf > 51)) {
+    throw new Error("render: crf must be an integer in range 0..51");
+  }
+  if (opts.videoBitrate !== undefined && !VIDEO_BITRATE.test(opts.videoBitrate)) {
+    throw new Error("render: videoBitrate must be a positive ffmpeg rate such as 2500k or 4M");
+  }
   const scale = opts.scale && opts.scale > 0 ? opts.scale : 0.5;
   const canvas = draft.canvas_config ?? { width: 1920, height: 1080, ratio: "16:9" };
   const width = Math.max(2, Math.round((canvas.width * scale) / 2) * 2);
@@ -630,11 +653,18 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
   }
 
   const filterComplex = filterParts.join(";");
+  const filterScript =
+    filterComplex.length > FILTER_SCRIPT_THRESHOLD
+      ? { path: filterScriptPathFor(output), content: filterComplex }
+      : undefined;
+  const quality =
+    opts.videoBitrate !== undefined
+      ? ({ mode: "bitrate", bitrate: opts.videoBitrate } as const)
+      : ({ mode: "crf", crf: opts.crf ?? 28 } as const);
   const args = [
     "-y",
     ...inputArgs,
-    "-filter_complex",
-    filterComplex,
+    ...(filterScript ? ["-filter_complex_script", filterScript.path] : ["-filter_complex", filterComplex]),
     "-map",
     `[${vOut}]`,
     ...(aOut ? ["-map", `[${aOut}]`] : []),
@@ -643,8 +673,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     opts.encoder ?? "libx264",
     "-preset",
     "veryfast",
-    "-crf",
-    "28",
+    ...(quality.mode === "bitrate" ? ["-b:v", quality.bitrate] : ["-crf", String(quality.crf)]),
     "-pix_fmt",
     "yuv420p",
     ...(aOut ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
@@ -666,6 +695,8 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     overlaySegments,
     skipped,
     ...(softCaptions ? { softCaptions } : {}),
+    ...(filterScript ? { filterScript } : {}),
+    quality,
   };
 }
 
@@ -756,6 +787,20 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   // The SRT must exist before ffmpeg opens its inputs; it stays next to the
   // output afterwards (players auto-load a same-named .srt).
   if (plan.softCaptions) writeFileSync(plan.softCaptions.path, plan.softCaptions.srt, "utf-8");
+  if (plan.filterScript) {
+    try {
+      writeFileSync(plan.filterScript.path, plan.filterScript.content, { encoding: "utf-8", flag: "wx" });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        throw new Error(
+          `render: temporary filter script already exists at ${plan.filterScript.path}; ` +
+            "remove or rename that file, or choose another --out path",
+        );
+      }
+      throw error;
+    }
+  }
 
   const cmd = opts.ffmpegCmd ?? "ffmpeg";
   // --progress hands ffmpeg's stderr straight to the terminal. That is both the
@@ -777,6 +822,14 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
       `render: ffmpeg is unavailable at '${cmd}'. Install ffmpeg (\`brew install ffmpeg\` / \`apt install ffmpeg\`) ` +
         `or pass --ffmpeg-cmd <path>. (${e instanceof Error ? e.message : String(e)})`,
     );
+  } finally {
+    if (plan.filterScript) {
+      try {
+        unlinkSync(plan.filterScript.path);
+      } catch {
+        /* ignore cleanup errors; ffmpeg's result remains the primary outcome */
+      }
+    }
   }
   if (r.error) {
     // spawnSync reports its own limits via r.error, not by throwing — a tripped

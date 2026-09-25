@@ -8,13 +8,13 @@
 |---|---|:---:|---|
 | `info` | `capcut info <project>` | 否 | 项目概览与素材汇总。 |
 | `version` | `capcut version <project>` | 否 | 检测 CapCut/剪映版本、schema 标志与支持状态。 |
-| `lint` | `capcut lint <project> [options]` | 否 | 基于 schema 的检查（片段重叠、字幕行长、缺失文件、主轨道空隙、外部媒体）；退出码 0/1/2，可直接用于 CI。 |
+| `lint` | `capcut lint <project> [options]` | 否 | 基于 schema 的检查（片段重叠、字幕行长、缺失文件、主轨道空隙、外部媒体）；`--frame-grid` 可检查并修复精确帧边界；退出码 0/1/2，可直接用于 CI。 |
 | `tracks` | `capcut tracks <project>` | 否 | 列出所有轨道。 |
 | `segments` | `capcut segments <project> [--track <type>]` | 否 | 列出片段及其时间信息；可用 --track <type> 按轨道类型过滤。 |
 | `texts` | `capcut texts <project>` | 否 | 列出所有文本/字幕内容。 |
 | `set-text` | `capcut set-text <project> <id> <text>` | 是 | 修改一个文本片段的内容。 |
 | `shift` | `capcut shift <project> <id> <offset>` | 是 | 按偏移量平移单个片段的时间（如 +0.5s）。 |
-| `shift-all` | `capcut shift-all <project> <offset> [--track <type>]` | 是 | 按偏移量平移所有片段（可用 --track 限定某一类轨道）。 |
+| `shift-all` | `capcut shift-all <project> <offset> [--track <type>] [--from <time>]` | 是 | 按偏移量平移片段；可用 --track 限定轨道类型，并用 --from 从安全边界开始。 |
 | `speed` | `capcut speed <project> <id> <multiplier>` | 是 | 设置片段的播放速度。 |
 | `volume` | `capcut volume <project> <id> <level>` | 是 | 设置片段音量（0.0-1.0）。 |
 | `trim` | `capcut trim <project> <id> <start> <duration>` | 是 | 把片段裁剪到指定的起点/时长窗口。 |
@@ -22,7 +22,7 @@
 | `export-srt` | `capcut export-srt <project> [options]` | 否 | 把字幕导出为 SRT 或 WebVTT（输出到 stdout），按行或按词。 |
 | `export-ass` | `capcut export-ass <project> [--karaoke] [--out <file.ass>]` | 否 | 把带样式的 ASS 字幕导出到 stdout 或 --out，支持按区间的样式覆盖；--karaoke 输出逐词时间。 |
 | `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | 否 | 把视频/音频轨道导出为 OpenTimelineIO JSON，交接给 NLE（DaVinci Resolve 原生导入 .otio）。 |
-| `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | 是 | 导入 OpenTimelineIO JSON（export-timeline 输出的 schema 集合），生成新草稿（--out）或追加到已有草稿（--into）；不支持的 OTIO 特性一律报告，绝不静默丢弃。 |
+| `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | 是 | 导入 OpenTimelineIO JSON，把嵌套的 Timeline/Stack/Track 展平，生成新草稿（--out）或追加到已有草稿（--into）；不支持的 OTIO 特性一律报告，绝不静默丢弃。 |
 | `materials` | `capcut materials <project> [--type <type>]` | 否 | 列出素材类型与数量；用 --type 过滤。 |
 | `segment` | `capcut segment <project> <id>` | 否 | 单个片段及其素材的完整详情。 |
 | `material` | `capcut material <project> <id>` | 否 | 单个素材的完整详情。 |
@@ -33,12 +33,13 @@
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | 是 | 读取或设置视频/图片片段的源素材裁剪（--ratio 预设、--rect x,y,w,h 或 --reset）。 |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | 是 | 把一段时间范围提取为一个独立的新草稿。 |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | 是 | 在相同的时间线位置，把片段复制到源轨道上方的轨道。 |
-| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials]` | 是 | 删除片段、被它清空的轨道，以及由此孤立的素材。 |
+| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]` | 是 | 删除片段、被它清空的轨道，以及由此孤立的素材；--ripple 会安全地闭合所有轨道上的空档。 |
 | `keyframe` | `capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] \| --batch` | 是 | 添加关键帧（位置/缩放/旋转/透明度/音量）；单个或 --batch 批量。 |
 | `transition` | `capcut transition <project> <id> <slug> [--duration <time>]` | 是 | 在片段之间添加转场。 |
 | `mask` | `capcut mask <project> <id> <slug> [options] \| --off` | 是 | 应用蒙版（线性/圆形/爱心/……），带几何参数，或用 --off 移除。 |
 | `bg-blur` | `capcut bg-blur <project> <id> <level> \| --off` | 是 | 设置背景模糊等级 1-4，或 --off 关闭。 |
 | `text-style` | `capcut text-style <project> <id> [options]` | 是 | 设置文本样式（透明度/阴影/描边/背景框）。 |
+| `restyle` | `capcut restyle <project> --preset <preset.json> [--track-name <name>] [options]` | 是 | 一次将文本样式预设原子化应用到整条字幕轨道或所有文本片段。 |
 | `text-anim` | `capcut text-anim <project> <id> [options]` | 是 | 添加文字入场/出场/组合动画。 |
 | `image-anim` | `capcut image-anim <project> <id> [options]` | 是 | 为图片/视频片段添加入场/出场/组合动画。 |
 | `add-sticker` | `capcut add-sticker <project> <resource-id> <start> <duration> [options]` | 是 | 在独立轨道上添加贴纸并设置变换。 |
@@ -56,7 +57,7 @@
 | `import-srt` | `capcut import-srt <project> <srt-or-> [options]` | 是 | 导入 SRT 文件/stdin，每条字幕生成一个文本片段。 |
 | `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | 是 | 把 ASS/SSA 字幕文件导入为文本片段，并把内联覆盖标签保留为按区间的样式。 |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | 是 | 为文本片段应用字节级精确的多样式区间。 |
-| `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | 是 | 用 whisper 转写音频，生成真正的字幕轨道片段。 |
+| `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | 是 | 用 whisper 转写音频，生成真正的字幕轨道片段；支持音轨选择、脚本匹配门槛和逐词显现。 |
 | `translate` | `capcut translate <project> --to <language> --out <path> [options]` | 是 | 通过 Anthropic API 把草稿克隆为另一种语言。 |
 | `migrate` | `capcut migrate <project> --from <version> --to <version>` | 是 | 在版本边界之间应用已知的 schema 迁移。 |
 | `add-sfx` | `capcut add-sfx <project> <slug> <start> <duration> [options]` | 是 | 在专用轨道上添加音效。 |
@@ -86,6 +87,6 @@
 | `init` | `capcut init <name> [--template <dir>] [--drafts <dir>]` | 是 | 从模板创建一个新的空草稿。 |
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | 是 | 一条命令生成第一个草稿：创建 + 添加一个素材 + lint + 打印“在 CapCut 中打开”的步骤。 |
 | `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | 是 | 从声明式 JSON spec 构建草稿（describe 的逆操作）。 |
-| `render` | `capcut render <project> [--out <preview.mp4>] [options]` | 否 | 渲染低清 ffmpeg 代理预览（裁剪+变速+音频，--burn-captions）；不是 CapCut 的最终渲染。 |
+| `render` | `capcut render <project> [--out <preview.mp4>] [options]` | 否 | 渲染低清 ffmpeg 代理预览（裁剪+变速+音频，--burn-captions）；支持 --crf / --video-bitrate，大型滤镜图自动走脚本文件；不是 CapCut 的最终渲染。 |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | 否 | 检测视频中的场景切换切点（ffmpeg scene 滤镜）；输出切点与片段列表，供 compile/cut 使用。 |
 | `detect-silence` | `capcut detect-silence <media> [options]` | 否 | 检测媒体文件中的静音区间（ffmpeg silencedetect）；输出静音与保留片段列表，供 compile/cut 使用。 |

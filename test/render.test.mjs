@@ -167,6 +167,51 @@ describe("render — plan (buildRenderPlan, pure)", () => {
     assert.match(on.filterComplex, /drawtext=text='Hook line'/);
   });
 
+  it("supports CRF or target-bitrate quality modes", () => {
+    const s = setup();
+    after(s.cleanup);
+    const crf = buildRenderPlan(buildDraft(s.dir), { out: join(s.dir, "crf.mp4"), crf: 18 });
+    assert.deepEqual(crf.quality, { mode: "crf", crf: 18 });
+    assert.deepEqual(crf.args.slice(crf.args.indexOf("-crf"), crf.args.indexOf("-crf") + 2), ["-crf", "18"]);
+    assert.ok(!crf.args.includes("-b:v"));
+
+    const bitrate = buildRenderPlan(buildDraft(s.dir), { out: join(s.dir, "rate.mp4"), videoBitrate: "4M" });
+    assert.deepEqual(bitrate.quality, { mode: "bitrate", bitrate: "4M" });
+    assert.deepEqual(bitrate.args.slice(bitrate.args.indexOf("-b:v"), bitrate.args.indexOf("-b:v") + 2), [
+      "-b:v",
+      "4M",
+    ]);
+    assert.ok(!bitrate.args.includes("-crf"));
+    assert.throws(
+      () => buildRenderPlan(buildDraft(s.dir), { out: join(s.dir, "bad.mp4"), crf: 18, videoBitrate: "4M" }),
+      /mutually exclusive/,
+    );
+    assert.throws(() => buildRenderPlan(buildDraft(s.dir), { out: join(s.dir, "bad.mp4"), crf: 52 }), /0\.\.51/);
+    assert.throws(
+      () => buildRenderPlan(buildDraft(s.dir), { out: join(s.dir, "bad.mp4"), videoBitrate: "fast" }),
+      /positive ffmpeg rate/,
+    );
+  });
+
+  it("moves a caption-heavy filter graph into a script file argument", () => {
+    const s = setup();
+    after(s.cleanup);
+    const draft = buildDraft(s.dir);
+    const seed = draft.tracks.find((track) => track.type === "text").segments[0];
+    const textTrack = draft.tracks.find((track) => track.type === "text");
+    textTrack.segments = Array.from({ length: 120 }, (_, index) => ({
+      ...seed,
+      id: `caption-${index}`,
+      target_timerange: { start: index * 40_000, duration: 35_000 },
+    }));
+    const plan = buildRenderPlan(draft, { out: join(s.dir, "long.mp4"), burnCaptions: true });
+    assert.ok(plan.filterComplex.length > 8_192);
+    assert.equal(plan.filterScript.content, plan.filterComplex);
+    assert.ok(plan.args.includes("-filter_complex_script"));
+    assert.ok(!plan.args.includes("-filter_complex"));
+    assert.ok(!plan.args.includes(plan.filterComplex), "the long graph must not ride in argv");
+  });
+
   // Regression: `text_color` went into `fontcolor=` raw, so a draft could close
   // the option with a `:` and append drawtext options of its own — `textfile=`
   // reads a local file straight into the burned-in captions.
