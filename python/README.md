@@ -58,6 +58,12 @@ for r in results:
 
 新建的草稿是明文，据报告剪映 11.4（macOS）能打开并就地升级，其他版本未验证；已有的加密草稿本 CLI 不读取。`capcut.doctor()` 会报告环境，`capcut.run("decrypt", path)` 会报告某个草稿的加密状态；来龙去脉见 [jianying-encryption.zh-CN.md](https://github.com/renezander030/capcut-cli/blob/master/docs/jianying-encryption.zh-CN.md)。
 
+## 反馈与商业合作
+
+- 在用 Python 驱动 CapCut / 剪映？到 [这个讨论](https://github.com/renezander030/capcut-cli/discussions/131) 说说你在做什么，这决定 Python 客户端下一步做什么。
+- 与赞助无关：如果你正在把 capcut 集成进自己的产品，或者需要它实现目前还不支持的功能，我会承接少量集成项目。请发邮件至 rene@renezander.com，写明你在做什么。
+- 想支持这个项目：[成为赞助者](https://github.com/sponsors/renezander030)。
+
 ---
 
 ## English
@@ -113,6 +119,12 @@ for r in results:
 ```
 
 A failed job is a result with `ok: false`, not an exception.
+
+### Feedback and commercial work
+
+- Driving CapCut or JianYing from Python? Tell us what you are building in [this discussion](https://github.com/renezander030/capcut-cli/discussions/131); it decides what the Python client gets next.
+- Separate from sponsorship: if you are building capcut into a product, or you need it to do something it does not do yet, I take on a small number of integration engagements. Write to rene@renezander.com and say what you are building.
+- To support the project: [become a sponsor](https://github.com/sponsors/renezander030).
 
 ### Development
 
