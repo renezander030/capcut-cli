@@ -7,9 +7,10 @@
 // metadata (duration, dimensions). Pure JSON + file copy, like `add-video`.
 
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { type Draft, findMaterialGlobal, findSegment } from "./draft.js";
 import { probeMedia } from "./probe.js";
+import { draftProjectDir } from "./store.js";
 
 export interface ReplaceMediaOptions {
   segmentId: string;
@@ -68,7 +69,7 @@ export function replaceMedia(draft: Draft, filePath: string, opts: ReplaceMediaO
 
   // Copy the replacement into the draft's assets dir, mirroring addVideo/addAudio.
   const kind = assetKind(type);
-  const draftDir = dirname(filePath);
+  const draftDir = draftProjectDir(filePath);
   const filename = basename(opts.newPath) || (kind === "audio" ? "audio" : "media");
   const assetsDir = resolve(draftDir, "assets", kind);
   mkdirSync(assetsDir, { recursive: true });

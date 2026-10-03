@@ -726,7 +726,8 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "boolean",
       "Scan the finished bundle (SANITIZE_REPORT.json and README included) for residual home paths, emails, " +
         "device ids and the account name, reporting file:line per finding and exiting non-zero on any. " +
-        "With only a bundle directory as the argument, re-checks an existing bundle without rebuilding.",
+        "New bundles are checked automatically. With only a bundle directory as the argument, " +
+        "re-checks an existing bundle without rebuilding.",
     ),
   ],
   "sync-timelines": [
@@ -734,7 +735,8 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "apply",
       ["--apply"],
       "boolean",
-      "Rewrite only the drifted mirror files from draft_content.json (default: print the plan only).",
+      "Rewrite only the drifted mirrors from the canonical timeline (default: print the plan only). " +
+        "On the evidenced Windows 8.7.0 active layout, the selected nested document is canonical.",
     ),
     option(
       "nested",
@@ -742,7 +744,8 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "boolean",
       "Also reconcile the nested Timelines/<id>/ documents (draft_info.json, draft_content.json, template-2.tmp), " +
         "each keeping its own GUID — the workaround verified on CapCut Mac 9.2.8 in issue #50, as an explicit opt-in. " +
-        "Timelines/project.json is never touched.",
+        "On Windows 8.7.0 active layouts only the selected timeline and root mirrors are reconciled, " +
+        "even with this flag. Timelines/project.json is never touched.",
     ),
   ],
   "replace-media": [

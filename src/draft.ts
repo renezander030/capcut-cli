@@ -18,6 +18,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { appVersionEvidence, formatAppVersionDriftWarning, trackAppVersion } from "./app-versions.js";
 import { stripBom } from "./bom.js";
 import {
+  assertActiveTimelineUnchanged,
   type DraftCandidate,
   type DraftStore,
   discoverDraftStore,
@@ -409,6 +410,7 @@ export function saveDraft(
     process.stderr.write(`WARNING: ${nestedTimelinesWriteWarning(store.version)}\n`);
   }
 
+  assertActiveTimelineUnchanged(store);
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);
 
   sortTracks(draft);

@@ -4,6 +4,7 @@ import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
 import { renderSrt } from "./srt.js";
+import { draftProjectDir } from "./store.js";
 
 /**
  * Headless ffmpeg proxy renderer.
@@ -701,7 +702,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
 }
 
 export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions): RenderResult {
-  const out = opts.out ?? join(dirname(filePath), "preview.mp4");
+  const out = opts.out ?? join(draftProjectDir(filePath), "preview.mp4");
   const capabilities = probeFfmpegCapabilities(opts.ffmpegCmd ?? "ffmpeg");
   if (!capabilities.available) {
     throw new Error(

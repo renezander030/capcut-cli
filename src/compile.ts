@@ -20,9 +20,10 @@ import {
   applyTemplate,
   copyTextStyle,
   initDraft,
+  resolveCanvas,
   setAudioFade,
 } from "./factory.js";
-import { probeMedia } from "./probe.js";
+import { type MediaProbe, probeMedia } from "./probe.js";
 import { parseSrt } from "./srt.js";
 
 /**
@@ -204,6 +205,7 @@ export function validateSpec(spec: unknown): asserts spec is CompileSpec {
   if (!spec || typeof spec !== "object") throw new Error("compile: spec must be a JSON object");
   const s = spec as Record<string, unknown>;
   validateDraftName(s.name);
+  resolveCanvas(s as unknown as CompileSpec);
   if (!Array.isArray(s.tracks) || s.tracks.length === 0) {
     throw new Error("compile: spec.tracks must be a non-empty array");
   }
@@ -226,9 +228,15 @@ export function validateSpec(spec: unknown): asserts spec is CompileSpec {
         throw new Error(`compile: ${where}.ref must be a non-empty string`);
       }
       for (const field of ["speed", "opacity", "rotation", "scale", "sourceStart"] as const) {
-        if (item[field] !== undefined && typeof item[field] !== "number") {
+        if (item[field] !== undefined && (typeof item[field] !== "number" || !Number.isFinite(item[field]))) {
           throw new Error(`compile: ${where}.${field} must be a number`);
         }
+      }
+      if (typeof item.sourceStart === "number" && item.sourceStart < 0) {
+        throw new Error(`compile: ${where}.sourceStart must be >= 0`);
+      }
+      if (typeof item.speed === "number" && item.speed <= 0) {
+        throw new Error(`compile: ${where}.speed must be > 0`);
       }
       if (track.type === "text") {
         if (typeof item.text !== "string" || item.text.length === 0) {
@@ -365,7 +373,33 @@ export function substitutePlaceholders<T>(value: T, row: Record<string, unknown>
   return value;
 }
 
+function itemTiming(item: CompileItem, media: MediaProbe | null): { duration: number; sourceDuration: number } {
+  const photo = item.type === "photo" || /\.(?:jpg|jpeg|png|webp|bmp|tiff)$/i.test(item.path ?? "");
+  const sourceStart = Math.round((item.sourceStart ?? 0) * US);
+  const speed = item.speed ?? 1;
+  const duration =
+    item.duration !== undefined
+      ? Math.round(item.duration * US)
+      : Math.round(((media?.durationUs ?? 0) - sourceStart) / speed);
+  if (duration <= 0) {
+    throw new Error(
+      `compile: duration omitted for ${item.path}, but ffprobe could not determine it. Pass duration explicitly or install ffprobe.`,
+    );
+  }
+  const sourceEnd = sourceStart + Math.round(duration * speed);
+  if (!photo && media?.durationUs && sourceEnd > media.durationUs + 10_000) {
+    throw new Error(
+      `compile: source range for ${item.path} exceeds source duration (${sourceEnd} > ${media.durationUs}us)`,
+    );
+  }
+  // Without probe evidence, keep the entire requested source range addressable.
+  // This is a lower bound, not a claim about the actual file's duration.
+  return { duration, sourceDuration: photo ? duration : (media?.durationUs ?? sourceEnd) };
+}
+
 export function planCompile(spec: CompileSpec, specDir: string): CompilePlan {
+  validateSpec(spec);
+  const canvas = resolveCanvas(spec);
   const media: string[] = [];
   const refs: string[] = [];
   for (const track of spec.tracks) {
@@ -374,9 +408,7 @@ export function planCompile(spec: CompileSpec, specDir: string): CompilePlan {
       if (track.type === "text") continue;
       const abs = resolvePath(item.path as string, specDir);
       if (!existsSync(abs)) throw new Error(`compile: media file not found: ${item.path} (resolved: ${abs})`);
-      if (item.duration === undefined && !probeMedia(abs)?.durationUs) {
-        throw new Error(`compile: duration omitted for ${item.path}, but ffprobe could not determine it`);
-      }
+      itemTiming(item, probeMedia(abs));
       media.push(abs);
     }
   }
@@ -391,10 +423,10 @@ export function planCompile(spec: CompileSpec, specDir: string): CompilePlan {
     ok: true,
     name: spec.name ?? "compiled-draft",
     canvas: {
-      width: spec.width ?? 1920,
-      height: spec.height ?? 1080,
+      width: canvas?.width ?? 1920,
+      height: canvas?.height ?? 1080,
       fps: spec.fps ?? 30,
-      ratio: spec.ratio ?? "original",
+      ratio: canvas?.ratio ?? "original",
     },
     tracks: spec.tracks.length,
     items: spec.tracks.reduce((sum, track) => sum + track.items.length, 0),
@@ -422,19 +454,15 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
     templateDir: opts.templateDir,
     draftsDir: dirname(opts.outDir),
     seed: opts.seed,
+    canvas: resolveCanvas(spec) ?? undefined,
   });
   const { filePath } = init;
   if (init.template.warning) warnings.push(init.template.warning);
   const { draft } = loadDraft(filePath);
 
   // Canvas + fps from the spec.
-  if (spec.width && spec.height) {
-    draft.canvas_config = {
-      width: spec.width,
-      height: spec.height,
-      ratio: spec.ratio ?? draft.canvas_config?.ratio ?? "original",
-    };
-  }
+  const canvas = resolveCanvas(spec);
+  if (canvas) draft.canvas_config = canvas;
   if (spec.fps) draft.fps = spec.fps;
   draft.name = displayName;
 
@@ -447,28 +475,16 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
       const start = Math.round(item.start * US);
       const sourcePath = track.type === "text" ? null : resolvePath(item.path as string, opts.specDir);
       const media = sourcePath ? probeMedia(sourcePath) : null;
-      const duration = item.duration !== undefined ? Math.round(item.duration * US) : (media?.durationUs ?? 0);
-      if (track.type !== "text" && duration <= 0) {
-        throw new Error(
-          `compile: duration omitted for ${item.path}, but ffprobe could not determine it. ` +
-            "Pass duration explicitly or install ffprobe.",
-        );
-      }
-      if (
-        item.duration !== undefined &&
-        media?.durationUs &&
-        item.type !== "photo" &&
-        duration > media.durationUs + 10_000
-      ) {
-        throw new Error(
-          `compile: duration for ${item.path} exceeds source duration (${duration} > ${media.durationUs}us)`,
-        );
-      }
+      const { duration, sourceDuration } =
+        track.type === "text"
+          ? { duration: Math.round((item.duration as number) * US), sourceDuration: 0 }
+          : itemTiming(item, media);
       if (track.type === "video") {
         const result = addVideo(draft, filePath, {
           path: sourcePath as string,
           start,
           duration,
+          sourceDuration,
           type: item.type,
           width: item.width ?? media?.width ?? undefined,
           height: item.height ?? media?.height ?? undefined,
@@ -482,6 +498,7 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
           path: sourcePath as string,
           start,
           duration,
+          sourceDuration,
           volume: item.volume,
           trackName: track.name,
         });

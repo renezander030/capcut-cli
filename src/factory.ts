@@ -18,7 +18,7 @@ import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { PHOTO_META_DURATION_US, registerMediumInSidecar } from "./materials-register.js";
-import { isManagedDraftPath, parseCandidate } from "./store.js";
+import { draftProjectDir, isManagedDraftPath, parseCandidate } from "./store.js";
 import { storedTextLength } from "./text-offsets.js";
 import { atLeast, versionTuple } from "./version.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
@@ -1889,6 +1889,7 @@ export interface AddAudioOptions {
   path: string; // absolute path to audio file
   start: number; // microseconds
   duration: number; // microseconds (0 = use file duration)
+  sourceDuration?: number; // full media duration, independent of the segment
   volume?: number; // 0.0-1.0, default 1.0
   trackName?: string; // default "audio"
   // Placeholder clip (import-timeline: MissingReference / media not on disk):
@@ -1909,7 +1910,7 @@ export function addAudio(
 
   // Copy file into draft assets directory (collision-safe). Placeholder clips
   // reference their (possibly empty/broken) path verbatim — nothing to copy.
-  const draftDir = dirname(filePath);
+  const draftDir = draftProjectDir(filePath);
   const assetsDir = resolve(draftDir, "assets", "audio");
   const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
   // Use the local assets path — CapCut rewrites to placeholder on open
@@ -1932,7 +1933,7 @@ export function addAudio(
     id: matId,
     path: localPath,
     name: filename,
-    duration: opts.duration,
+    duration: opts.sourceDuration ?? opts.duration,
     type: "extract_music",
     category_id: "",
     category_name: "local",
@@ -1964,7 +1965,7 @@ export function addAudio(
         path: localPath,
         name: filename,
         kind: "music",
-        durationUs: opts.duration,
+        durationUs: opts.sourceDuration ?? opts.duration,
         width: 0,
         height: 0,
       });
@@ -1991,6 +1992,7 @@ export interface AddVideoOptions {
   path: string; // absolute path to video/image file
   start: number; // microseconds
   duration: number; // microseconds
+  sourceDuration?: number; // full media duration, independent of the segment
   type?: "video" | "photo"; // default: inferred from extension
   width?: number; // default 1920
   height?: number; // default 1080
@@ -2018,7 +2020,7 @@ export function addVideo(
 
   // Copy file into draft assets directory (collision-safe). Placeholder clips
   // reference their (possibly empty/broken) path verbatim — nothing to copy.
-  const draftDir = dirname(filePath);
+  const draftDir = draftProjectDir(filePath);
   const assetsDir = resolve(draftDir, "assets", "video");
   const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "media");
   // Use the local assets path — CapCut rewrites to placeholder on open
@@ -2042,7 +2044,7 @@ export function addVideo(
     path: localPath,
     material_name: filename,
     type: materialType,
-    duration: opts.duration,
+    duration: opts.sourceDuration ?? opts.duration,
     width,
     height,
     category_id: "",
@@ -2102,7 +2104,7 @@ export function addVideo(
         path: localPath,
         name: filename,
         kind: materialType === "photo" ? "photo" : "video",
-        durationUs: materialType === "photo" ? PHOTO_META_DURATION_US : opts.duration,
+        durationUs: materialType === "photo" ? PHOTO_META_DURATION_US : (opts.sourceDuration ?? opts.duration),
         width,
         height,
       });

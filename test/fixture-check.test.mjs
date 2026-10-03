@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -22,6 +22,41 @@ function project() {
 }
 
 describe("fixture --check (redaction verification)", () => {
+  it("redacts JSON-escaped Windows paths and embedded JSON without --check (#134)", () => {
+    const p = project();
+    after(p.cleanup);
+    const out = join(p.dir, "bundle");
+    const privatePath = "C:\\Users\\Francesco Rossi\\AppData\\Local\\CapCut";
+    writeFileSync(join(p.dir, "draft_meta_info.json"), JSON.stringify({ draft_root_path: privatePath }));
+    const path = join(p.dir, "draft_content.json");
+    const draft = JSON.parse(readFileSync(path, "utf-8"));
+    draft.embedded = JSON.stringify({ path: privatePath });
+    draft.extra = "C:/Users/Francesco Rossi/clip.mp4";
+    writeFileSync(path, JSON.stringify(draft));
+    const r = spawnCli(["fixture", p.dir, "--out", out]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.redaction_check.ok, true);
+    for (const name of ["draft_content.json", "draft_meta_info.json", "SANITIZE_REPORT.json"]) {
+      assert.doesNotMatch(readFileSync(join(out, name), "utf-8"), /Francesco Rossi/);
+    }
+    const bundled = JSON.parse(readFileSync(join(out, "draft_content.json"), "utf-8"));
+    assert.equal(JSON.parse(bundled.embedded).path, "C:\\Users\\USER\\AppData\\Local\\CapCut");
+  });
+
+  it("fails bundle creation automatically when a recognizable username survives", () => {
+    const p = project();
+    after(p.cleanup);
+    const out = join(p.dir, "bundle");
+    // Existing files in a reused output directory are part of the bundle too.
+    assert.equal(spawnCli(["fixture", p.dir, "--out", out]).status, 0);
+    writeFileSync(join(out, "unrecognized.json"), JSON.stringify({ a: "/home/USER/ok", b: "C:\\Users\\É\\secret" }));
+    const r = spawnCli(["fixture", p.dir, "--out", out]);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.json.ok, false);
+    assert.equal(JSON.parse(readFileSync(join(out, "SANITIZE_REPORT.json"), "utf-8")).ok, false);
+    assert.ok(r.json.redaction_check.findings.some((finding) => finding.file === "unrecognized.json"));
+    assert.doesNotMatch(r.stderr, /É/);
+  });
   it("builds a bundle and passes the check when nothing private survives", () => {
     const p = project();
     after(p.cleanup);

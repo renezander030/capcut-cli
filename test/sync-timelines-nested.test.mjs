@@ -13,7 +13,9 @@ function canonicalDraft() {
     duration: 1_000_000,
     fps: 30,
     canvas_config: { width: 1080, height: 1920, ratio: "9:16" },
-    platform: { app_source: "cc", app_version: "8.7.0", os: "windows" },
+    // Preserve the opt-in repair contract on an unverified build. Windows
+    // 8.7.0 now selects the active document (covered in active-timeline.test).
+    platform: { app_source: "cc", app_version: "8.7.1", os: "windows" },
     tracks: [{ id: "T1", type: "text", name: "text", attribute: 0, segments: [] }],
     materials: {
       videos: [],

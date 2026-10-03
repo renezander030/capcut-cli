@@ -30,7 +30,7 @@ interface Redactor {
 // Applied to the raw file text so it works regardless of envelope shape
 // (root JSON, nested object, or the string-JSON used by template-2.tmp).
 const REDACTORS: Redactor[] = [
-  { kind: "windows_user", pattern: /([A-Za-z]:\\Users\\)[^\\/"<>:|?*]+/g, replace: "$1USER" },
+  { kind: "windows_user", pattern: /([A-Za-z]:\\+Users\\+)[^\\/"<>:|?*]+/g, replace: "$1USER" },
   { kind: "windows_user_fwd", pattern: /([A-Za-z]:\/Users\/)[^/"<>:|?*]+/g, replace: "$1USER" },
   { kind: "macos_user", pattern: /(\/Users\/)[^/"]+/g, replace: "$1USER" },
   { kind: "linux_user", pattern: /(\/home\/)[^/"]+/g, replace: "$1USER" },
@@ -68,6 +68,7 @@ export interface SanitizeReport {
   media_excluded: boolean;
   mask_keyframe_evidence: MaskKeyframeSummary;
   notes: string[];
+  redaction_check: RedactionCheck;
 }
 
 function redact(raw: string, tally: Record<string, number>): { text: string; count: number } {
@@ -440,7 +441,7 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
   const { text: safeSourceDir } = redact(store.projectDir, tally);
   const { text: safeOutDir } = redact(out, tally);
 
-  const sanitize: SanitizeReport = {
+  const sanitize: Omit<SanitizeReport, "redaction_check"> = {
     ok: true,
     source_dir: safeSourceDir,
     out_dir: safeOutDir,
@@ -471,7 +472,16 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
     ],
   };
   writeFileSync(join(out, "SANITIZE_REPORT.json"), `${JSON.stringify(sanitize, null, 2)}\n`, "utf-8");
-  return sanitize;
+  // Check the finished bundle, including generated reports. Never advertise
+  // success based only on the number of substitutions made by the redactors.
+  const check = verifyBundleRedaction(out);
+  const checked: SanitizeReport = {
+    ...sanitize,
+    ok: check.ok,
+    redaction_check: { ...check, bundle_dir: safeOutDir },
+  };
+  writeFileSync(join(out, "SANITIZE_REPORT.json"), `${JSON.stringify(checked, null, 2)}\n`, "utf-8");
+  return checked;
 }
 
 // --- Nested-Timelines evidence (issue #50) ----------------------------------
@@ -621,7 +631,11 @@ export function buildNestedTimelinesEvidence(input: string): NestedTimelinesEvid
     }
   }
 
-  const root = store.canonical;
+  const root = store.activeTimeline
+    ? (store.candidates.find((candidate) => candidate.name === "template-2.tmp" && candidate.parseable) ??
+      store.candidates.find((candidate) => candidate.name === "draft_content.json" && candidate.parseable) ??
+      store.canonical)
+    : store.canonical;
   const comparisons: NestedRootComparison[] = [];
   for (const rel of store.nestedTimelines) {
     if (!/^Timelines\/[^/]+\/draft_(?:info|content)\.json$/.test(rel)) continue;
@@ -721,7 +735,7 @@ const CHECK_ALLOWED_EMAIL = "redacted@example.com";
 // C:\Users), keeping the path shape — a bundle built from a home-dir project
 // legitimately contains those placeholder paths, and flagging them would fail
 // every correctly redacted bundle.
-const CHECK_HOME_PATH = /(?:\/Users\/|\/home\/|[A-Za-z]:\\+Users\\+)([A-Za-z0-9._-]{2,})/;
+const CHECK_HOME_PATH = /(?:\/Users\/|\/home\/|[A-Za-z]:\\+Users\\+)([^\\/"<>:|?*\r\n]+)/g;
 const CHECK_HOME_PLACEHOLDER = "USER";
 const CHECK_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 // A device key whose value is a non-empty string other than the redactor's
@@ -776,8 +790,8 @@ export function verifyBundleRedaction(bundleDir: string): RedactionCheck {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const home = line.match(CHECK_HOME_PATH);
-      if (home && home[1] !== CHECK_HOME_PLACEHOLDER) {
+      const homes = [...line.matchAll(CHECK_HOME_PATH)];
+      if (homes.some((home) => home[1] !== CHECK_HOME_PLACEHOLDER)) {
         findings.push({ file: rel, line: i + 1, kind: "home-path" });
       } else if (usernameRe?.test(line)) {
         findings.push({ file: rel, line: i + 1, kind: "username" });

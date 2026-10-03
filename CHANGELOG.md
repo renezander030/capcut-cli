@@ -4,6 +4,12 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- `fixture` redacts JSON-escaped Windows home paths, including paths inside JSON strings (#134). Every new bundle automatically runs the existing residual-value check; the CLI exits nonzero and `SANITIZE_REPORT.json` records failure if a recognizable leak remains. `fixture <bundle> --check` still verifies an existing bundle.
+- `compile` resolves ratio-only and explicit-dimension canvases through the same resolver as `init` and `quickstart`, including `--check`. Video/audio material and registration durations use the full probed source duration while segments retain their requested durations and in-points. Source ranges, including speed, are validated before any draft is created (#133).
+- On the fixture-backed CapCut 8.7.0 Windows layout, reads follow the validated `Timelines/project.json` active pointer. Normal writes synchronize that document, its readable mirrors, and the readable root mirrors through the transactional write path, preserving document IDs and other timelines. `sync-timelines` uses active → root on this layout, including with `--nested`; existing divergent root edits remain visible in its plan and newer-mirror gate. Assets and metadata remain at the project root. Other versions/OSes keep their prior selection behavior; a patched app round-trip remains pending (#50).
+
 ## [0.26.0] — 2026-09-25
 
 ### Added

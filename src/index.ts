@@ -59,9 +59,12 @@ import type { LintOptions } from "./lint.js";
 import type { TextStylePreset } from "./preset.js";
 import type { SegmentCue } from "./srt.js";
 import {
+  ACTIVE_TIMELINE_WINDOWS_ACTION,
+  assertActiveTimelineUnchanged,
   defaultDraftsDir,
   diagnoseDraftStore,
   discoverDraftStore,
+  draftProjectDir,
   editorProcesses,
   NESTED_TIMELINES_MODERN_ACTION,
   nestedTimelinesAction,
@@ -2333,7 +2336,7 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
     draft.fps = plan.rate;
   } else {
     ({ draft, filePath } = loadDraft(flags.into as string));
-    draftPath = path.dirname(filePath);
+    draftPath = draftProjectDir(filePath);
   }
 
   const applied = await applyImportPlan(draft, filePath, plan);
@@ -2682,7 +2685,7 @@ async function cmdTts(draft: Draft, filePath: string, positional: string[], flag
   const durationStr = positional[3];
   // Synthesize straight into the dir addAudio copies into (like the Wikimedia
   // fetch path) so its copyAssetDeduped becomes a no-op on the same file.
-  const assetsDir = path.resolve(path.dirname(filePath), "assets", "audio");
+  const assetsDir = path.resolve(draftProjectDir(filePath), "assets", "audio");
   const outPath = collisionSafeOutPath(assetsDir);
   const synthesis = synthesizeSpeech(text, flags.ttsCmd, outPath);
   const media = flags.noProbe ? null : probeMedia(outPath, flags.ffprobeCmd);
@@ -3771,7 +3774,8 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   // discarded by the app — name the layout alongside the write-guard notes.
   // On >= 8.7 storage the layout value stays content-/info-primary by design,
   // so the same question needs the claim-free note instead of silence.
-  if (store.layout === "timelines-nested") v.support.notes.push(nestedTimelinesAction(store.version));
+  if (store.activeTimeline) v.support.notes.push(ACTIVE_TIMELINE_WINDOWS_ACTION);
+  else if (store.layout === "timelines-nested") v.support.notes.push(nestedTimelinesAction(store.version));
   else if (store.nestedTimelines.length > 0) v.support.notes.push(NESTED_TIMELINES_MODERN_ACTION);
   if (flags.human) {
     console.log(`App:          ${v.app}${v.app_source !== "unknown" ? ` (${v.app_source})` : ""}`);
@@ -3825,7 +3829,7 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     checkLocalPaths: flags.noCheckPaths ? false : DEFAULT_LINT_OPTIONS.checkLocalPaths,
     probeMedia: flags.noProbe ? false : DEFAULT_LINT_OPTIONS.probeMedia,
     ffprobeCmd: flags.ffprobeCmd,
-    draftDir: path.dirname(path.resolve(filePath)),
+    draftDir: draftProjectDir(filePath),
     dryRun: isDryRun(),
     frameGrid: flags.frameGrid,
   };
@@ -3846,7 +3850,7 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
       d.last_modified_platform === undefined;
     if (markerless) {
       const { isManagedDraftPath } = await import("./store.js");
-      const storeDir = path.dirname(path.dirname(path.resolve(filePath)));
+      const storeDir = path.dirname(draftProjectDir(filePath));
       const inStore =
         existsSync(path.join(storeDir, "root_meta_info.json")) || isManagedDraftPath(path.resolve(filePath));
       if (inStore) {
@@ -3854,7 +3858,7 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
         // The linted draft is no evidence about its own store: excluded, so a
         // bundled-template draft alone in a JianYing store is not its own
         // "readable 6.5.0 project".
-        const scan = scanStore(storeDir, { exclude: path.dirname(path.resolve(filePath)) });
+        const scan = scanStore(storeDir, { exclude: draftProjectDir(filePath) });
         opts.storeAppVersion = scan.newestVersion;
         opts.storeEncryptedProjects = scan.store.encrypted;
       }
@@ -4030,7 +4034,7 @@ async function cmdMigrate(draft: Draft, filePath: string, flags: Flags): Promise
   // the way init's seeding does.
   if (flags.like !== undefined || flags.fromStore) {
     if (flags.like !== undefined && flags.fromStore) die("--like and --from-store are mutually exclusive.");
-    const projectDir = path.dirname(path.resolve(filePath));
+    const projectDir = draftProjectDir(filePath);
     let donorPath: string;
     if (flags.like !== undefined) {
       donorPath = path.resolve(flags.like);
@@ -4587,10 +4591,8 @@ async function cmdRename(positional: string[], flags: Flags): Promise<number> {
 // 0 ok, 1 via die(), 2 when a mirror exists that the CLI cannot reconcile.
 function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number {
   if (!projectPath) die("Usage: capcut sync-timelines <project-dir> [--nested] [--apply] [--force-write]");
-  const { plan, canonicalDraft, canonicalCandidate, driftedCandidates, nestedDriftedCandidates } = planTimelineSync(
-    projectPath,
-    { nested: flags.nested === true },
-  );
+  const { store, plan, canonicalDraft, canonicalCandidate, driftedCandidates, nestedDriftedCandidates } =
+    planTimelineSync(projectPath, { nested: flags.nested === true });
 
   const warnUnreconcilable = (): void => {
     if (flags.quiet) return;
@@ -4738,6 +4740,7 @@ function cmdSyncTimelines(projectPath: string | undefined, flags: Flags): number
   // Optimistic concurrency: neither the canonical source nor a mirror we are
   // about to rewrite may have changed on disk between the plan read and now.
   const nestedCandidates = nestedDriftedCandidates.map((entry) => entry.candidate);
+  assertActiveTimelineUnchanged(store);
   if (!flags.forceWrite) assertTargetsUnchangedOnDisk([canonicalCandidate, ...driftedCandidates, ...nestedCandidates]);
   commitDraftTargets(driftedCandidates, canonicalDraft);
   // Nested documents keep their own GUID (issue #50's verified 9.2.8 workaround
@@ -4917,7 +4920,7 @@ async function cmdRelink(draft: Draft, filePath: string, flags: Flags): Promise<
     if (!existsSync(flags.dir)) die(`--dir not found: ${flags.dir}`);
     for (const f of readdirSync(flags.dir)) dirIndex.set(path.basename(f), path.join(flags.dir as string, f));
   }
-  const draftDir = path.dirname(path.resolve(filePath));
+  const draftDir = draftProjectDir(filePath);
   const relinked: Array<{ id: string; from: string; to: string; staged: boolean }> = [];
   let missing = 0;
   let ok = 0;
@@ -5614,7 +5617,10 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
   };
   if (opts.dryRun) {
     // Build-only: surface the plan; no ffmpeg needed.
-    const plan = buildRenderPlan(draft, { ...opts, out: opts.out ?? path.join(path.dirname(filePath), "preview.mp4") });
+    const plan = buildRenderPlan(draft, {
+      ...opts,
+      out: opts.out ?? path.join(draftProjectDir(filePath), "preview.mp4"),
+    });
     out({ ok: true, executed: false, ...plan }, flags);
     return;
   }
@@ -5928,15 +5934,19 @@ async function main(): Promise<void> {
     // Scan the real output path from the flag: report.out_dir is itself
     // redacted (a home-dir project reports /home/USER/…), so it is display
     // data, not a filesystem path.
-    const check = flags.check ? verifyBundleRedaction(path.resolve(flags.out)) : null;
-    out(check ? { ...report, ok: report.ok && check.ok, redaction_check: check } : report, flags);
+    const check = report.redaction_check;
+    out(report, flags);
     if (!flags.quiet) {
       const total = Object.values(report.redaction_kinds).reduce((a, b) => a + b, 0);
       process.stderr.write(`Sanitized bundle: ${report.out_dir} (${report.files.length} files, ${total} redactions)\n`);
-      process.stderr.write(`Review the files, then attach the folder to issue #35.\n`);
+      process.stderr.write(
+        check.ok
+          ? "Review the files, then attach the folder to the relevant issue.\n"
+          : "Review the redaction findings before sharing this bundle.\n",
+      );
     }
-    if (check) printCheck(check);
-    process.exit(check && !check.ok ? 1 : 0);
+    printCheck(check);
+    process.exit(check.ok ? 0 : 1);
   }
 
   // `register` reads draft_content.json directly — no loadDraft: the draft may
