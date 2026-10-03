@@ -4,6 +4,8 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.26.1] — 2026-10-03
+
 ### Fixed
 
 - `fixture` redacts JSON-escaped Windows home paths, including paths inside JSON strings (#134). Every new bundle automatically runs the existing residual-value check; the CLI exits nonzero and `SANITIZE_REPORT.json` records failure if a recognizable leak remains. `fixture <bundle> --check` still verifies an existing bundle.
