@@ -65,7 +65,7 @@
 | `prune` | `capcut prune <project>` | 是 | 删除没有任何片段引用的素材。 |
 | `register` | `capcut register <project-dir> [--apply] [--drafts <dir>]` | 是 | 从只读的 draft_content.json 修复已有草稿的注册元数据（draft_meta_info.json + root_meta_info.json 条目），让 CapCut 应用能列出它（默认只出计划；--apply 写入并留 .bak）。 |
 | `rename` | `capcut rename <project> <new-name> [--drafts <dir>]` | 是 | 在创建后重命名草稿：磁盘上的文件夹，加上 draft_meta_info.json 和存储 root_meta_info.json 条目里的 draft_name 及所有自引用路径，事务性完成（目标文件夹已存在时拒绝）。 |
-| `relink` | `capcut relink <project> (--dir <path> \| --from <prefix> --to <prefix>)` | 是 | 修复失效的媒体路径（--dir 或 --from/--to）。 |
+| `relink` | `capcut relink <project> (--dir <path> [--recursive] \| --from <prefix> --to <prefix>) [--stage]` | 是 | 修复失效的媒体路径（--dir 可递归搜索；同名歧义会报告并保持原路径；--from/--to 按路径边界映射）。 |
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | 是 | 替换片段的源文件（占位素材 → 成片素材），保留其时间、特效与关键帧。 |
 | `timeline` | `capcut timeline <project> [--cols <number>]` | 否 | 显示轨道/片段布局（JSON；-H 显示 ASCII 条形图）。 |
 | `projects` | `capcut projects [query] [--drafts <path>] [--names]` | 否 | 列出磁盘上的 CapCut/剪映草稿文件夹。 |

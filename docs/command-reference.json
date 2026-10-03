@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.26.1",
+  "version": "0.27.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -4531,7 +4531,7 @@
     {
       "name": "relink",
       "summary": "Repair broken media paths (--dir or --from/--to).",
-      "usage": "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>) [--stage]",
+      "usage": "capcut relink <project> (--dir <path> [--recursive] | --from <prefix> --to <prefix>) [--stage]",
       "positionals": [
         {
           "name": "project",
@@ -4552,7 +4552,16 @@
           ],
           "type": "path",
           "required": false,
-          "description": "Directory containing replacement files."
+          "description": "Directory containing replacement files; ambiguous basenames are reported and left unchanged."
+        },
+        {
+          "name": "recursive",
+          "flags": [
+            "--recursive"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Search nested directories under --dir; directory symlinks are not followed."
         },
         {
           "name": "from",

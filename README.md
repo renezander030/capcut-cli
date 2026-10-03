@@ -105,11 +105,9 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
-> **New in v0.26.0:** exact frame-grid lint/fix; character-level Chinese/Japanese script alignment with an optional match gate; explicit caption audio-stream selection; safe ripple delete and boundary shifts; scalable FFmpeg filter scripts; nested OTIO import; CRF/bitrate proxy controls; progressive word-reveal captions; and atomic whole-track `restyle`. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.27.0:** content-safe media replacement; automatic import registration after replacement and relink; recursive, ambiguity-safe relinking; exact fractional-second compile boundaries; operation preflight and failed-build cleanup; payload-bound queue IDs; canonical project locks; bounded queue results; and local OTIO file/relative references. Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.25.0:** `caption` follows the transcript's script. Whisper's "words" for Chinese and Japanese are single characters or short tokens, so the Latin defaults (four words per cue, joined with spaces) produced fragments with spaces between the characters; cues are now joined without spaces and bounded by characters alone, at the width `lint` holds captions to (zh 16, ja 13, ko 16), and the result reports `caption_script`. An explicit `--max-words` / `--max-chars` still wins. Full details in the [changelog](./CHANGELOG.md).
-
-> **New in v0.24.0:** captions in Chinese, Japanese and Korean are held to their own limits — `lint` flags a 32-character Chinese line and a 15 chars/s cue that the Latin defaults (42, 20) let through, and `--fix` re-wraps between characters (zh 16/9, ja 13/4, ko 16/12; an explicit `--max-chars` / `--max-cps` still applies everywhere). On a JianYing 6.0+ drafts folder, where every app-written project is encrypted, `init` / `quickstart` / `compile` now say that none could seed the new draft (`template.store`, a WARNING) and `lint` reports `template-unverified-store` instead of nothing. Plus a one-command agent install: `npx skills add renezander030/capcut-cli`. Full details in the [changelog](./CHANGELOG.md).
+> **Fixed in v0.26.1:** ratio-only compile canvases and full source-media durations; JSON-escaped Windows fixture redaction with automatic leak verification; and active-timeline edits on the fixture-backed CapCut 8.7.0 Windows layout. A patched desktop round-trip remains pending. Full details in the [changelog](./CHANGELOG.md).
 
 ## Built with capcut-cli
 

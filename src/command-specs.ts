@@ -236,7 +236,7 @@ const usages = {
   prune: "capcut prune <project>",
   register: "capcut register <project-dir> [--apply] [--materials] [--drafts <dir>]",
   rename: "capcut rename <project> <new-name> [--drafts <dir>]",
-  relink: "capcut relink <project> (--dir <path> | --from <prefix> --to <prefix>) [--stage]",
+  relink: "capcut relink <project> (--dir <path> [--recursive] | --from <prefix> --to <prefix>) [--stage]",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
   diff: "capcut diff <project-a> <project-b>",
@@ -691,7 +691,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("effect_id", ["--effect-id"], "string", "Effect id for an --add entry that carries both ids."),
   ],
   relink: [
-    option("dir", ["--dir"], "path", "Directory containing replacement files."),
+    option(
+      "dir",
+      ["--dir"],
+      "path",
+      "Directory containing replacement files; ambiguous basenames are reported and left unchanged.",
+    ),
+    option(
+      "recursive",
+      ["--recursive"],
+      "boolean",
+      "Search nested directories under --dir; directory symlinks are not followed.",
+    ),
     option("from", ["--from"], "path", "Old path prefix."),
     option("to", ["--to"], "path", "New path prefix."),
     option(
@@ -931,6 +942,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
+//   --recursive -> relink (v0.27 nested media search)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -976,6 +988,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--pad",
   "--pip",
   "--stage",
+  "--recursive",
   "--preset",
   "--ratio",
   "--rect",

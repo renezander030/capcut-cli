@@ -8,6 +8,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -296,20 +297,56 @@ export function assertTargetsUnchangedOnDisk(targets: DraftCandidate[]): void {
 // file actually written, rolling back on a partial commit. Writes EXACTLY the
 // given targets — callers decide the write set (saveDraft: every readable
 // sibling; sync-timelines: only the drifted mirrors). No-ops under --dry-run.
+export interface AdditionalDraftFile {
+  path: string;
+  /** Bytes observed while planning; null only when the file did not exist. */
+  raw: string | null;
+  content: string;
+}
+
 export function commitDraftTargets(
   targets: DraftCandidate[],
   draft: Draft,
-  options: { backup?: boolean } = {},
+  options: { backup?: boolean; additionalFiles?: AdditionalDraftFile[] } = {},
 ): Map<string, string> {
   const written = new Map<string, string>();
   if (dryRun) return written;
 
   // Prepare every replacement before renaming any target. This keeps the
   // multi-file write as close to a transaction as the filesystem allows.
-  const prepared = targets.map((target) => {
-    const content = serializeDraftCandidate(target, draft);
-    return { target, temp: writeTemp(target.path, content), content };
-  });
+  const replacements = [
+    ...targets.map((target) => ({
+      path: target.path,
+      raw: target.raw,
+      content: serializeDraftCandidate(target, draft),
+    })),
+    ...(options.additionalFiles ?? []),
+  ];
+  const paths = new Set<string>();
+  for (const item of replacements) {
+    let path = existsSync(item.path)
+      ? realpathSync.native(item.path)
+      : resolve(realpathSync.native(dirname(item.path)), basename(item.path));
+    if (process.platform === "win32") path = path.toLowerCase();
+    if (paths.has(path)) throw new Error(`Duplicate draft transaction target: ${path}`);
+    paths.add(path);
+  }
+  for (const item of options.additionalFiles ?? []) {
+    const current = existsSync(item.path) ? readFileSync(item.path, "utf-8") : null;
+    if (current !== item.raw) {
+      throw new Error(`refused [draft-changed-on-disk]: Draft sidecar changed after it was planned: ${item.path}`);
+    }
+  }
+  const prepared: Array<{ target: AdditionalDraftFile; temp: string; content: string }> = [];
+  try {
+    for (const target of replacements) {
+      if (options.additionalFiles?.includes(target) && target.content === target.raw) continue;
+      prepared.push({ target, temp: writeTemp(target.path, target.content), content: target.content });
+    }
+  } catch (error) {
+    for (const item of prepared) if (existsSync(item.temp)) unlinkSync(item.temp);
+    throw error;
+  }
 
   const committed: typeof prepared = [];
   try {
@@ -332,6 +369,7 @@ export function commitDraftTargets(
     // Roll back targets already renamed during a partial commit.
     for (const item of committed.reverse()) {
       if (item.target.raw !== null) writeAtomic(item.target.path, item.target.raw);
+      else if (existsSync(item.target.path)) unlinkSync(item.target.path);
     }
     for (const item of prepared) {
       if (existsSync(item.temp)) unlinkSync(item.temp);
@@ -346,7 +384,7 @@ export function commitDraftTargets(
 export function saveDraft(
   filePath: string,
   draft: Draft,
-  options: { backup?: boolean; skipVersionGuard?: boolean } = {},
+  options: { backup?: boolean; skipVersionGuard?: boolean; additionalFiles?: AdditionalDraftFile[] } = {},
 ): void {
   if (dryRun) {
     // Version guard, warning only: dry-run writes nothing, so it never blocks,
@@ -435,7 +473,9 @@ export function saveDraft(
   // the project again: a re-discovery re-read, re-parsed and re-hashed every
   // sibling — the single most expensive step of a write on a large draft — to
   // establish what the write already knew.
-  loadContexts.set(resolved, { store: storeAfterWrite(store, draft, written) });
+  const timelinePaths = new Set(store.targets.map((target) => target.path));
+  const timelineWrites = new Map([...written].filter(([path]) => timelinePaths.has(path)));
+  loadContexts.set(resolved, { store: storeAfterWrite(store, draft, timelineWrites) });
 }
 
 function writeAndSync(path: string, content: string): void {

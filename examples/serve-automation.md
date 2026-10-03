@@ -81,3 +81,25 @@ Build the image from this repo with `docker build -t capcut-cli .`.
 > process to babysit. A queue runner that starts, drains, and exits composes with the
 > retry/idempotency model your automation tool already has. If you genuinely need HTTP,
 > put `serve` behind a one-line handler that pipes the request body to it.
+
+## Queue identity and capture limits
+
+IDs last for one queue drain. An ID binds to the effective argv and execution settings
+(timeout, retries, backoff, and output threshold). Repeating that payload returns the
+original result with `deduplicated: true`; reusing the ID for different arguments or
+settings returns a failure without executing the conflicting job. Use a new ID for
+an intentional new edit.
+
+Project positionals and explicit project destinations are locked by their resolved
+project root, including relative paths, timeline files, and symlink aliases. Locks
+are local to this queue invocation; separate runners and the desktop editor do not
+share them. Commands with implicit destinations, such as `compile --data`, should be
+run separately or with one worker.
+
+`cmd`, `id`, and `project` must be non-empty strings when present; `args` must be an
+array of strings. Workers must be an integer from 1 to 32, timeout a positive integer
+in milliseconds, and retries/backoff non-negative integers. `--max-buffer-mb` sets a
+positive combined stdout/stderr capture threshold. It is checked every 25 ms and
+again at exit before reading the files, so it is not a hard disk quota. An overflow
+result has `ok: false` and `overflow: true`, omits captured output, and is not retried.
+Other failed jobs keep the configured retry policy.

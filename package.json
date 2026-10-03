@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.26.1",
+  "version": "0.27.0",
   "description": "Independent, unofficial CLI to create and edit CapCut projects — build drafts from scratch, add video/audio/text, subtitles, timing, speed, volume, templates, cut long-form to shorts. No API needed. Not affiliated with ByteDance.",
   "type": "module",
   "bin": {
@@ -43,6 +43,7 @@
     "dev": "node --import tsx src/index.ts",
     "extract-enums": "python3 scripts/extract-enums.py",
     "test": "npm run build && node --test --test-reporter=spec",
+    "smoke:package": "node scripts/release-smoke.mjs",
     "test:fast": "node --test --test-reporter=spec",
     "lint": "biome check --error-on-warnings src/ test/",
     "lint:fix": "biome check --write src/ test/",

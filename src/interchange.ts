@@ -1,4 +1,5 @@
-import { basename } from "node:path";
+import { basename, isAbsolute, resolve, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
 import { framesFor } from "./time.js";
@@ -382,7 +383,22 @@ function clipPlan(node: OtioObject, rate: number, trackLabel: string, skipped: O
   };
 }
 
-export function otioToImportPlan(doc: unknown): ImportPlan {
+/** Resolve local references without fetching remote URLs or changing foreign Windows paths. */
+export function resolveOtioMediaPath(reference: string, mediaDir?: string): string {
+  if (/^file:/i.test(reference)) {
+    try {
+      return fileURLToPath(reference);
+    } catch {
+      return reference;
+    }
+  }
+  if (isAbsolute(reference) || win32.isAbsolute(reference) || /^[a-z][a-z0-9+.-]*:/i.test(reference)) {
+    return reference;
+  }
+  return mediaDir === undefined ? reference : resolve(mediaDir, reference);
+}
+
+export function otioToImportPlan(doc: unknown, options: { mediaDir?: string } = {}): ImportPlan {
   if (schemaOf(doc) !== "Timeline.1") {
     throw new Error(
       `import-timeline: not an OpenTimelineIO Timeline.1 document (OTIO_SCHEMA: ${schemaOf(doc) || "missing"})`,
@@ -564,6 +580,7 @@ export function otioToImportPlan(doc: unknown): ImportPlan {
       if (itemSchema === "Clip.1") {
         const clip = clipPlan(item as OtioObject, rate, label, skipped);
         if (!clip) continue;
+        if (clip.mediaPath !== null) clip.mediaPath = resolveOtioMediaPath(clip.mediaPath, options.mediaDir);
         clip.targetStartUs = cursorUs;
         cursorUs += clip.targetDurationUs;
         clips.push(clip);

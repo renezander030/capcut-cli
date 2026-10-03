@@ -200,10 +200,25 @@ export function registeredEntries(groups: unknown): Array<{ path: string; id: st
 // entry are preserved as they are.
 function appendToImportedGroup(sidecar: Record<string, unknown>, entries: MetaMaterialEntry[]): void {
   const groupsRaw = sidecar.draft_materials;
-  const groups: Array<Record<string, unknown>> = Array.isArray(groupsRaw)
-    ? (groupsRaw.filter((g) => g && typeof g === "object" && !Array.isArray(g)) as Array<Record<string, unknown>>)
-    : [];
-  let group0 = groups.find((g) => g.type === IMPORTED_MEDIA_GROUP_TYPE);
+  // Some older sidecars use a dictionary of entry arrays. Keep that shape and
+  // every existing value when adding the imported-media group.
+  if (groupsRaw && typeof groupsRaw === "object" && !Array.isArray(groupsRaw)) {
+    const groups = groupsRaw as Record<string, unknown>;
+    let key = String(IMPORTED_MEDIA_GROUP_TYPE);
+    while (groups[key] !== undefined && !Array.isArray(groups[key])) key = `${key}_imported`;
+    if (!Array.isArray(groups[key])) groups[key] = [];
+    (groups[key] as unknown[]).push(...entries);
+    return;
+  }
+  const groups: unknown[] = Array.isArray(groupsRaw) ? groupsRaw : [];
+  let group0 = groups.find(
+    (g): g is Record<string, unknown> =>
+      !!g &&
+      typeof g === "object" &&
+      !Array.isArray(g) &&
+      (g as Record<string, unknown>).type === IMPORTED_MEDIA_GROUP_TYPE &&
+      ((g as Record<string, unknown>).value === undefined || Array.isArray((g as Record<string, unknown>).value)),
+  );
   if (!group0) {
     group0 = { type: IMPORTED_MEDIA_GROUP_TYPE, value: [] };
     groups.unshift(group0);
@@ -241,6 +256,84 @@ export function registerMediumInSidecar(
   writeFileSync(`${sidecarPath}.bak`, readFileSync(sidecarPath, "utf-8"), "utf-8");
   writeAtomic(sidecarPath, JSON.stringify(sidecar, null, 0));
   return { entryId: entry.id, created: true };
+}
+
+export interface ChangedMediaRegistration {
+  path: string;
+  /** Sidecar bytes used to plan this edit, for the caller's conflict check and backup. */
+  raw: string;
+  content: string;
+}
+
+/**
+ * Refresh registration for changed media without writing files. The caller
+ * commits the returned sidecar together with the timeline after its write
+ * guards pass. Only the requested materials are linked; every existing entry
+ * is preserved, including the old source's entry.
+ * A reused entry returns a byte-identical plan so the caller can check its
+ * sidecar snapshot without rewriting the file or creating a backup.
+ *
+ * Missing or unreadable sidecars, or no selected local media, return null.
+ * Unavailable sidecars leave links unchanged. A bare timeline remains editable;
+ * `register --materials --apply` repairs its sidecar.
+ */
+export function planChangedMediaRegistration(
+  draft: Draft,
+  projectDir: string,
+  materialIds: Iterable<string>,
+): ChangedMediaRegistration | null {
+  const changed = new Set(materialIds);
+  if (changed.size === 0) return null;
+  const sidecarPath = resolve(projectDir, "draft_meta_info.json");
+  let raw: string;
+  let sidecar: Record<string, unknown>;
+  try {
+    raw = readFileSync(sidecarPath, "utf-8");
+    const parsed: unknown = JSON.parse(stripBom(raw));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    sidecar = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  const byPath = new Map<string, string>();
+  for (const entry of registeredEntries(sidecar.draft_materials)) {
+    if (entry.id !== "" && !byPath.has(normalise(entry.path, projectDir)))
+      byPath.set(normalise(entry.path, projectDir), entry.id);
+  }
+  let appended = false;
+  let selected = false;
+  for (const kind of ["videos", "audios"] as const) {
+    for (const mat of draft.materials[kind] ?? []) {
+      const material = mat as Record<string, unknown>;
+      if (typeof material.id !== "string" || !changed.has(material.id) || !isLocalPath(material.path)) continue;
+      selected = true;
+      const path = normalise(material.path, projectDir);
+      let entryId = byPath.get(path);
+      if (!entryId) {
+        const photo = kind === "videos" && material.type === "photo";
+        const entry = buildMetaMaterialEntry({
+          path: material.path,
+          name:
+            typeof material.material_name === "string" && material.material_name !== ""
+              ? material.material_name
+              : typeof material.name === "string" && material.name !== ""
+                ? material.name
+                : basename(material.path),
+          kind: kind === "audios" ? "music" : photo ? "photo" : "video",
+          durationUs: photo ? PHOTO_META_DURATION_US : typeof material.duration === "number" ? material.duration : 0,
+          width: typeof material.width === "number" ? material.width : 0,
+          height: typeof material.height === "number" ? material.height : 0,
+        });
+        appendToImportedGroup(sidecar, [entry]);
+        entryId = entry.id;
+        byPath.set(path, entryId);
+        appended = true;
+      }
+      material.local_material_id = entryId;
+    }
+  }
+  return selected ? { path: sidecarPath, raw, content: appended ? JSON.stringify(sidecar) : raw } : null;
 }
 
 export interface UnlinkedMaterial {

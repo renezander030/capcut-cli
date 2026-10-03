@@ -18,6 +18,7 @@ export { commandNames, GLOBAL_OPTION_SPECS } from "./command-specs.js";
 export type { CheckStatus, DoctorCheck, DoctorReport } from "./doctor.js";
 export { runDoctor } from "./doctor.js";
 export type {
+  AdditionalDraftFile,
   Draft,
   MaterialAudio,
   MaterialText,

@@ -4,6 +4,23 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-10-03
+
+### Added
+
+- `relink --dir <folder> --recursive` searches nested media folders. Duplicate basenames are reported in `ambiguous` and left unchanged; prefix remapping matches whole path components, and directory symlinks are not followed.
+
+### Fixed
+
+- `replace-media` stages the requested bytes even when a different file with the same basename already exists. Occupied hash filenames are checked by content; dry runs create no asset directories or files, and directories/non-media segments are rejected before mutation.
+- Replacement and relink refresh changed media's `local_material_id` links and imported-media entries when a readable `draft_meta_info.json` exists. Sidecar and timeline writes share conflict checks, backups, and rollback; existing and unrelated import entries are preserved. Bare timelines still use `register --materials --apply` to create registration metadata.
+- `compile` derives target durations from rounded start and end boundaries, keeping adjacent fractional-second clips contiguous across text, video, audio, photos, and timed operations.
+- Compile operation payloads are checked with the same builders used by real writes before creating output. Failed builds remove only the output directory created by that invocation; successful builds register in the project index after the draft is saved.
+- `serve` binds a job ID to its effective command payload and execution settings. Identical submissions still deduplicate; reusing an ID for a different job returns a failure without executing the conflicting job.
+- Queue project locks resolve project roots, relative paths, timeline files, and symlink aliases so concurrent writers to the same project serialize.
+- Queue input and limits reject malformed or non-finite values. Combined child output is checked again at exit before reading it, so a fast process cannot bypass the configured capture threshold. Overflow results omit captured output; the threshold is polled during execution and is not a hard disk quota.
+- `import-timeline` resolves relative media references against the OTIO document's directory and decodes local `file:` URLs, including escaped spaces. Remote URLs and inaccessible references remain placeholders.
+
 ## [0.26.1] — 2026-10-03
 
 ### Fixed

@@ -6,9 +6,10 @@
 // points a chosen segment at a different file and refreshes its intrinsic
 // metadata (duration, dimensions). Pure JSON + file copy, like `add-video`.
 
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { type Draft, findMaterialGlobal, findSegment } from "./draft.js";
+import { copyAssetDeduped, planAssetCopy } from "./factory.js";
 import { probeMedia } from "./probe.js";
 import { draftProjectDir } from "./store.js";
 
@@ -39,10 +40,6 @@ export interface ReplaceMediaResult {
   warning?: string;
 }
 
-function assetKind(materialType: string): "audio" | "video" {
-  return materialType === "audios" ? "audio" : "video";
-}
-
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -54,6 +51,7 @@ function num(value: unknown): number | null {
  */
 export function replaceMedia(draft: Draft, filePath: string, opts: ReplaceMediaOptions): ReplaceMediaResult {
   if (!existsSync(opts.newPath)) throw new Error(`Replacement file not found: ${opts.newPath}`);
+  if (!statSync(opts.newPath).isFile()) throw new Error(`Replacement media must be a regular file: ${opts.newPath}`);
 
   const hit = findSegment(draft, opts.segmentId);
   if (!hit) throw new Error(`Segment not found: ${opts.segmentId}`);
@@ -63,23 +61,23 @@ export function replaceMedia(draft: Draft, filePath: string, opts: ReplaceMediaO
   const found = findMaterialGlobal(draft, materialId);
   if (!found) throw new Error(`Material ${materialId} for segment ${opts.segmentId} not found.`);
   const { type, material } = found;
+  if (type !== "videos" && type !== "audios") {
+    throw new Error(`Cannot replace ${type} material ${materialId}: replace-media requires a video or audio material.`);
+  }
 
   const oldPath = typeof material.path === "string" ? material.path : "";
   const oldDuration = num(material.duration);
 
   // Copy the replacement into the draft's assets dir, mirroring addVideo/addAudio.
-  const kind = assetKind(type);
+  const kind = type === "audios" ? "audio" : "video";
   const draftDir = draftProjectDir(filePath);
   const filename = basename(opts.newPath) || (kind === "audio" ? "audio" : "media");
   const assetsDir = resolve(draftDir, "assets", kind);
-  mkdirSync(assetsDir, { recursive: true });
-  const destPath = resolve(assetsDir, filename);
-  if (!opts.dryRun && resolve(opts.newPath) !== destPath && !existsSync(destPath)) {
-    copyFileSync(opts.newPath, destPath);
-  }
-
   const probe = probeMedia(opts.newPath, opts.ffprobeCmd ?? "ffprobe");
   const newDuration = probe?.durationUs && probe.durationUs > 0 ? probe.durationUs : null;
+  const destPath = opts.dryRun
+    ? planAssetCopy(opts.newPath, assetsDir, filename).destination
+    : copyAssetDeduped(opts.newPath, assetsDir, filename);
 
   // Update the source pointer and the name field this material type uses.
   material.path = destPath;

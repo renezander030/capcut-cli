@@ -1060,6 +1060,7 @@ interface Flags {
   version?: boolean;
   // relink / projects / timeline / restore
   dir?: string;
+  recursive?: boolean;
   step?: number;
   list?: boolean;
   cols?: number;
@@ -1459,15 +1460,17 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     } else if (a === "--fail-fast") {
       flags.failFast = true;
     } else if (a === "--workers" && i + 1 < args.length) {
-      flags.workers = parseInt(args[++i], 10);
+      flags.workers = Number(args[++i]);
     } else if (a === "--retries" && i + 1 < args.length) {
-      flags.retries = parseInt(args[++i], 10);
+      flags.retries = Number(args[++i]);
     } else if (a === "--timeout" && i + 1 < args.length) {
-      flags.timeoutMs = parseInt(args[++i], 10);
+      flags.timeoutMs = Number(args[++i]);
     } else if (a === "--backoff-ms" && i + 1 < args.length) {
-      flags.backoffMs = parseInt(args[++i], 10);
+      flags.backoffMs = Number(args[++i]);
     } else if (a === "--max-buffer-mb" && i + 1 < args.length) {
-      flags.maxBufferMb = parseFloat(args[++i]);
+      flags.maxBufferMb = Number(args[++i]);
+    } else if (a === "--recursive") {
+      flags.recursive = true;
     } else if (a === "--dir" && i + 1 < args.length) {
       flags.dir = args[++i];
     } else if (a === "--step" && i + 1 < args.length) {
@@ -2308,7 +2311,7 @@ async function cmdImportTimeline(positional: string[], flags: Flags): Promise<vo
   }
   let plan: ImportPlan;
   try {
-    plan = otioToImportPlan(doc);
+    plan = otioToImportPlan(doc, { mediaDir: path.dirname(path.resolve(otioPath)) });
   } catch (e) {
     die((e as Error).message);
   }
@@ -4179,7 +4182,7 @@ async function cmdServe(flags: Flags): Promise<void> {
     retries: flags.retries,
     timeoutMs: flags.timeoutMs,
     backoffMs: flags.backoffMs,
-    maxBufferBytes: flags.maxBufferMb ? Math.round(flags.maxBufferMb * 1024 * 1024) : undefined,
+    maxBufferBytes: flags.maxBufferMb === undefined ? undefined : flags.maxBufferMb * 1024 * 1024,
   });
   // Write a final summary line at end (JSON only, stderr to avoid mixing with per-job results)
   process.stderr.write(`${JSON.stringify({ summary: result })}\n`);
@@ -4910,80 +4913,29 @@ async function cmdPrune(draft: Draft, filePath: string, flags: Flags): Promise<v
 //   --dir <d>          for each material whose path is missing, look for a file
 //                      with the same basename in <d> and repoint to it.
 //   --from <p> --to <q> prefix-replace on every material path.
+async function saveChangedMedia(draft: Draft, filePath: string, ids: string[]): Promise<void> {
+  const { planChangedMediaRegistration } = await import("./materials-register.js");
+  const sidecar = planChangedMediaRegistration(draft, draftProjectDir(filePath), ids);
+  saveDraft(filePath, draft, { additionalFiles: sidecar ? [sidecar] : [] });
+}
+
 async function cmdRelink(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  if (!flags.dir && !(flags.from && flags.to)) {
-    die("Usage: capcut relink <project> (--dir <folder> | --from <oldPrefix> --to <newPrefix>) [--stage]");
-  }
-  const { copyAssetDeduped } = await import("./factory.js");
-  const dirIndex = new Map<string, string>();
-  if (flags.dir) {
-    if (!existsSync(flags.dir)) die(`--dir not found: ${flags.dir}`);
-    for (const f of readdirSync(flags.dir)) dirIndex.set(path.basename(f), path.join(flags.dir as string, f));
-  }
-  const draftDir = draftProjectDir(filePath);
-  const relinked: Array<{ id: string; from: string; to: string; staged: boolean }> = [];
-  let missing = 0;
-  let ok = 0;
-  let staged = 0;
-  for (const [kind, arr] of Object.entries(draft.materials)) {
-    if (!Array.isArray(arr)) continue;
-    for (const m of arr) {
-      const mat = m as { id?: string; path?: unknown; material_name?: unknown; name?: unknown };
-      if (typeof mat.path !== "string" || mat.path === "") continue;
-      let p = mat.path;
-      let changed = false;
-      if (flags.from && flags.to && p.startsWith(flags.from)) {
-        p = flags.to + p.slice(flags.from.length);
-        changed = true;
-      }
-      if (!existsSync(p) && flags.dir) {
-        const hit = dirIndex.get(path.basename(p));
-        if (hit) {
-          p = hit;
-          changed = true;
-        }
-      }
-      // --stage: copy the file this run just relinked into assets/<kind>/ and
-      // point the material at the copy — the repaired draft leaves portable
-      // (pyJianYingDraft#177: a draft whose media lives outside the project
-      // folder black-screens when the folder moves machines). Same
-      // copyAssetDeduped path add-video/add-audio use, so re-runs are no-ops.
-      // A file copy is a side effect no draft write rolls back, so --dry-run
-      // skips the copy and the plan keeps the resolved external path.
-      let didStage = false;
-      if (
-        changed &&
-        flags.stage &&
-        !isDryRun() &&
-        (kind === "videos" || kind === "audios") &&
-        existsSync(p) &&
-        !path.resolve(p).startsWith(draftDir + path.sep)
-      ) {
-        const assetKind = kind === "audios" ? "audio" : "video";
-        const destPath = copyAssetDeduped(
-          p,
-          path.resolve(draftDir, "assets", assetKind),
-          assetKind === "audio" ? "audio.mp3" : "media",
-        );
-        p = destPath;
-        didStage = true;
-        staged++;
-        // Keep the display-name fields tracking the staged file, the
-        // replace-media convention — only visible when de-collision renamed.
-        const filename = path.basename(destPath);
-        if ("material_name" in mat) mat.material_name = filename;
-        if ("name" in mat) mat.name = filename;
-      }
-      if (changed && p !== mat.path) {
-        relinked.push({ id: mat.id ?? "", from: mat.path, to: p, staged: didStage });
-        mat.path = p;
-      }
-      if (existsSync(p)) ok++;
-      else missing++;
-    }
-  }
-  if (relinked.length > 0) saveDraft(filePath, draft);
-  out({ ok: true, relinked: relinked.length, staged, still_missing: missing, present: ok, changes: relinked }, flags);
+  const { relinkMedia } = await import("./relink.js");
+  const result = relinkMedia(draft, filePath, {
+    dir: flags.dir,
+    from: flags.from,
+    to: flags.to,
+    recursive: flags.recursive,
+    stage: flags.stage,
+    dryRun: isDryRun(),
+  });
+  if (result.relinked > 0)
+    await saveChangedMedia(
+      draft,
+      filePath,
+      result.changes.map((change) => change.id),
+    );
+  out(result, flags);
 }
 
 // `replace-media` swaps a segment's source file in place (placeholder > final),
@@ -4997,7 +4949,7 @@ async function cmdReplaceMedia(draft: Draft, filePath: string, positional: strin
     retime: flags.retime,
     dryRun: isDryRun(),
   });
-  saveDraft(filePath, draft); // no-ops under --dry-run
+  await saveChangedMedia(draft, filePath, [result.material_id]); // no-ops under --dry-run
   out(result, flags);
   if (!flags.quiet && result.warning) process.stderr.write(`Warning: ${result.warning}\n`);
 }
