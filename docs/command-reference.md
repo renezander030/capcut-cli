@@ -71,7 +71,7 @@
 | `diff` | `capcut diff <project-a> <project-b>` | no | Compare two drafts (segments/materials/tracks added/removed/changed). |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | yes | Append one draft onto another's timeline (id-safe), write to --out or in place. |
 | `config` | `capcut config` | no | Show the resolved config (.capcutrc + effective defaults). |
-| `describe` | `capcut describe` | no | Emit the full command surface as JSON (agent tool spec). |
+| `describe` | `capcut describe [--compact] [--command <name>]` | no | Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index. |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | no | Generate shell completions (bash|zsh|fish). |
 | `enums` | `capcut enums <category-flag> [--jianying]` | no | List enum slugs (transitions, masks, effects, ...) by category. |
 | `catalogue` | `capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]` | no | Find a resource id by name across every category, harvested entries included. |

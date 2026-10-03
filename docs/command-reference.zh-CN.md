@@ -72,7 +72,7 @@
 | `diff` | `capcut diff <project-a> <project-b>` | 否 | 比较两个草稿（片段/素材/轨道的增、删、改）。 |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | 是 | 把一个草稿追加到另一个的时间线末尾（ID 安全），写入 --out 或原地写入。 |
 | `config` | `capcut config` | 否 | 显示解析后的配置（.capcutrc + 生效的默认值）。 |
-| `describe` | `capcut describe` | 否 | 以 JSON 输出完整命令面（Agent 工具规范）。 |
+| `describe` | `capcut describe [--compact] [--command <name>]` | 否 | 以 JSON 输出命令契约；可按命令名筛选，或输出精简的命令发现索引。 |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | 否 | 生成 shell 补全（bash\|zsh\|fish）。 |
 | `enums` | `capcut enums <category-flag> [--jianying]` | 否 | 按类别列出枚举 slug（转场、蒙版、特效等）。 |
 | `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | 否 | 把商店资源 ID 学习进用户级素材目录：来源可以是单个草稿、整个草稿库（--sync），或手动添加（--add）。 |

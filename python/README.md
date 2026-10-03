@@ -24,7 +24,7 @@ print(capcut.run("lint", d["draft_path"])["summary"])
 
 - **关键字参数就是命令行选项**：`font_size=16` → `--font-size 16`，`karaoke=True` → `--karaoke`，列表会重复该选项，`None` / `False` 直接省略。
 - **位置参数原样传递**，每个参数就是一个 argv，中文、空格、引号都不需要转义。
-- 全部命令、参数和选项见[命令参考（中文）](https://github.com/renezander030/capcut-cli/blob/master/docs/command-reference.zh-CN.md)，或者在 Python 里 `capcut.describe()`。
+- 全部命令、参数和选项见[命令参考（中文）](https://github.com/renezander030/capcut-cli/blob/master/docs/command-reference.zh-CN.md)，或者在 Python 里 `capcut.describe()`。使用 `capcut.describe(compact=True)` 获取精简索引，`capcut.describe(command="compile")` 获取单个命令的完整契约（命令行需要 v0.28.0 或更新版本）。
 
 ## 出错时
 
@@ -38,6 +38,12 @@ except capcut.CommandError as e:
 ```
 
 不想抛异常就用 `capcut.run_raw(...)`，它返回 `Result`（`ok`、`status`、`data`、`error`）。找不到 `capcut` 命令时抛 `capcut.CliNotFound`，提示里有安装命令；也可以用环境变量 `CAPCUT_CLI` 指定，例如 `CAPCUT_CLI="node /path/to/capcut-cli/dist/index.js"`。
+
+Windows 上的 `CAPCUT_CLI` 使用双引号包住带空格的路径（不是 POSIX 单引号）。例如在 PowerShell 中：
+
+```powershell
+$env:CAPCUT_CLI = '"C:\Program Files\nodejs\node.exe" "C:\CapCut Tools\dist\index.js"'
+```
 
 ## 批量：`serve`
 
@@ -90,7 +96,7 @@ print(capcut.run("lint", d["draft_path"])["summary"])
 
 - **Keyword arguments are flags**: `font_size=16` → `--font-size 16`, `karaoke=True` → `--karaoke`, a list repeats the flag, `None` / `False` are dropped.
 - **Positional arguments pass through as they are**, one argv token each: text with spaces or quotes never needs escaping.
-- Every command, argument and option: [command reference](https://github.com/renezander030/capcut-cli/blob/master/docs/command-reference.md), or `capcut.describe()` from Python.
+- Every command, argument and option: [command reference](https://github.com/renezander030/capcut-cli/blob/master/docs/command-reference.md), or `capcut.describe()` from Python. Use `capcut.describe(compact=True)` for the small discovery index and `capcut.describe(command="compile")` for a complete command contract (requires CLI v0.28.0 or newer). A list selects several names.
 
 ### Errors
 
@@ -104,6 +110,14 @@ except capcut.CommandError as e:
 ```
 
 `capcut.run_raw(...)` never raises; it returns a `Result` (`ok`, `status`, `data`, `error`). A missing binary raises `capcut.CliNotFound` with the install line; `CAPCUT_CLI` can point at one explicitly, e.g. `CAPCUT_CLI="node /path/to/capcut-cli/dist/index.js"`.
+
+On Windows, quote paths with double quotes inside `CAPCUT_CLI`. For example in PowerShell:
+
+```powershell
+$env:CAPCUT_CLI = '"C:\Program Files\nodejs\node.exe" "C:\CapCut Tools\dist\index.js"'
+```
+
+When setting the variable from Python, `subprocess.list2cmdline([node_path, cli_path])` builds Windows quoting; `shlex.join(...)` is for POSIX. Command arguments are passed directly to the child process without shell expansion.
 
 ### Batch: `serve`
 

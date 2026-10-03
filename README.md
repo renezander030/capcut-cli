@@ -105,9 +105,9 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
-> **New in v0.27.0:** content-safe media replacement; automatic import registration after replacement and relink; recursive, ambiguity-safe relinking; exact fractional-second compile boundaries; operation preflight and failed-build cleanup; payload-bound queue IDs; canonical project locks; bounded queue results; and local OTIO file/relative references. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.28.0:** compact command discovery and selection by name for agents; Windows command-path quoting fixed in Python client v0.1.3; and Python client CI on Linux, macOS, and Windows. Full details in the [changelog](./CHANGELOG.md).
 
-> **Fixed in v0.26.1:** ratio-only compile canvases and full source-media durations; JSON-escaped Windows fixture redaction with automatic leak verification; and active-timeline edits on the fixture-backed CapCut 8.7.0 Windows layout. A patched desktop round-trip remains pending. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.27.0:** content-safe media replacement; automatic import registration after replacement and relink; recursive, ambiguity-safe relinking; exact fractional-second compile boundaries; operation preflight and failed-build cleanup; payload-bound queue IDs; canonical project locks; bounded queue results; and local OTIO file/relative references. Full details in the [changelog](./CHANGELOG.md).
 
 ## Built with capcut-cli
 
@@ -135,6 +135,8 @@ JSON by default (pipe to `jq`); add `-H` for a human-readable table. Pass `--jia
 | **Effects** | `sfx` · `chroma` (chroma key) · `matting` (smart background removal) |
 | **Long-form → short** | `cut` · `detect-scenes` (ffmpeg scene-cut detection) · `detect-silence` · `detect-retakes` (repeated takes) |
 | **Automation** | `serve` (stateless JSONL runner) · `migrate` · `doctor` · `sync-timelines` (8.7 mirror repair) |
+
+`capcut describe --compact` lists command names, summaries, usage, and write status. Fetch a complete contract with `capcut describe --command compile`; repeat `--command` for several commands. Plain `capcut describe` still emits the full registry.
 
 **Full reference** for every command, option, and exit code: **[docs/command-reference.md](./docs/command-reference.md)** (简体中文: [docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)).
 

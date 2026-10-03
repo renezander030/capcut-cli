@@ -497,7 +497,7 @@ Maintenance & inspection:
   diff       <projectA> <projectB>             Compare two drafts (added/removed/changed)
   concat     <projectA> <draftB> [--out <p>]   Append draftB onto projectA's timeline (id-safe)
   config                                       Show resolved .capcutrc + effective defaults
-  describe                                      Emit the full command surface as JSON (agent tool spec)
+  describe [--compact] [--command <name>]        Emit command contracts or a compact discovery index
   diagnose   <project> [--bundle <report.json>] Inspect canonical draft files and divergence
   fixture    <project> --out <dir>              Build a shareable, redacted compatibility bundle
              (timeline JSON only, no media; home paths + emails redacted) to
@@ -1058,6 +1058,8 @@ interface Flags {
   backoffMs?: number;
   maxBufferMb?: number;
   version?: boolean;
+  describeCompact?: boolean;
+  describeCommands?: string[];
   // relink / projects / timeline / restore
   dir?: string;
   recursive?: boolean;
@@ -1188,7 +1190,13 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     if (a === "-H" || a === "--human") flags.human = true;
     else if (a === "-v" || a === "--version") flags.version = true;
     else if (a === "-q" || a === "--quiet") flags.quiet = true;
-    else if (a === "--batch") flags.batch = true;
+    else if (a === "--compact") flags.describeCompact = true;
+    else if (a === "--command") {
+      const name = args[++i];
+      if (!name || name.startsWith("-")) die("--command requires a command name (for example: --command compile)");
+      flags.describeCommands ??= [];
+      flags.describeCommands.push(name);
+    } else if (a === "--batch") flags.batch = true;
     else if (a === "--easing" && i + 1 < args.length) {
       flags.easing = args[++i];
     } else if ((a === "--track" || a === "--type") && i + 1 < args.length) {
@@ -5137,7 +5145,7 @@ const SUMMARIES: Record<string, string> = {
   diff: "Compare two drafts (segments/materials/tracks added/removed/changed).",
   concat: "Append one draft onto another's timeline (id-safe), write to --out or in place.",
   config: "Show the resolved config (.capcutrc + effective defaults).",
-  describe: "Emit the full command surface as JSON (agent tool spec).",
+  describe: "Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index.",
   completions: "Generate shell completions (bash|zsh|fish).",
   restore: "Undo writes from .bak / snapshot history (--step N, --list).",
   serve: "Run a stateless JSONL job queue from stdin/--queue.",
@@ -5158,6 +5166,14 @@ const SUMMARIES: Record<string, string> = {
 // don't have to scrape --help. Names come from COMMANDS (source of truth);
 // summaries from SUMMARIES (test-enforced complete).
 function cmdDescribe(flags: Flags): void {
+  let commands = commandSpecs();
+  if (flags.describeCommands) {
+    const selected = new Set(flags.describeCommands);
+    const known = new Set(commands.map((command) => command.name));
+    const unknown = [...selected].filter((name) => !known.has(name));
+    if (unknown.length) die(`Unknown command(s): ${unknown.join(", ")}. Use capcut describe --compact to list names.`);
+    commands = commands.filter((command) => selected.has(command.name));
+  }
   out(
     {
       name: "capcut-cli",
@@ -5165,7 +5181,10 @@ function cmdDescribe(flags: Flags): void {
       schema_version: 2,
       description: "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
       global_flags: GLOBAL_OPTION_SPECS,
-      commands: commandSpecs(),
+      ...(flags.describeCompact ? { detail: "compact" } : {}),
+      commands: flags.describeCompact
+        ? commands.map(({ name, summary, usage, mutates }) => ({ name, summary, usage, mutates }))
+        : commands,
     },
     flags,
   );

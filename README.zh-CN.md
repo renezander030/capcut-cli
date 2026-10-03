@@ -82,9 +82,9 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
-> **v0.27.0 新增：** 按文件内容安全替换媒体；替换和重链接后自动更新媒体导入登记；递归搜索并报告同名歧义；精确处理小数秒时间边界；编译前校验操作并清理失败输出；将队列 ID 绑定到任务参数；统一项目锁；限制队列输出；以及解析 OTIO 的本地文件 URL 和相对路径。完整说明见[更新日志](./CHANGELOG.md)。
+> **v0.28.0 新增：** 精简的命令发现索引与按命令名筛选；Python 客户端 v0.1.3 修复 Windows 命令路径的引号解析，并在 Linux、macOS、Windows 上运行客户端 CI。详见 [更新日志](./CHANGELOG.md)。
 
-> **v0.26.1 修复：** 仅指定比例的编译画布与完整源媒体时长；对 JSON 转义的 Windows 路径进行 fixture 脱敏并自动检查泄漏；以及基于真实 fixture 的 CapCut 8.7.0 Windows 活动时间线编辑。修复后的桌面应用往返验证仍待完成。完整说明见[更新日志](./CHANGELOG.md)。
+> **v0.27.0 新增：** 按文件内容安全替换媒体；替换和重链接后自动更新媒体导入登记；递归搜索并报告同名歧义；精确处理小数秒时间边界；编译前校验操作并清理失败输出；将队列 ID 绑定到任务参数；统一项目锁；限制队列输出；以及解析 OTIO 的本地文件 URL 和相对路径。完整说明见[更新日志](./CHANGELOG.md)。
 
 ## 使用 capcut-cli 构建
 
@@ -112,6 +112,8 @@ Claude Code 也可以把它作为插件加载：
 | **特效** | `sfx` · `chroma`（绿幕抠像）· `matting`（智能抠像/去背景）|
 | **长视频切短** | `cut` · `detect-scenes`（ffmpeg 场景切点检测）· `detect-silence` · `detect-retakes`（重复口播段落）|
 | **自动化** | `serve`（无状态 JSONL 执行器）· `migrate` · `doctor` · `sync-timelines`（8.7 时间线镜像修复）|
+
+`capcut describe --compact` 列出命令名、简介、用法和是否写入。`capcut describe --command compile` 返回指定命令的完整契约；重复 `--command` 可选择多个命令。不带选项的 `capcut describe` 仍输出完整注册表。
 
 **完整命令参考**（每个命令、参数与退出码）：**[docs/command-reference.zh-CN.md](./docs/command-reference.zh-CN.md)**（[英文原版](./docs/command-reference.md)）。
 

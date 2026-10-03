@@ -4,6 +4,16 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-10-03
+
+### Added
+
+- `describe --compact` emits a small command discovery index with names, summaries, usage, and write status. `describe --command <name>` returns complete contracts for selected commands; repeat the flag for several names. The full v2 command contract remains the default. Python client v0.1.3 forwards these options through `capcut.describe(compact=True, command="compile")`.
+
+### Fixed
+
+- Python client v0.1.3 parses quoted Windows `CAPCUT_CLI` paths without retaining surrounding quotes or losing backslashes. Escaped quotes, trailing backslashes, and empty arguments follow Windows argv quoting; malformed quotes fail before spawning a process. POSIX command quoting and shell-free execution remain unchanged. Python client regression tests now run on Linux, macOS, and Windows, including Python 3.9 and 3.14.
+
 ## [0.27.0] — 2026-10-03
 
 ### Added

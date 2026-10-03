@@ -242,7 +242,7 @@ const usages = {
   diff: "capcut diff <project-a> <project-b>",
   concat: "capcut concat <project-a> <project-b> [--out <path>]",
   config: "capcut config",
-  describe: "capcut describe",
+  describe: "capcut describe [--compact] [--command <name>]",
   completions: "capcut completions <bash|zsh|fish>",
   enums: "capcut enums <category-flag> [--jianying]",
   catalogue: "capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]",
@@ -276,6 +276,17 @@ export function commandNames(): CommandName[] {
 }
 
 const optionsByCommand: Record<string, OptionSpec[]> = {
+  describe: [
+    option(
+      "compact",
+      ["--compact"],
+      "boolean",
+      "Emit a discovery index with names, summaries, usage, and write status.",
+    ),
+    option("command", ["--command"], "enum", "Describe only this command; repeat to select several.", {
+      values: commandNames(),
+    }),
+  ],
   lint: [
     option(
       "max_chars",
@@ -946,6 +957,8 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--compact",
+  "--command",
   "--add",
   "--audio-stream",
   "--apply",
