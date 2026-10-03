@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { projectShell } from "./helpers/project-shell.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
 
 const SERVE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "../dist/serve.js")).href;
@@ -305,6 +306,26 @@ describe("serve queue identity and capture boundaries", () => {
     assert.ok(indexOf("end", "concat") < indexOf("begin", "rename"));
     assert.ok(indexOf("end", "concat") < indexOf("begin", "second-source"));
     assert.ok(indexOf("end", "rename") < indexOf("begin", "renamed-target"));
+  });
+
+  it("serializes shell compilation with edits through root and unverified nested file aliases", (t) => {
+    const fixture = setup();
+    t.after(fixture.cleanup);
+    const shell = projectShell(t);
+    fixture.script(eventScript(fixture.log));
+    const result = fixture.run(
+      [
+        { cmd: "compile", args: ["spec.json", "--into", shell.dir, "--active-timeline", "compile"] },
+        { cmd: "add-text", args: [shell.active, "0", "1s", "--active-timeline", "nested"] },
+        { cmd: "add-text", args: [shell.root, "0", "1s", "--active-timeline", "root"] },
+      ],
+      { workers: 3 },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      fixture.events().map((event) => event.event),
+      ["begin", "end", "begin", "end", "begin", "end"],
+    );
   });
 
   it("allows separate projects to run concurrently and does not treat non-project arguments as projects", () => {

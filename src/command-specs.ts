@@ -261,7 +261,7 @@ const usages = {
   quickstart:
     "capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto|bundled|<dir>] [--ratio <r> | --width <px> --height <px>]",
   compile:
-    "capcut compile <spec.json> [--out <draftdir>] [--template auto|bundled|<dir>] [--data <rows.jsonl|->] [--check | --plan]",
+    "capcut compile <spec.json> [--out <draftdir> | --into <project>] [--template auto|bundled|<dir>] [--data <rows.jsonl|->] [--check | --plan]",
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
   "detect-silence": "capcut detect-silence <media> [options]",
@@ -803,6 +803,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   compile: [
     OUT,
+    option(
+      "into",
+      ["--into"],
+      "path",
+      "Populate an existing empty app-created project, preserving its identity and store registration. Incompatible with --out, --drafts, --template and --data.",
+    ),
     option("drafts", ["--drafts"], "path", "Draft root directory."),
     TEMPLATE,
     option("check", ["--check"], "boolean", "Validate without writing."),
@@ -934,7 +940,8 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --catalogue          -> harvest-enums (v0.16 user catalogue path)
 //   --sync, --add        -> harvest-enums (v0.20 library sweep + manual entry)
 //   --data               -> compile (v0.17 one-draft-per-JSONL-row)
-//   --into               -> import-timeline (v0.17 append target)
+//   --into               -> import-timeline (append target), compile (empty app-owned shell)
+//   --active-timeline    -> project commands, compile/import-timeline with --into
 //   --encoder            -> render (v0.20 proxy video encoder)
 //   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
@@ -957,6 +964,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--active-timeline",
   "--compact",
   "--command",
   "--add",
@@ -1021,8 +1029,24 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
 /** True when `command` declares `flag` among its command-specific options. */
 export function commandDeclaresFlag(command: string | undefined, flag: string): boolean {
   if (command === undefined) return false;
+  if (flag === "--active-timeline") return supportsActiveTimeline(command);
   const opts = optionsByCommand[command];
   return opts?.some((o) => o.flags.includes(flag)) ?? false;
+}
+
+const ACTIVE_TIMELINE_OPTION = option(
+  "active_timeline",
+  ["--active-timeline"],
+  "boolean",
+  "Explicitly follow the validated Timelines/project.json pointer on an unverified app build. Invalid, deleted or conflicting selected timelines are refused; write guards remain in force.",
+);
+
+function supportsActiveTimeline(command: string): boolean {
+  return (
+    command === "compile" ||
+    command === "import-timeline" ||
+    /<project(?:-dir)?>/.test(usages[command as CommandName] ?? "")
+  );
 }
 
 const mutating = new Set([
@@ -1144,7 +1168,7 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
       summary: summaries[name] ?? "",
       usage,
       positionals: positionalsFromUsage(usage),
-      options: optionsByCommand[name] ?? [],
+      options: [...(optionsByCommand[name] ?? []), ...(supportsActiveTimeline(name) ? [ACTIVE_TIMELINE_OPTION] : [])],
       mutates: mutating.has(name),
       prerequisites,
       output: {

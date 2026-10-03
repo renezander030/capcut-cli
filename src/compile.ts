@@ -1,5 +1,19 @@
-import { existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { stripBom } from "./bom.js";
 import {
   addKeyframes,
@@ -10,7 +24,16 @@ import {
   type TextRangeInput,
   type TextStyleOptions,
 } from "./decorators.js";
-import { type Draft, findSegment, loadDraft, saveDraft } from "./draft.js";
+import {
+  assertDraftWriteable,
+  assertTargetsUnchangedOnDisk,
+  type Draft,
+  findSegment,
+  isDryRun,
+  loadDraft,
+  loadedDraftStore,
+  saveDraft,
+} from "./draft.js";
 import {
   addAudio,
   addEffect,
@@ -20,12 +43,15 @@ import {
   applyTemplate,
   copyTextStyle,
   initDraft,
+  planAssetCopy,
   registerDraftInIndex,
   resolveCanvas,
   setAudioFade,
 } from "./factory.js";
+import { planChangedMediaRegistration } from "./materials-register.js";
 import { type MediaProbe, probeMedia } from "./probe.js";
 import { parseSrt } from "./srt.js";
+import { assertActiveTimelineUnchanged, type DraftStoreOptions } from "./store.js";
 
 /**
  * Declarative draft compiler: a spec file -> a guaranteed-valid CapCut draft.
@@ -724,6 +750,205 @@ export function compileDraft(spec: CompileSpec, opts: CompileOptions): CompileRe
       const current = lstatSync(init.draftPath);
       if (current.isDirectory() && current.dev === owned.dev && current.ino === owned.ino) {
         rmSync(init.draftPath, { recursive: true, force: true });
+      }
+    }
+    throw error;
+  }
+}
+
+export interface CompileIntoOptions extends DraftStoreOptions {
+  intoDir: string;
+  specDir: string;
+}
+
+export type CompileIntoResult = Omit<CompileResult, "template"> & { into: true };
+
+/** Reject symlink traversal even for paths that do not exist yet. */
+function assertShellPath(projectDir: string, target: string): void {
+  const rel = relative(projectDir, target);
+  if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`))
+    throw new Error(`compile --into: path escapes the project: ${target}`);
+  let current = projectDir;
+  for (const part of rel.split(sep).filter(Boolean)) {
+    current = resolve(current, part);
+    if (existsSync(current) && lstatSync(current).isSymbolicLink())
+      throw new Error(`compile --into: symlink traversal is refused: ${current}`);
+  }
+}
+
+function prepareCompileInto(spec: CompileSpec, opts: CompileIntoOptions) {
+  const plan = planCompile(spec, opts.specDir);
+  const projectDir = resolve(opts.intoDir);
+  if (!existsSync(projectDir) || !lstatSync(projectDir).isDirectory())
+    throw new Error("compile --into: target must be an existing project directory created in the app.");
+  const { filePath, draft: loaded } = loadDraft(projectDir, opts);
+  const store = loadedDraftStore(filePath);
+  if (store.nestedTimelines.length && !store.activeTimeline)
+    throw new Error("compile --into: nested timelines require --active-timeline to select the app's live document.");
+  for (const candidate of store.candidates) {
+    if (!candidate.exists) continue;
+    assertShellPath(projectDir, candidate.path);
+    if (!candidate.parseable && /(?:draft_content\.json|draft_info\.json|template-2\.tmp)$/.test(candidate.name))
+      throw new Error(`compile --into: unreadable timeline document: ${candidate.name}`);
+  }
+  for (const target of store.targets) {
+    const draft = target.draft as Draft;
+    if (
+      draft.tracks.some((track) => !Array.isArray(track.segments) || track.segments.length > 0) ||
+      Number(draft.duration ?? 0) !== 0
+    )
+      throw new Error(`compile --into: project must be empty in every root and active mirror (${target.name}).`);
+    if (typeof draft.id !== "string" || !draft.id || !draft.platform?.app_version)
+      throw new Error("compile --into: target must retain an app-created project id and version marker.");
+  }
+  const draft = structuredClone(loaded);
+  const canvas = resolveCanvas(spec);
+  if (canvas) draft.canvas_config = { ...draft.canvas_config, ...canvas };
+  if (spec.fps !== undefined) draft.fps = spec.fps;
+  const sidecarPath = resolve(projectDir, "draft_meta_info.json");
+  assertShellPath(projectDir, sidecarPath);
+  const sidecarRaw = existsSync(sidecarPath) ? readFileSync(sidecarPath, "utf-8") : null;
+  if (spec.tracks.some((track) => track.type !== "text")) {
+    let sidecar: unknown;
+    try {
+      sidecar = sidecarRaw === null ? null : JSON.parse(stripBom(sidecarRaw));
+    } catch {
+      sidecar = null;
+    }
+    if (!sidecar || typeof sidecar !== "object" || Array.isArray(sidecar))
+      throw new Error("compile --into: media requires a readable app-created draft_meta_info.json sidecar.");
+  }
+  return { plan, projectDir, store, filePath, draft, sidecarPath, sidecarRaw };
+}
+
+/** Validate both the specification and destination without staging assets or changing registration. */
+export function planCompileInto(
+  spec: CompileSpec,
+  opts: CompileIntoOptions,
+): CompilePlan & { into: true; file_path: string } {
+  const { plan, draft, filePath } = prepareCompileInto(spec, opts);
+  return {
+    ...plan,
+    name: draft.name,
+    canvas: { ...draft.canvas_config, fps: draft.fps },
+    into: true,
+    file_path: filePath,
+  };
+}
+
+/** Fill an app-owned empty shell. Asset cleanup and the timeline/sidecar transaction own only this call's writes. */
+export function compileIntoDraft(spec: CompileSpec, opts: CompileIntoOptions): CompileIntoResult {
+  if (isDryRun()) throw new Error("compile --into: use planCompileInto for a dry run.");
+  const { projectDir, store, filePath, draft, sidecarPath, sidecarRaw } = prepareCompileInto(spec, opts);
+  const warnings: string[] = [];
+  if (spec.name && spec.name !== draft.name)
+    warnings.push("compile --into: spec.name is ignored; the app-created project keeps its name.");
+  const previousMedia = new Set(
+    [...(draft.materials.videos ?? []), ...(draft.materials.audios ?? [])].map((material) => material.id),
+  );
+  // Placeholder mode builds real segments with their probed metadata in memory,
+  // leaving source paths to stage after every operation has validated.
+  const { segments, maxEnd, refs } = populateDraft(spec, opts.specDir, draft, filePath, warnings, true);
+  draft.duration = maxEnd;
+  assertDraftWriteable(filePath, draft, { warnings: false });
+  for (const target of store.targets) assertDraftWriteable(filePath, target.draft as Draft, { warnings: false });
+  assertActiveTimelineUnchanged(store);
+  // --force-write may override version/editor gates, but it cannot invalidate
+  // the proof that this destination was empty.
+  assertTargetsUnchangedOnDisk(store.targets);
+  const ownedFiles: Array<{ path: string; dev: number; ino: number }> = [];
+  const ownedDirs: typeof ownedFiles = [];
+  const ensureDir = (dir: string): void => {
+    assertShellPath(projectDir, dir);
+    if (existsSync(dir)) {
+      if (!lstatSync(dir).isDirectory()) throw new Error(`compile --into: asset directory is not a directory: ${dir}`);
+      return;
+    }
+    ensureDir(dirname(dir));
+    mkdirSync(dir);
+    const stat = lstatSync(dir);
+    ownedDirs.push({ path: dir, dev: stat.dev, ino: stat.ino });
+  };
+  try {
+    const materials = [...(draft.materials.videos ?? []), ...(draft.materials.audios ?? [])].filter(
+      (material) => !previousMedia.has(material.id),
+    );
+    const audioIds = new Set((draft.materials.audios ?? []).map((material) => material.id));
+    for (const material of materials) {
+      const source = material.path as string;
+      const kind = audioIds.has(material.id) ? "audio" : "video";
+      const dir = resolve(projectDir, "assets", kind);
+      assertShellPath(projectDir, dir);
+      const asset = planAssetCopy(source, dir, basename(source));
+      assertShellPath(projectDir, asset.destination);
+      if (asset.copyNeeded) {
+        ensureDir(dir);
+        const output = openSync(asset.destination, "wx");
+        const owned = fstatSync(output);
+        ownedFiles.push({ path: asset.destination, dev: owned.dev, ino: owned.ino });
+        try {
+          const input = openSync(source, "r");
+          try {
+            const buffer = Buffer.alloc(64 * 1024);
+            while (true) {
+              const length = readSync(input, buffer, 0, buffer.length, null);
+              if (length === 0) break;
+              let offset = 0;
+              while (offset < length) offset += writeSync(output, buffer, offset, length - offset);
+            }
+            fsyncSync(output);
+          } finally {
+            closeSync(input);
+          }
+        } finally {
+          closeSync(output);
+        }
+      }
+      material.path = asset.destination;
+      if ("material_name" in material) material.material_name = basename(asset.destination);
+      else material.name = basename(asset.destination);
+    }
+    const registration = planChangedMediaRegistration(
+      draft,
+      projectDir,
+      materials.map((material) => material.id as string),
+    );
+    if (materials.length && (!registration || registration.raw !== sidecarRaw))
+      throw new Error(
+        "refused [draft-changed-on-disk]: The project sidecar changed while compiling. Reload and retry.",
+      );
+    // A readable sidecar is always a guarded dependency, even for text-only specs.
+    const additionalFiles = registration
+      ? [registration]
+      : sidecarRaw === null
+        ? []
+        : [{ path: sidecarPath, raw: sidecarRaw, content: sidecarRaw }];
+    assertActiveTimelineUnchanged(store);
+    assertTargetsUnchangedOnDisk(store.targets);
+    saveDraft(filePath, draft, { additionalFiles, preserveProjectFields: true });
+    return {
+      ok: true,
+      into: true,
+      name: draft.name,
+      draft_path: projectDir,
+      file_path: filePath,
+      tracks: draft.tracks.length,
+      segments,
+      duration_us: maxEnd,
+      warnings,
+      refs: Object.fromEntries(refs),
+    };
+  } catch (error) {
+    for (const item of [...ownedFiles, ...ownedDirs.reverse()]) {
+      if (!existsSync(item.path)) continue;
+      const current = lstatSync(item.path);
+      if (current.dev === item.dev && current.ino === item.ino && !current.isSymbolicLink()) {
+        try {
+          if (current.isDirectory()) rmdirSync(item.path);
+          else rmSync(item.path);
+        } catch {
+          /* Preserve non-empty directories or another writer's replacement. */
+        }
       }
     }
     throw error;

@@ -82,7 +82,7 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
-> **v0.28.0 新增：** 精简的命令发现索引与按命令名筛选；Python 客户端 v0.1.3 修复 Windows 命令路径的引号解析，并在 Linux、macOS、Windows 上运行客户端 CI。详见 [更新日志](./CHANGELOG.md)。
+> **v0.28.0 新增：** 显式选择活动时间线、向应用创建的空项目编译，以及精简的命令发现索引与按命令名筛选；Python 客户端 v0.1.3 修复 Windows 命令路径的引号解析，并在 Linux、macOS、Windows 上运行客户端 CI。详见 [更新日志](./CHANGELOG.md)。
 
 > **v0.27.0 新增：** 按文件内容安全替换媒体；替换和重链接后自动更新媒体导入登记；递归搜索并报告同名歧义；精确处理小数秒时间边界；编译前校验操作并清理失败输出；将队列 ID 绑定到任务参数；统一项目锁；限制队列输出；以及解析 OTIO 的本地文件 URL 和相对路径。完整说明见[更新日志](./CHANGELOG.md)。
 
@@ -94,6 +94,17 @@ Claude Code 也可以把它作为插件加载：
 
 项目描述须经其维护者确认。收录不代表背书或关联。
 
+
+使用 `capcut diagnose <project> --active-timeline` 检查嵌套项目中的活动时间线。此显式选项依据 `Timelines/project.json` 选择文档；无效、已删除、符号链接或相互冲突的文档会被拒绝，现有写入保护仍然生效。
+
+若要填充 CapCut 已创建的项目，先在应用中创建空项目并退出应用，然后运行：
+
+```sh
+capcut compile spec.json --into /path/to/app-created-project --active-timeline --check
+capcut compile spec.json --into /path/to/app-created-project --active-timeline
+```
+
+没有 `Timelines/` 的平面项目请省略 `--active-timeline`。所有根目录和活动时间线镜像必须为空；保留项目名称、身份和注册信息，只有 spec 明确指定时才修改画布和帧率。媒体写入项目的 assets 目录，时间线与媒体注册信息一起备份和提交。`--check`、`--plan`、`--dry-run` 均不写入。请在应用中打开、保存、关闭并重新打开，确认编辑保留；自动测试覆盖写入安全性，尚未验证此路径在各应用版本中的桌面往返行为。
 
 ## 常用命令
 

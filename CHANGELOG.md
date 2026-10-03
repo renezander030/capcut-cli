@@ -8,6 +8,9 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ### Added
 
+- `--active-timeline` explicitly follows a validated `Timelines/project.json` pointer on app builds without a verified storage fixture (#50). Invalid, deleted, symlinked or conflicting selected timelines are refused; normal defaults and write guards remain unchanged. Writes keep root and active IDs and preserve other timelines.
+- `compile --into <project>` populates an existing empty project created in CapCut (#52). It preserves project identity, per-document app markers and unknown settings, stages content-correct media, and commits imported-media registration with timeline writes. Failed copies and commits clean up only newly owned assets; the shared store index is never rewritten. `--check`, `--plan` and `--dry-run` validate both spec and destination without writing. Nested layouts require active selection. Desktop acceptance on these opt-in paths remains unverified.
+
 - `describe --compact` emits a small command discovery index with names, summaries, usage, and write status. `describe --command <name>` returns complete contracts for selected commands; repeat the flag for several names. The full v2 command contract remains the default. Python client v0.1.3 forwards these options through `capcut.describe(compact=True, command="compile")`.
 
 ### Fixed
