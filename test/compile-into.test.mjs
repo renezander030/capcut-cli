@@ -256,10 +256,14 @@ describe("compile into an app-created empty project (#52)", () => {
     const s = projectShell(t);
     const spec = mediaSpec(s);
     const before = fs.readFileSync(s.active, "utf-8");
+    let changed = false;
     inject(
       "writeSync",
       (original, fd, ...args) => {
-        if (Buffer.isBuffer(args[0])) fs.writeFileSync(s.pointer, '{"main_timeline_id":"archive-id"}');
+        if (!changed && Buffer.isBuffer(args[0])) {
+          changed = true;
+          fs.writeFileSync(s.pointer, '{"main_timeline_id":"archive-id"}');
+        }
         return original(fd, ...args);
       },
       () => {
@@ -279,10 +283,14 @@ describe("compile into an app-created empty project (#52)", () => {
     const s = projectShell(t);
     const spec = mediaSpec(s);
     const edited = JSON.stringify({ ...readJson(s.root), duration: 1_000_000 });
+    let changed = false;
     inject(
       "writeSync",
       (original, fd, ...args) => {
-        if (Buffer.isBuffer(args[0])) fs.writeFileSync(s.root, edited);
+        if (!changed && Buffer.isBuffer(args[0])) {
+          changed = true;
+          fs.writeFileSync(s.root, edited);
+        }
         return original(fd, ...args);
       },
       () => {
