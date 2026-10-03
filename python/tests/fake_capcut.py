@@ -4,6 +4,8 @@
 import json
 import sys
 
+sys.stdout.reconfigure(encoding="utf-8")
+
 argv = sys.argv[1:]
 if argv == ["--version"]:
     print("0.0.0-fake")

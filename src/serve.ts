@@ -274,6 +274,9 @@ function projectKey(input: string): string {
       }
     }
   }
+  // Nested-file discovery can retain legacy local-file semantics on an
+  // unverified build. It still belongs to the enclosing project's write lock.
+  if (basename(dirname(root)) === "Timelines") root = dirname(dirname(root));
   const key = canonicalPath(root);
   return process.platform === "win32" ? key.toLowerCase() : key;
 }
@@ -298,7 +301,8 @@ function projectLockKeys(job: JobInput): string[] {
       ? [positionals[index]]
       : [],
   );
-  if (job.cmd === "import-timeline" && options.has("--into")) paths.push(options.get("--into") as string);
+  if (["import-timeline", "compile"].includes(job.cmd) && options.has("--into"))
+    paths.push(options.get("--into") as string);
   if (["compile", "import-timeline", "cut", "concat", "translate"].includes(job.cmd) && options.has("--out")) {
     paths.push(options.get("--out") as string);
   }

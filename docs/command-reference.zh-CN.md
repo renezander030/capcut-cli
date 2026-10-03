@@ -4,6 +4,8 @@
 
 > 英文版 [command-reference.md](./command-reference.md) 由 `npm run docs:commands` 从 v2 命令注册表自动生成，是权威版本；本页是它的人工维护中文翻译。命令有新增或变更时，请先重新生成英文版，再同步更新本翻译。用法（Usage）一列与命令名保持英文原样 —— 那就是你在终端里输入的内容。
 
+项目命令可使用 `--active-timeline`，显式依据 `Timelines/project.json` 选择活动时间线。`compile` 与 `import-timeline` 需同时指定 `--into`。无效、已删除、符号链接或相互冲突的活动文档会被拒绝；写入保护不会绕过，桌面应用往返接受情况仍未验证。
+
 | 命令 | 用法 | 修改草稿 | 说明 |
 |---|---|:---:|---|
 | `info` | `capcut info <project>` | 否 | 项目概览与素材汇总。 |
@@ -72,7 +74,7 @@
 | `diff` | `capcut diff <project-a> <project-b>` | 否 | 比较两个草稿（片段/素材/轨道的增、删、改）。 |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | 是 | 把一个草稿追加到另一个的时间线末尾（ID 安全），写入 --out 或原地写入。 |
 | `config` | `capcut config` | 否 | 显示解析后的配置（.capcutrc + 生效的默认值）。 |
-| `describe` | `capcut describe` | 否 | 以 JSON 输出完整命令面（Agent 工具规范）。 |
+| `describe` | `capcut describe [--compact] [--command <name>]` | 否 | 以 JSON 输出命令契约；可按命令名筛选，或输出精简的命令发现索引。 |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | 否 | 生成 shell 补全（bash\|zsh\|fish）。 |
 | `enums` | `capcut enums <category-flag> [--jianying]` | 否 | 按类别列出枚举 slug（转场、蒙版、特效等）。 |
 | `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | 否 | 把商店资源 ID 学习进用户级素材目录：来源可以是单个草稿、整个草稿库（--sync），或手动添加（--add）。 |
@@ -86,7 +88,7 @@
 | `export` | `capcut export <drafts-dir> --batch [options]` | 是 | 实验性的 UI 自动化渲染队列（macOS）。 |
 | `init` | `capcut init <name> [--template <dir>] [--drafts <dir>]` | 是 | 从模板创建一个新的空草稿。 |
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | 是 | 一条命令生成第一个草稿：创建 + 添加一个素材 + lint + 打印“在 CapCut 中打开”的步骤。 |
-| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--data <rows.jsonl\|->] [--check \| --plan]` | 是 | 从声明式 JSON spec 构建草稿（describe 的逆操作）。 |
+| `compile` | `capcut compile <spec.json> [--out <draftdir> \| --into <project>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | 是 | 从声明式 JSON spec 构建草稿；`--into` 填充应用创建的空项目，保留项目身份和注册信息。 |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | 否 | 渲染低清 ffmpeg 代理预览（裁剪+变速+音频，--burn-captions）；支持 --crf / --video-bitrate，大型滤镜图自动走脚本文件；不是 CapCut 的最终渲染。 |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | 否 | 检测视频中的场景切换切点（ffmpeg scene 滤镜）；输出切点与片段列表，供 compile/cut 使用。 |
 | `detect-silence` | `capcut detect-silence <media> [options]` | 否 | 检测媒体文件中的静音区间（ffmpeg silencedetect）；输出静音与保留片段列表，供 compile/cut 使用。 |

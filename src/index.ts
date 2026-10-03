@@ -69,7 +69,9 @@ import {
   NESTED_TIMELINES_MODERN_ACTION,
   nestedTimelinesAction,
   nestedTimelinesWriteWarning,
+  parseCandidate,
   planTimelineSync,
+  setActiveTimelineSelection,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import type { UserEnumEntry } from "./user-enums.js";
@@ -178,6 +180,8 @@ Global flags:
   -q, --quiet     No output on success, exit code only (write commands)
   --dry-run       Preview a mutating command: print the result (with
                   "dryRun":true) but leave the draft and its .bak untouched
+  --active-timeline  Follow the validated Timelines/project.json pointer explicitly
+                    on an unverified build; existing write guards still apply.
   --force-write   Override editor-running, changed-on-disk, and
                   version-boundary safety checks
   --jianying      Use JianYing enum namespace (default: CapCut) for
@@ -240,7 +244,7 @@ Create:
              Durations come from ffprobe when available (5s placeholder if not).
              --ratio / --width / --height set the canvas exactly as in init.
              Exit codes: 0 created & lint-clean · 2 created but lint errors
-  compile    <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]
+  compile    <spec.json> [--out <draftdir> | --into <project>] [--drafts <dir>] [--data <rows.jsonl|->]
              Build a whole draft from a declarative JSON spec (the inverse of
              describe). Times are in seconds. Media paths resolve relative to
              the spec file. Validates the full spec before writing anything.
@@ -497,7 +501,7 @@ Maintenance & inspection:
   diff       <projectA> <projectB>             Compare two drafts (added/removed/changed)
   concat     <projectA> <draftB> [--out <p>]   Append draftB onto projectA's timeline (id-safe)
   config                                       Show resolved .capcutrc + effective defaults
-  describe                                      Emit the full command surface as JSON (agent tool spec)
+  describe [--compact] [--command <name>]        Emit command contracts or a compact discovery index
   diagnose   <project> [--bundle <report.json>] Inspect canonical draft files and divergence
   fixture    <project> --out <dir>              Build a shareable, redacted compatibility bundle
              (timeline JSON only, no media; home paths + emails redacted) to
@@ -1058,6 +1062,8 @@ interface Flags {
   backoffMs?: number;
   maxBufferMb?: number;
   version?: boolean;
+  describeCompact?: boolean;
+  describeCommands?: string[];
   // relink / projects / timeline / restore
   dir?: string;
   recursive?: boolean;
@@ -1076,6 +1082,7 @@ interface Flags {
   maxCps?: number;
   safeArea?: number;
   forceWrite?: boolean;
+  activeTimeline?: boolean;
   bundle?: string;
   continueOnError?: boolean;
   check?: boolean;
@@ -1188,7 +1195,14 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     if (a === "-H" || a === "--human") flags.human = true;
     else if (a === "-v" || a === "--version") flags.version = true;
     else if (a === "-q" || a === "--quiet") flags.quiet = true;
-    else if (a === "--batch") flags.batch = true;
+    else if (a === "--compact") flags.describeCompact = true;
+    else if (a === "--active-timeline") flags.activeTimeline = true;
+    else if (a === "--command") {
+      const name = args[++i];
+      if (!name || name.startsWith("-")) die("--command requires a command name (for example: --command compile)");
+      flags.describeCommands ??= [];
+      flags.describeCommands.push(name);
+    } else if (a === "--batch") flags.batch = true;
     else if (a === "--easing" && i + 1 < args.length) {
       flags.easing = args[++i];
     } else if ((a === "--track" || a === "--type") && i + 1 < args.length) {
@@ -3777,7 +3791,12 @@ function cmdVersion(draft: Draft, filePath: string, flags: Flags): void {
   // discarded by the app — name the layout alongside the write-guard notes.
   // On >= 8.7 storage the layout value stays content-/info-primary by design,
   // so the same question needs the claim-free note instead of silence.
-  if (store.activeTimeline) v.support.notes.push(ACTIVE_TIMELINE_WINDOWS_ACTION);
+  if (store.activeTimeline)
+    v.support.notes.push(
+      store.activeTimeline.explicit
+        ? "Active timeline selected by explicit --active-timeline opt-in; desktop acceptance is unverified on this build."
+        : ACTIVE_TIMELINE_WINDOWS_ACTION,
+    );
   else if (store.layout === "timelines-nested") v.support.notes.push(nestedTimelinesAction(store.version));
   else if (store.nestedTimelines.length > 0) v.support.notes.push(NESTED_TIMELINES_MODERN_ACTION);
   if (flags.human) {
@@ -4862,6 +4881,19 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
     return;
   }
 
+  const restoreSource = (source: string): void => {
+    if (!hasSynchronizedSiblings) {
+      copyFileSync(source, filePath);
+      return;
+    }
+    const restored = loadDraft(filePath);
+    const backup = parseCandidate(source);
+    if (!backup.draft) die(`Backup does not contain a readable timeline: ${source}`);
+    // Load all current targets before committing the backup. This also avoids
+    // creating disagreement between active documents during pointer validation.
+    saveDraft(restored.filePath, backup.draft, { backup: false, skipVersionGuard: true });
+  };
+
   if (flags.step !== undefined) {
     if (!Number.isInteger(flags.step) || flags.step < 1) die("--step must be a positive integer (1 = most recent).");
     const target = snaps.find((s) => s.step === flags.step);
@@ -4869,16 +4901,7 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
       const avail = snaps.length ? `1..${snaps.length}` : "none yet";
       die(`No snapshot at --step ${flags.step}. Available: ${avail}. Try: capcut restore ${projectPath} --list`);
     }
-    if (!isDryRun()) {
-      copyFileSync(target.path, filePath);
-      if (hasSynchronizedSiblings) {
-        // skipVersionGuard: restore is the undo path and must never be gated
-        // (docs/version-support.md) — a refusal here would fire AFTER the
-        // canonical was already rolled back, leaving the mirrors diverged.
-        const restored = loadDraft(filePath);
-        saveDraft(restored.filePath, restored.draft, { backup: false, skipVersionGuard: true });
-      }
-    }
+    if (!isDryRun()) restoreSource(target.path);
     out({ ok: true, restored: filePath, from: target.path, step: flags.step }, flags);
     return;
   }
@@ -4887,14 +4910,7 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
   if (!existsSync(bakPath)) {
     die(`No backup found at ${bakPath}. Nothing to restore (a .bak is written on the first edit).`);
   }
-  if (!isDryRun()) {
-    copyFileSync(bakPath, filePath);
-    if (hasSynchronizedSiblings) {
-      // skipVersionGuard: see the --step branch above — restore stays ungated.
-      const restored = loadDraft(filePath);
-      saveDraft(restored.filePath, restored.draft, { backup: false, skipVersionGuard: true });
-    }
-  }
+  if (!isDryRun()) restoreSource(bakPath);
   out({ ok: true, restored: filePath, from: bakPath }, flags);
 }
 
@@ -5137,7 +5153,7 @@ const SUMMARIES: Record<string, string> = {
   diff: "Compare two drafts (segments/materials/tracks added/removed/changed).",
   concat: "Append one draft onto another's timeline (id-safe), write to --out or in place.",
   config: "Show the resolved config (.capcutrc + effective defaults).",
-  describe: "Emit the full command surface as JSON (agent tool spec).",
+  describe: "Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index.",
   completions: "Generate shell completions (bash|zsh|fish).",
   restore: "Undo writes from .bak / snapshot history (--step N, --list).",
   serve: "Run a stateless JSONL job queue from stdin/--queue.",
@@ -5158,6 +5174,14 @@ const SUMMARIES: Record<string, string> = {
 // don't have to scrape --help. Names come from COMMANDS (source of truth);
 // summaries from SUMMARIES (test-enforced complete).
 function cmdDescribe(flags: Flags): void {
+  let commands = commandSpecs();
+  if (flags.describeCommands) {
+    const selected = new Set(flags.describeCommands);
+    const known = new Set(commands.map((command) => command.name));
+    const unknown = [...selected].filter((name) => !known.has(name));
+    if (unknown.length) die(`Unknown command(s): ${unknown.join(", ")}. Use capcut describe --compact to list names.`);
+    commands = commands.filter((command) => selected.has(command.name));
+  }
   out(
     {
       name: "capcut-cli",
@@ -5165,7 +5189,10 @@ function cmdDescribe(flags: Flags): void {
       schema_version: 2,
       description: "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
       global_flags: GLOBAL_OPTION_SPECS,
-      commands: commandSpecs(),
+      ...(flags.describeCompact ? { detail: "compact" } : {}),
+      commands: flags.describeCompact
+        ? commands.map(({ name, summary, usage, mutates }) => ({ name, summary, usage, mutates }))
+        : commands,
     },
     flags,
   );
@@ -5379,10 +5406,15 @@ async function cmdConcat(positional: string[], flags: Flags): Promise<void> {
 // factory functions the imperative add-* commands use. Resolves the bundled
 // _init template the same way `init` does.
 async function cmdCompile(positional: string[], flags: Flags): Promise<void> {
-  const { compileDraft, parseSpec, planCompile } = await import("./compile.js");
+  const { compileDraft, compileIntoDraft, parseSpec, planCompile, planCompileInto } = await import("./compile.js");
   const specPath = positional[1];
-  if (!specPath) die("Usage: capcut compile <spec.json> [--out <draftdir>] [--drafts <dir>] [--data <rows.jsonl|->]");
+  if (!specPath)
+    die(
+      "Usage: capcut compile <spec.json> [--out <draftdir> | --into <project>] [--drafts <dir>] [--data <rows.jsonl|->]",
+    );
   if (!existsSync(specPath)) die(`Spec file not found: ${specPath}`);
+  if (flags.into && [flags.out, flags.drafts, flags.template, flags.data].some((value) => value !== undefined))
+    die("compile: --into is incompatible with --out, --drafts, --template and --data.");
 
   // --data: mass production. One spec + N JSONL rows = N drafts. Branches
   // before anything else so the single-draft path below stays untouched.
@@ -5396,6 +5428,22 @@ async function cmdCompile(positional: string[], flags: Flags): Promise<void> {
     spec = parseSpec(stripBom(readFileSync(specPath, "utf-8")));
   } catch (e) {
     die((e as Error).message);
+  }
+
+  if (flags.into) {
+    const options = {
+      intoDir: flags.into,
+      specDir: path.dirname(path.resolve(specPath)),
+      activeTimeline: flags.activeTimeline === true,
+    };
+    if (flags.check || flags.plan || isDryRun())
+      out({ ...planCompileInto(spec, options), checked: true, write: false }, flags);
+    else {
+      const result = compileIntoDraft(spec, options);
+      out(result, flags);
+      if (!flags.quiet) process.stderr.write(`Compiled into existing project: ${result.draft_path}\n`);
+    }
+    return;
   }
 
   if (flags.check || flags.plan) {
@@ -5803,6 +5851,9 @@ async function main(): Promise<void> {
   // Global --dry-run: gate every saveDraft write (see src/draft.ts).
   setDryRun(flags.dryRun === true);
   setForceWrite(flags.forceWrite === true);
+  if (flags.activeTimeline && ["compile", "import-timeline"].includes(positional[0]) && !flags.into)
+    die("--active-timeline requires --into for this command.");
+  setActiveTimelineSelection(flags.activeTimeline === true);
 
   if (flags.version) {
     console.log(getCliVersion());

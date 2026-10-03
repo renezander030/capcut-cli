@@ -71,7 +71,7 @@
 | `diff` | `capcut diff <project-a> <project-b>` | no | Compare two drafts (segments/materials/tracks added/removed/changed). |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | yes | Append one draft onto another's timeline (id-safe), write to --out or in place. |
 | `config` | `capcut config` | no | Show the resolved config (.capcutrc + effective defaults). |
-| `describe` | `capcut describe` | no | Emit the full command surface as JSON (agent tool spec). |
+| `describe` | `capcut describe [--compact] [--command <name>]` | no | Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index. |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | no | Generate shell completions (bash|zsh|fish). |
 | `enums` | `capcut enums <category-flag> [--jianying]` | no | List enum slugs (transitions, masks, effects, ...) by category. |
 | `catalogue` | `capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]` | no | Find a resource id by name across every category, harvested entries included. |
@@ -86,7 +86,7 @@
 | `export` | `capcut export <drafts-dir> --batch [options]` | yes | EXPERIMENTAL UI-automated render queue (macOS). |
 | `init` | `capcut init <name> [--template auto\|bundled\|<dir>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | Create a new empty draft from a template. |
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto\|bundled\|<dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
-| `compile` | `capcut compile <spec.json> [--out <draftdir>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
+| `compile` | `capcut compile <spec.json> [--out <draftdir> \| --into <project>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |
 | `detect-silence` | `capcut detect-silence <media> [options]` | no | Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut. |

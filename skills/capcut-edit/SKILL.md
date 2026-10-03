@@ -80,4 +80,4 @@ Batch is transactional: one failing operation writes nothing. Use `--continue-on
 - Karaoke: `capcut caption <project> --audio <path> --whisper-engine <openai|whisper-cpp|faster-whisper> --karaoke`.
 - Proxy: `capcut render <project> --all-video-tracks --burn-captions`; run `doctor` first for FFmpeg capability flags.
 - Automation: `capcut serve --workers N --retries N --timeout MS`; give jobs stable `id` fields and let the runner serialize writes per project.
-- Agent schema: `capcut describe` is the source of truth. Do not scrape help text or invent flags.
+- Agent schema: on CLI v0.28.0 or newer, start with `capcut describe --compact` to discover commands, then fetch complete contracts with `capcut describe --command <name>` (repeat for several names). Plain `capcut describe` returns the full registry and works on older versions. Use these contracts as the source of truth; do not scrape help text or invent flags.

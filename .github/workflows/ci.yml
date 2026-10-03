@@ -92,3 +92,27 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  python-client:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.9'
+          - os: ubuntu-latest
+            python: '3.14'
+          - os: windows-latest
+            python: '3.9'
+          - os: windows-latest
+            python: '3.14'
+          - os: macos-latest
+            python: '3.14'
+    runs-on: ${{ matrix.os }}
+    name: Python client (${{ matrix.os }}, ${{ matrix.python }})
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s python/tests -v

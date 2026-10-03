@@ -22,7 +22,9 @@ import {
   assertActiveTimelineUnchanged,
   type DraftCandidate,
   type DraftStore,
+  type DraftStoreOptions,
   discoverDraftStore,
+  draftProjectDir,
   editorProcesses,
   isManagedDraftPath,
   nestedTimelinesWriteWarning,
@@ -137,8 +139,8 @@ export interface Draft {
   [key: string]: unknown;
 }
 
-export function findDraft(input: string): string {
-  return discoverDraftStore(input).canonical.path;
+export function findDraft(input: string, options: DraftStoreOptions = {}): string {
+  return discoverDraftStore(input, options).canonical.path;
 }
 
 interface LoadContext {
@@ -147,12 +149,11 @@ interface LoadContext {
 
 const loadContexts = new Map<string, LoadContext>();
 
-export function loadDraft(path: string): { draft: Draft; filePath: string } {
-  const store = discoverDraftStore(path);
+export function loadDraft(path: string, options: DraftStoreOptions = {}): { draft: Draft; filePath: string } {
+  const store = discoverDraftStore(path, options);
   const filePath = store.canonical.path;
   // The caller gets the parsed timeline itself, not a copy of it. The store
-  // kept here never escapes this module — `loadContexts` is private and
-  // `saveDraft` is its only reader — and everything saveDraft takes from it is
+  // snapshot is also used for asset roots and compiler preflight. Everything saveDraft takes from it is
   // either fixed at discovery (`version`, `layout`, `projectDir`) or a string
   // snapshot of the file on disk (`raw`, `path`, `envelopePath`), never
   // anything re-derived from `canonical.draft`. So nothing observes the
@@ -162,6 +163,15 @@ export function loadDraft(path: string): { draft: Draft; filePath: string } {
   // on disk must re-read it rather than reach for `store.canonical.draft`.
   loadContexts.set(resolve(filePath), { store });
   return { draft: store.canonical.draft as Draft, filePath };
+}
+
+/** Project root captured at load, including an explicit active-timeline selection. */
+export function loadedDraftProjectDir(filePath: string): string {
+  return loadContexts.get(resolve(filePath))?.store.projectDir ?? draftProjectDir(filePath);
+}
+
+export function loadedDraftStore(filePath: string): DraftStore {
+  return loadContexts.get(resolve(filePath))?.store ?? discoverDraftStore(filePath);
 }
 
 // Canonical bottom->top layer order CapCut expects in the tracks array.
@@ -307,10 +317,26 @@ export interface AdditionalDraftFile {
 export function commitDraftTargets(
   targets: DraftCandidate[],
   draft: Draft,
-  options: { backup?: boolean; additionalFiles?: AdditionalDraftFile[] } = {},
+  options: { backup?: boolean; additionalFiles?: AdditionalDraftFile[]; preserveProjectFields?: boolean } = {},
 ): Map<string, string> {
   const written = new Map<string, string>();
   if (dryRun) return written;
+
+  // A sidecar can also contain a timeline. Shell compilation merges its
+  // import group into that file's serialized timeline and commits it once.
+  const embeddedSidecars = new Map<string, AdditionalDraftFile>();
+  const additionalPaths = new Set<string>();
+  for (const file of options.additionalFiles ?? []) {
+    const path = resolve(file.path);
+    if (additionalPaths.has(path)) throw new Error(`Duplicate draft transaction target: ${path}`);
+    additionalPaths.add(path);
+    if (
+      options.preserveProjectFields &&
+      basename(path) === "draft_meta_info.json" &&
+      targets.some((target) => resolve(target.path) === path)
+    )
+      embeddedSidecars.set(path, file);
+  }
 
   // Prepare every replacement before renaming any target. This keeps the
   // multi-file write as close to a transaction as the filesystem allows.
@@ -318,9 +344,16 @@ export function commitDraftTargets(
     ...targets.map((target) => ({
       path: target.path,
       raw: target.raw,
-      content: serializeDraftCandidate(target, draft),
+      content: serializeDraftCandidate(
+        target,
+        draft,
+        options.preserveProjectFields,
+        embeddedSidecars.has(resolve(target.path))
+          ? { draft_materials: JSON.parse(embeddedSidecars.get(resolve(target.path))!.content).draft_materials }
+          : undefined,
+      ),
     })),
-    ...(options.additionalFiles ?? []),
+    ...(options.additionalFiles ?? []).filter((file) => !embeddedSidecars.has(resolve(file.path))),
   ];
   const paths = new Set<string>();
   for (const item of replacements) {
@@ -381,28 +414,14 @@ export function commitDraftTargets(
   return written;
 }
 
-export function saveDraft(
+/** Run the normal save gates before a caller stages project assets. Save repeats them at commit. */
+export function assertDraftWriteable(
   filePath: string,
   draft: Draft,
-  options: { backup?: boolean; skipVersionGuard?: boolean; additionalFiles?: AdditionalDraftFile[] } = {},
+  options: { skipVersionGuard?: boolean; warnings?: boolean } = {},
+  storeSnapshot?: DraftStore,
 ): void {
-  if (dryRun) {
-    // Version guard, warning only: dry-run writes nothing, so it never blocks,
-    // but the WARNING still previews what a real write would do. Draft-only
-    // assessment (no store discovery) keeps dry-run free of extra I/O.
-    if (options.skipVersionGuard !== true) {
-      const safety = assessWriteSafety(draft, null);
-      if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
-    }
-    // Normalize in memory (so any read-back is consistent) but write nothing.
-    sortTracks(draft);
-    return;
-  }
-
-  const resolved = resolve(filePath);
-  const context = loadContexts.get(resolved) ?? { store: discoverDraftStore(filePath) };
-  const { store } = context;
-
+  const store = storeSnapshot ?? loadContexts.get(resolve(filePath))?.store ?? discoverDraftStore(filePath);
   if (!forceWrite && isManagedDraftPath(filePath)) {
     const running = editorProcesses();
     if (running.length > 0) {
@@ -431,7 +450,7 @@ export function saveDraft(
     if (safety.action === "refuse" && !forceWrite) {
       throw new Error(`refused [version-boundary]: ${safety.reasons.join("\n")}`);
     }
-    if (safety.action === "warn" || (safety.action === "refuse" && forceWrite)) {
+    if (options.warnings !== false && (safety.action === "warn" || (safety.action === "refuse" && forceWrite))) {
       process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
     }
   }
@@ -444,12 +463,42 @@ export function saveDraft(
   // no longer silent: warn, never refuse. Shares skipVersionGuard with the
   // version guard: restore's mirror re-sync is the escape hatch, not a new
   // sighting of the hazard.
-  if (options.skipVersionGuard !== true && store.layout === "timelines-nested") {
+  if (options.warnings !== false && options.skipVersionGuard !== true && store.layout === "timelines-nested") {
     process.stderr.write(`WARNING: ${nestedTimelinesWriteWarning(store.version)}\n`);
   }
 
   assertActiveTimelineUnchanged(store);
   if (!forceWrite) assertTargetsUnchangedOnDisk(store.targets);
+}
+
+export function saveDraft(
+  filePath: string,
+  draft: Draft,
+  options: {
+    backup?: boolean;
+    skipVersionGuard?: boolean;
+    additionalFiles?: AdditionalDraftFile[];
+    preserveProjectFields?: boolean;
+  } = {},
+): void {
+  if (dryRun) {
+    // Version guard, warning only: dry-run writes nothing, so it never blocks,
+    // but the WARNING still previews what a real write would do. Draft-only
+    // assessment (no store discovery) keeps dry-run free of extra I/O.
+    if (options.skipVersionGuard !== true) {
+      const safety = assessWriteSafety(draft, null);
+      if (safety.action !== "ok") process.stderr.write(`WARNING: ${safety.reasons.join(" ")}\n`);
+    }
+    // Normalize in memory (so any read-back is consistent) but write nothing.
+    sortTracks(draft);
+    return;
+  }
+
+  const resolved = resolve(filePath);
+  const context = loadContexts.get(resolved) ?? { store: discoverDraftStore(filePath) };
+  const { store } = context;
+
+  assertDraftWriteable(filePath, draft, options, store);
 
   sortTracks(draft);
   const written = commitDraftTargets(store.targets, draft, options);
@@ -475,7 +524,12 @@ export function saveDraft(
   // establish what the write already knew.
   const timelinePaths = new Set(store.targets.map((target) => target.path));
   const timelineWrites = new Map([...written].filter(([path]) => timelinePaths.has(path)));
-  loadContexts.set(resolved, { store: storeAfterWrite(store, draft, timelineWrites) });
+  const embeddedSidecar = options.additionalFiles?.some((file) => timelinePaths.has(resolve(file.path)));
+  loadContexts.set(resolved, {
+    store: embeddedSidecar
+      ? discoverDraftStore(filePath, { activeTimeline: store.activeTimeline?.explicit === true })
+      : storeAfterWrite(store, draft, timelineWrites, options.preserveProjectFields),
+  });
 }
 
 function writeAndSync(path: string, content: string): void {

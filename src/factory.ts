@@ -21,10 +21,10 @@ import { stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
-import { findMaterialGlobal, findSegment, makeTrack, writeAtomic } from "./draft.js";
+import { findMaterialGlobal, findSegment, loadedDraftProjectDir, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { PHOTO_META_DURATION_US, registerMediumInSidecar } from "./materials-register.js";
-import { draftProjectDir, isManagedDraftPath, parseCandidate } from "./store.js";
+import { isManagedDraftPath, parseCandidate } from "./store.js";
 import { storedTextLength } from "./text-offsets.js";
 import { atLeast, versionTuple } from "./version.js";
 import { fetchWikimediaAsset, isWikimediaUrl, type WikimediaAsset } from "./wikimedia.js";
@@ -1989,7 +1989,7 @@ export function addAudio(
 
   // Copy file into draft assets directory (collision-safe). Placeholder clips
   // reference their (possibly empty/broken) path verbatim — nothing to copy.
-  const draftDir = draftProjectDir(filePath);
+  const draftDir = loadedDraftProjectDir(filePath);
   const assetsDir = resolve(draftDir, "assets", "audio");
   const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "audio.mp3");
   // Use the local assets path — CapCut rewrites to placeholder on open
@@ -2099,7 +2099,7 @@ export function addVideo(
 
   // Copy file into draft assets directory (collision-safe). Placeholder clips
   // reference their (possibly empty/broken) path verbatim — nothing to copy.
-  const draftDir = draftProjectDir(filePath);
+  const draftDir = loadedDraftProjectDir(filePath);
   const assetsDir = resolve(draftDir, "assets", "video");
   const destPath = opts.placeholder ? opts.placeholder.path : copyAssetDeduped(opts.path, assetsDir, "media");
   // Use the local assets path — CapCut rewrites to placeholder on open

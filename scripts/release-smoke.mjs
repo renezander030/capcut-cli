@@ -30,6 +30,13 @@ try {
   const lib = await import(pathToFileURL(join(packageRoot, "dist", "lib.js")));
   assert.equal(typeof lib.loadDraft, "function");
   assert.ok(existsSync(join(packageRoot, "docs", "command-reference.json")));
+  const contract = load(join(packageRoot, "docs", "command-reference.json"));
+  const compact = invoke(["describe", "--compact"]);
+  assert.equal(compact.json.detail, "compact");
+  assert.ok(Buffer.byteLength(compact.stdout) < 64 * 1024);
+  assert.deepEqual(compact.json.commands.map((command) => command.name), contract.commands.map((command) => command.name));
+  const selected = invoke(["describe", "--command", "compile"]);
+  assert.deepEqual(selected.json.commands, contract.commands.filter((command) => command.name === "compile"));
 
   const beat = (60 / 136) * 4;
   const beatsSpec = join(root, "beats.json");

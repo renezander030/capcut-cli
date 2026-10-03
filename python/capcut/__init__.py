@@ -29,7 +29,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Mapping, Optional, Sequence, Union
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __all__ = [
     "CapcutError",
     "CliNotFound",
@@ -110,11 +110,55 @@ class CommandError(CapcutError):
         return self.result.stderr
 
 
+def _split_windows_command(command: str) -> List[str]:
+    """Parse Windows argv quoting, preserving path backslashes (no shell expansion)."""
+    args: List[str] = []
+    index = 0
+    while index < len(command):
+        while index < len(command) and command[index] in " \t":
+            index += 1
+        if index == len(command):
+            break
+        token: List[str] = []
+        quoted = False
+        while index < len(command):
+            char = command[index]
+            if char in " \t" and not quoted:
+                break
+            if char == "\\":
+                start = index
+                while index < len(command) and command[index] == "\\":
+                    index += 1
+                count = index - start
+                if index == len(command) or command[index] != '"':
+                    token.append("\\" * count)
+                    continue
+                token.append("\\" * (count // 2))
+                if count % 2:
+                    token.append('"')
+                    index += 1
+                    continue
+                # An even run of backslashes leaves the quote structural.
+            if command[index] == '"':
+                if quoted and index + 1 < len(command) and command[index + 1] == '"':
+                    token.append('"')
+                    index += 2
+                    continue
+                quoted = not quoted
+            else:
+                token.append(command[index])
+            index += 1
+        if quoted:
+            raise ValueError("CAPCUT_CLI has an unclosed double quote")
+        args.append("".join(token))
+    return args
+
+
 def cli_command() -> List[str]:
-    """The argv prefix that runs capcut-cli: ``CAPCUT_CLI`` split like a shell would, else ``capcut`` on PATH."""
+    """The argv prefix: ``CAPCUT_CLI`` with platform quoting, else ``capcut`` on PATH."""
     configured = os.environ.get("CAPCUT_CLI", "").strip()
     if configured:
-        return shlex.split(configured, posix=(os.name != "nt"))
+        return _split_windows_command(configured) if os.name == "nt" else shlex.split(configured)
     found = shutil.which("capcut")
     if found:
         return [found]
@@ -220,9 +264,10 @@ def version() -> str:
     return result.stdout.strip()
 
 
-def describe() -> Any:
-    """The full command surface as JSON (``capcut describe``): names, usage, options, exit codes."""
-    return run("describe")
+def describe(*, compact: bool = False, command: Optional[Union[str, Sequence[str]]] = None) -> Any:
+    """Command contracts, or a compact discovery index. ``command`` selects one or several names."""
+    selected = list(command) if command is not None and not isinstance(command, str) else command
+    return run("describe", compact=compact, command=selected)
 
 
 def doctor(**flags: Any) -> Any:

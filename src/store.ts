@@ -43,6 +43,18 @@ interface ActiveTimeline {
   id: string;
   pointerPath: string;
   pointerRaw: string;
+  explicit?: boolean;
+}
+
+export interface DraftStoreOptions {
+  /** Opt in to pointer-based selection on an app build without a verified fixture. */
+  activeTimeline?: boolean;
+}
+
+let activeTimelineSelection = false;
+/** CLI process default; library callers should pass options to loadDraft instead. */
+export function setActiveTimelineSelection(value: boolean): void {
+  activeTimelineSelection = value;
 }
 
 export interface DraftStore {
@@ -89,7 +101,7 @@ export interface DraftStoreReport {
     error?: string;
   }>;
   next_actions: string[];
-  active_timeline?: { id: string; canonical: string };
+  active_timeline?: { id: string; canonical: string; explicit?: boolean };
   /** Present only when the timeline references local media that
    * draft_meta_info.json's `draft_materials` provably does not register —
    * see assessMediaRegistration. Informational: no exit-code change. */
@@ -439,36 +451,55 @@ function selectActiveTimeline(
   projectDir: string,
   root: DraftCandidate,
   version: string | null,
+  explicit = false,
 ): {
   active: ActiveTimeline;
   candidates: DraftCandidate[];
 } | null {
-  if (version !== "8.7.0" || !isEvidencedWindowsDraft(root.draft)) return null;
+  if (!explicit && (version !== "8.7.0" || !isEvidencedWindowsDraft(root.draft))) return null;
+  const invalid = (reason: string): never => {
+    throw new Error(`refused [active-timeline-invalid]: ${reason}`);
+  };
   const pointerPath = join(projectDir, "Timelines", "project.json");
-  if (!containedPath(projectDir, pointerPath)) return null;
   try {
+    if (!containedPath(projectDir, pointerPath))
+      invalid("The active timeline pointer is missing or traverses a symlink.");
     const pointerRaw = stripBom(readFileSync(pointerPath, "utf-8"));
     const pointer = JSON.parse(pointerRaw) as Record<string, unknown>;
     const id = pointer.main_timeline_id ?? pointer.id;
-    if (typeof id !== "string" || !/^[A-Za-z0-9_-]+$/.test(id)) return null;
+    if (typeof id !== "string" || !/^[A-Za-z0-9_-]+$/.test(id))
+      return invalid("The pointer must name one safe timeline id.");
     if (
       Array.isArray(pointer.timelines) &&
       pointer.timelines.some((entry) => entry?.id === id && entry.is_marked_delete === true)
     )
-      return null;
+      invalid("The selected timeline is marked deleted.");
     const candidates: DraftCandidate[] = [];
     for (const name of ["draft_content.json", "draft_info.json", "template-2.tmp"]) {
       const rel = join("Timelines", id, name);
       const path = join(projectDir, rel);
-      if (!containedPath(projectDir, path)) continue;
+      if (!existsSync(path)) continue;
+      if (!containedPath(projectDir, path)) invalid("A selected timeline document traverses a symlink.");
       const candidate = parseCandidate(path);
+      if (explicit && !candidate.parseable) invalid(`The selected document ${rel} is unreadable.`);
       candidates.push({ ...candidate, name: rel.split(sep).join("/") });
     }
     const primary = candidates.find((candidate) => candidate.parseable && candidate.draft);
-    if (!primary || !isEvidencedWindowsDraft(primary.draft)) return null;
-    if (candidates.some((candidate) => candidate.parseable && !isEvidencedWindowsDraft(candidate.draft))) return null;
-    return { active: { id, pointerPath, pointerRaw }, candidates };
-  } catch {
+    if (!primary) return invalid("The selected timeline has no readable document.");
+    if (
+      !explicit &&
+      (!isEvidencedWindowsDraft(primary.draft) ||
+        candidates.some((candidate) => candidate.parseable && !isEvidencedWindowsDraft(candidate.draft)))
+    )
+      return null;
+    if (explicit && new Set(candidates.map((candidate) => timelineHashWithoutId(candidate.draft as Draft))).size > 1)
+      invalid("The selected timeline's documents disagree. Reconcile them in the app before using --active-timeline.");
+    return { active: { id, pointerPath, pointerRaw, ...(explicit ? { explicit: true } : {}) }, candidates };
+  } catch (error) {
+    if (explicit) {
+      if ((error as Error).message.startsWith("refused [active-timeline-invalid]:")) throw error;
+      invalid((error as Error).message);
+    }
     // A malformed or inaccessible pointer must never redirect a root write.
     return null;
   }
@@ -498,11 +529,11 @@ function highestVersion(parseable: DraftCandidate[]): string | null {
   return versions.sort((a, b) => (atLeast(a, b) ? -1 : 1))[0] ?? null;
 }
 
-export function discoverDraftStore(input: string): DraftStore {
-  return discoverStore(input, true);
+export function discoverDraftStore(input: string, options: DraftStoreOptions = {}): DraftStore {
+  return discoverStore(input, true, options.activeTimeline ?? activeTimelineSelection);
 }
 
-function discoverStore(input: string, nestedRoot: boolean): DraftStore {
+function discoverStore(input: string, nestedRoot: boolean, explicit = false): DraftStore {
   const { projectDir, requested, paths } = candidatePaths(input, nestedRoot);
   let candidates = paths.map(parseCandidate);
   let parseable = candidates.filter((candidate) => candidate.parseable && candidate.draft);
@@ -514,8 +545,8 @@ function discoverStore(input: string, nestedRoot: boolean): DraftStore {
     );
   }
 
-  const version = highestVersion(parseable);
-  const modernStorage = atLeast(version, "8.7");
+  let version = highestVersion(parseable);
+  let modernStorage = atLeast(version, "8.7");
 
   let canonical: DraftCandidate | undefined;
   if (requested) canonical = parseable.find((candidate) => candidate.path === requested);
@@ -529,13 +560,17 @@ function discoverStore(input: string, nestedRoot: boolean): DraftStore {
 
   const root =
     parseable.find((candidate) => candidate.path === join(projectDir, "template-2.tmp")) ??
-    parseable.find((candidate) => candidate.path === join(projectDir, "draft_content.json"));
+    parseable.find((candidate) => candidate.path === join(projectDir, "draft_content.json")) ??
+    (explicit ? parseable.find((candidate) => dirname(candidate.path) === projectDir) : undefined);
+  if (explicit && !root) throw new Error("refused [active-timeline-invalid]: No readable project-root timeline.");
+  if (explicit && requested && !STANDARD_FILES.some((name) => basename(requested) === name))
+    throw new Error("refused [active-timeline-invalid]: Pass the project directory or a standard timeline document.");
   const selection =
     root && (!requested || STANDARD_FILES.some((name) => basename(requested) === name))
-      ? selectActiveTimeline(projectDir, root, version)
+      ? selectActiveTimeline(projectDir, root, version, explicit)
       : null;
   if (!selection && nestedRoot && requested && dirname(requested) !== projectDir) {
-    return discoverStore(input, false);
+    return discoverStore(input, false, explicit);
   }
   if (selection) {
     const activeDir = join(projectDir, "Timelines", selection.active.id);
@@ -546,6 +581,8 @@ function discoverStore(input: string, nestedRoot: boolean): DraftStore {
     }
     candidates = [...candidates.filter((candidate) => dirname(candidate.path) === projectDir), ...selection.candidates];
     parseable = candidates.filter((candidate) => candidate.parseable && candidate.draft);
+    version = highestVersion(parseable);
+    modernStorage = atLeast(version, "8.7");
     canonical = selection.candidates.find((candidate) => candidate.parseable && candidate.draft) as DraftCandidate;
     for (const candidate of parseable) {
       candidate.keepGuid = dirname(candidate.path) === activeDir ? selection.active.id : candidate.draft?.id;
@@ -615,7 +652,12 @@ function discoverStore(input: string, nestedRoot: boolean): DraftStore {
  * `diverged` collapses to false on its own, because every written target now
  * exposes the same timeline.
  */
-export function storeAfterWrite(store: DraftStore, draft: Draft, written: Map<string, string>): DraftStore {
+export function storeAfterWrite(
+  store: DraftStore,
+  draft: Draft,
+  written: Map<string, string>,
+  preserveProjectFields = false,
+): DraftStore {
   const refresh = (candidate: DraftCandidate): DraftCandidate => {
     const content = written.get(candidate.path);
     if (content === undefined) return candidate;
@@ -629,6 +671,7 @@ export function storeAfterWrite(store: DraftStore, draft: Draft, written: Map<st
       // The file is there — it was just renamed into place — but a stat can
       // still fail on a racing sync client. Fall back to what we wrote.
     }
+    const candidateDraft = draftForCandidate(candidate, draft, preserveProjectFields);
     let timelineHash: string | null = null;
     return {
       name: candidate.name,
@@ -640,13 +683,10 @@ export function storeAfterWrite(store: DraftStore, draft: Draft, written: Map<st
       raw: content,
       parseable: true,
       envelopePath: candidate.envelopePath,
-      draft: candidate.keepGuid === undefined ? draft : { ...draft, id: candidate.keepGuid },
+      draft: candidateDraft,
       ...(candidate.keepGuid === undefined ? {} : { keepGuid: candidate.keepGuid }),
       get timelineHash(): string {
-        if (timelineHash === null)
-          timelineHash = hash(
-            JSON.stringify(candidate.keepGuid === undefined ? draft : { ...draft, id: candidate.keepGuid }),
-          );
+        if (timelineHash === null) timelineHash = hash(JSON.stringify(candidateDraft));
         return timelineHash;
       },
     };
@@ -727,14 +767,43 @@ function indentOf(raw: string | null): string | number {
   return match[1].includes("\t") ? "\t" : match[1].length;
 }
 
-export function serializeDraftCandidate(candidate: DraftCandidate, draft: Draft): string {
-  if (candidate.keepGuid !== undefined) draft = { ...draft, id: candidate.keepGuid };
+function draftForCandidate(candidate: DraftCandidate, draft: Draft, preserveProjectFields: boolean): Draft {
+  if (preserveProjectFields && candidate.draft) {
+    draft = {
+      ...candidate.draft,
+      tracks: draft.tracks,
+      materials: { ...candidate.draft.materials, ...draft.materials },
+      duration: draft.duration,
+      fps: draft.fps,
+      canvas_config: {
+        ...draft.canvas_config,
+        ...candidate.draft.canvas_config,
+        width: draft.canvas_config.width,
+        height: draft.canvas_config.height,
+        ratio: draft.canvas_config.ratio,
+      },
+    };
+  }
+  return candidate.keepGuid === undefined ? draft : { ...draft, id: candidate.keepGuid };
+}
+
+export function serializeDraftCandidate(
+  candidate: DraftCandidate,
+  draft: Draft,
+  preserveProjectFields = false,
+  metadata?: { draft_materials: unknown },
+): string {
+  draft = draftForCandidate(candidate, draft, preserveProjectFields);
   if (!candidate.raw || candidate.envelopePath.length === 0) {
-    return JSON.stringify(draft, null, indentOf(candidate.raw));
+    return JSON.stringify(metadata ? { ...draft, ...metadata } : draft, null, indentOf(candidate.raw));
   }
   const root = JSON.parse(candidate.raw) as unknown;
   const updated = replaceAtPath(root, candidate.envelopePath, draft);
-  return JSON.stringify(updated, null, indentOf(candidate.raw));
+  return JSON.stringify(
+    metadata ? { ...(updated as Record<string, unknown>), ...metadata } : updated,
+    null,
+    indentOf(candidate.raw),
+  );
 }
 
 export function editorProcesses(): string[] {
@@ -957,15 +1026,23 @@ function timelineHashWithoutId(draft: Draft): string {
  * it does not change which file any command reads (PR #51's canonical flip
  * stays rejected pending a field artifact).
  */
-export function planTimelineSync(input: string, opts: { nested?: boolean } = {}): TimelineSyncResult {
+export function planTimelineSync(
+  input: string,
+  opts: { nested?: boolean; activeTimeline?: boolean } = {},
+): TimelineSyncResult {
   const resolved = resolve(input);
-  if (existsSync(resolved) && statSync(resolved).isFile() && basename(resolved) !== "draft_content.json") {
+  const store = discoverDraftStore(input, opts);
+  if (
+    !store.activeTimeline &&
+    existsSync(resolved) &&
+    statSync(resolved).isFile() &&
+    basename(resolved) !== "draft_content.json"
+  ) {
     throw new Error(
       `sync-timelines reconciles a project's mirror files from draft_content.json and cannot target ${basename(resolved)} directly. ` +
         `Pass the project directory instead: capcut sync-timelines ${dirname(resolved)}`,
     );
   }
-  const store = discoverDraftStore(input);
   // draft_content.json is the sync canonical. On the draft_info-primary layout
   // (no draft_content.json; newer Mac builds drive the project from
   // draft_info.json — jianying-mcp#5, pyJianYingDraft#177/#194) draft_info.json
@@ -986,7 +1063,9 @@ export function planTimelineSync(input: string, opts: { nested?: boolean } = {})
     );
   }
   const canonicalNote = store.activeTimeline
-    ? "The selected active timeline is canonical on the evidenced CapCut 8.7.0 Windows layout (issue #50). Only its documents and the root mirrors are reconciled; other timelines are preserved."
+    ? store.activeTimeline.explicit
+      ? "The selected active timeline is canonical by explicit --active-timeline opt-in. Only its documents and root mirrors are reconciled; other timelines are preserved. App round-trip acceptance is unverified on this build."
+      : "The selected active timeline is canonical on the evidenced CapCut 8.7.0 Windows layout (issue #50). Only its documents and the root mirrors are reconciled; other timelines are preserved."
     : canonical.name === "draft_info.json"
       ? "draft_info.json is the canonical source: this project has no draft_content.json (draft_info-primary " +
         "layout, reported as the primary project file on newer Mac builds). Round-trip evidence for this layout " +
@@ -1205,8 +1284,8 @@ export function assessMediaRegistrationAt(draft: Draft, projectDir: string): Med
   }
 }
 
-export function diagnoseDraftStore(input: string): DraftStoreReport {
-  const store = discoverDraftStore(input);
+export function diagnoseDraftStore(input: string, options: DraftStoreOptions = {}): DraftStoreReport {
+  const store = discoverDraftStore(input, options);
   const running = editorProcesses();
   const safety = store.canonical.draft ? assessWriteSafety(store.canonical.draft, store.version) : null;
   const actions: string[] = [];
@@ -1243,7 +1322,11 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
     );
   }
   if (store.activeTimeline) {
-    actions.push(ACTIVE_TIMELINE_WINDOWS_ACTION);
+    actions.push(
+      store.activeTimeline.explicit
+        ? "Active timeline selected by explicit --active-timeline opt-in. App round-trip acceptance remains unverified on this build."
+        : ACTIVE_TIMELINE_WINDOWS_ACTION,
+    );
   } else if (store.layout === "timelines-nested") actions.push(nestedTimelinesAction(store.version));
   else if (store.nestedTimelines.length > 0) actions.push(NESTED_TIMELINES_MODERN_ACTION);
   if (running.length > 0) actions.push(`Close ${running.join(" / ")} before editing this managed draft.`);
@@ -1264,7 +1347,13 @@ export function diagnoseDraftStore(input: string): DraftStoreReport {
     layout: store.layout,
     nested_timelines: store.nestedTimelines,
     ...(store.activeTimeline
-      ? { active_timeline: { id: store.activeTimeline.id, canonical: store.canonical.name } }
+      ? {
+          active_timeline: {
+            id: store.activeTimeline.id,
+            canonical: store.canonical.name,
+            ...(store.activeTimeline.explicit ? { explicit: true } : {}),
+          },
+        }
       : {}),
     write_guard: safety?.action ?? "ok",
     editor_running: running,
