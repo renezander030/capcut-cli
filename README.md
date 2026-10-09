@@ -105,9 +105,10 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
+> **New in v0.29.0:** captions from any aligner's word timings without Whisper (`caption --words`); reviewed batch plans bound to the draft (`batch --plan` / `--apply-plan`); a render fidelity census and output-duration check (`render --strict` / `--verify`); TTS pronunciation lexicons (`tts --lexicon`); `segment-overlap` and `segment-offscreen` lint checks; and `restore --list` naming the command behind each step. Full details in the [changelog](./CHANGELOG.md).
+
 > **New in v0.28.0:** opt-in active-timeline selection; compilation into empty app-created projects; compact command discovery and selection by name for agents; Windows command-path quoting fixed in Python client v0.1.3; and Python client CI on Linux, macOS, and Windows. Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.27.0:** content-safe media replacement; automatic import registration after replacement and relink; recursive, ambiguity-safe relinking; exact fractional-second compile boundaries; operation preflight and failed-build cleanup; payload-bound queue IDs; canonical project locks; bounded queue results; and local OTIO file/relative references. Full details in the [changelog](./CHANGELOG.md).
 
 For an existing nested project, use `capcut diagnose <project> --active-timeline` to inspect the selected document before editing. The opt-in follows the pointer on unverified builds and refuses invalid or conflicting selected documents; it does not bypass write guards.
 
