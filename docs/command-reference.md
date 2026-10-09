@@ -51,7 +51,7 @@
 | `apply-template` | `capcut apply-template <project> <template> <start> <duration> [text] [options]` | yes | Stamp a template into a project with new timing/text. |
 | `make-preset` | `capcut make-preset <project> <text-segment-id> --out <preset.json>` | no | Extract a text segment's styling as a reusable preset JSON (apply via --preset). |
 | `templates` | `capcut templates <project>` | no | List bundled reusable templates. |
-| `batch` | `capcut batch <project> [--continue-on-error] < operations.jsonl` | yes | Run multiple edits from stdin (JSONL), one file write. |
+| `batch` | `capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl \| capcut batch <project> --apply-plan <plan.json>` | yes | Run multiple edits from stdin (JSONL), one file write. |
 | `import-srt` | `capcut import-srt <project> <srt-or-> [options]` | yes | Import an SRT file/stdin as one text segment per cue. |
 | `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | yes | Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles. |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | yes | Apply byte-accurate multi-style ranges to a text segment. |

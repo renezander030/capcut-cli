@@ -1,5 +1,6 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -244,12 +245,12 @@ function snapshotFiles(filePath: string): string[] {
 // never diverge afterwards: every writer here replaces a name by rename or
 // unlink, never edits a file in place, so the next write gives `.bak` a fresh
 // file and leaves this snapshot holding what it always held.
-function writeHistorySnapshot(filePath: string, content: string, source?: string): void {
+function writeHistorySnapshot(filePath: string, content: string, source?: string, after?: string): void {
   const dir = historyDir(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const existing = snapshotFiles(filePath);
   const last = existing[existing.length - 1];
-  const lastIndex = last ? Number.parseInt(last.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10) : 0;
+  const lastIndex = last ? snapshotIndex(last) : 0;
   const name = `${basename(filePath)}.${String(lastIndex + 1).padStart(6, "0")}.snap`;
   const snapshot = join(dir, name);
   let linked = false;
@@ -264,11 +265,100 @@ function writeHistorySnapshot(filePath: string, content: string, source?: string
     }
   }
   if (!linked) writeFileSync(snapshot, content, "utf-8");
+  appendJournal(filePath, {
+    index: lastIndex + 1,
+    time: new Date().toISOString(),
+    command: writeContext.command,
+    argv: writeContext.argv,
+    before_sha256: sha256(content),
+    after_sha256: after === undefined ? null : sha256(after),
+  });
   // Trim oldest beyond the cap.
   const all = snapshotFiles(filePath);
+  let trimmed = false;
   while (all.length > HISTORY_MAX) {
     const oldest = all.shift();
     if (oldest) rmSync(join(dir, oldest));
+    trimmed = true;
+  }
+  if (trimmed) trimJournal(filePath, new Set(all.map(snapshotIndex)));
+}
+
+// Write journal: one JSON line per snapshot in `<draftbase>.journal.jsonl`,
+// naming the command that made the write, so `restore --list` can say what
+// each step undoes. The journal is a best-effort annotation of the snapshots,
+// never part of the recovery path: a journal that cannot be written, read or
+// parsed is skipped and the write or restore goes ahead regardless.
+export interface JournalEntry {
+  index: number;
+  time: string;
+  command: string | null;
+  argv: string[] | null;
+  before_sha256: string;
+  after_sha256: string | null;
+}
+
+// Set once by the CLI entry point (like setDryRun). Library callers that never
+// set it journal `command: null`.
+let writeContext: { command: string | null; argv: string[] | null } = { command: null, argv: null };
+
+export function setWriteContext(command: string | null, argv: string[] | null): void {
+  writeContext = { command, argv: argv === null ? null : [...argv] };
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
+
+function snapshotIndex(name: string): number {
+  return Number.parseInt(name.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10);
+}
+
+function journalPath(filePath: string): string {
+  return join(historyDir(filePath), `${basename(filePath)}.journal.jsonl`);
+}
+
+function appendJournal(filePath: string, entry: JournalEntry): void {
+  try {
+    appendFileSync(journalPath(filePath), `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch {
+    // Best effort: the snapshot is the record that matters.
+  }
+}
+
+// Parsed journal lines keyed by snapshot index. Unreadable files and lines
+// that are not a JSON object with a numeric index are skipped.
+export function readJournal(filePath: string): Map<number, JournalEntry> {
+  const entries = new Map<number, JournalEntry>();
+  let raw: string;
+  try {
+    raw = readFileSync(journalPath(filePath), "utf-8");
+  } catch {
+    return entries;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as JournalEntry;
+      if (entry && typeof entry === "object" && Number.isInteger(entry.index)) entries.set(entry.index, entry);
+    } catch {
+      // A torn or hand-edited line never breaks the history listing.
+    }
+  }
+  return entries;
+}
+
+// Keep the journal aligned with the snapshots HISTORY_MAX left on disk.
+function trimJournal(filePath: string, kept: Set<number>): void {
+  try {
+    const entries = readJournal(filePath);
+    const lines = [...entries.values()]
+      .filter((entry) => kept.has(entry.index))
+      .sort((a, b) => a.index - b.index)
+      .map((entry) => `${JSON.stringify(entry)}\n`);
+    writeAtomic(journalPath(filePath), lines.join(""));
+  } catch {
+    // Best effort, like the append.
   }
 }
 
@@ -276,7 +366,7 @@ function writeHistorySnapshot(filePath: string, content: string, source?: string
 export function listSnapshots(filePath: string): Array<{ step: number; index: number; path: string }> {
   const dir = historyDir(filePath);
   return snapshotFiles(filePath)
-    .map((f) => ({ index: Number.parseInt(f.match(/\.(\d+)\.snap$/)?.[1] ?? "0", 10), path: join(dir, f) }))
+    .map((f) => ({ index: snapshotIndex(f), path: join(dir, f) }))
     .sort((a, b) => b.index - a.index)
     .map((s, i) => ({ step: i + 1, index: s.index, path: s.path }));
 }
@@ -390,7 +480,7 @@ export function commitDraftTargets(
         // (what `restore --step 1` reads).
         const bak = `${item.target.path}.bak`;
         writeAtomic(bak, item.target.raw);
-        writeHistorySnapshot(item.target.path, item.target.raw, bak);
+        writeHistorySnapshot(item.target.path, item.target.raw, bak, item.content);
       }
     }
     for (const item of prepared) {

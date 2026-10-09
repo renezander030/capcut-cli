@@ -3602,12 +3602,17 @@
     {
       "name": "batch",
       "summary": "Run multiple edits from stdin (JSONL), one file write.",
-      "usage": "capcut batch <project> [--continue-on-error] < operations.jsonl",
+      "usage": "capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl | capcut batch <project> --apply-plan <plan.json>",
       "positionals": [
         {
           "name": "project",
           "type": "path",
           "required": true
+        },
+        {
+          "name": "plan.json",
+          "type": "string",
+          "required": false
         }
       ],
       "options": [
@@ -3619,6 +3624,24 @@
           "type": "boolean",
           "required": false,
           "description": "Commit only successful operations and exit 1 if any fail."
+        },
+        {
+          "name": "plan",
+          "flags": [
+            "--plan"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Validate the stdin operations as a real run would and write a reviewable plan file (draft and operations sha256, per-operation preview) instead of changing the draft."
+        },
+        {
+          "name": "apply_plan",
+          "flags": [
+            "--apply-plan"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Apply a plan written by --plan (no stdin). Refused if the draft changed since the plan or its operations were edited."
         },
         {
           "name": "active_timeline",
@@ -5979,7 +6002,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "List snapshots."
+          "description": "List snapshots, newest first, with the command that made each write."
         },
         {
           "name": "active_timeline",

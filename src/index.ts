@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import path from "node:path";
@@ -46,9 +47,12 @@ import {
   isDryRun,
   listSnapshots,
   loadDraft,
+  loadedDraftStore,
+  readJournal,
   saveDraft,
   setDryRun,
   setForceWrite,
+  setWriteContext,
   updateTextContent,
 } from "./draft.js";
 import type { Category, Namespace } from "./enums.js";
@@ -1108,6 +1112,11 @@ interface Flags {
   check?: boolean;
   plan?: boolean;
   apply?: boolean;
+  // batch --plan <file> / --apply-plan <file>
+  planFile?: string;
+  applyPlan?: string;
+  // Batch previews: when set, out() collects the result here instead of printing.
+  collect?: unknown[];
   // harvest-enums library sweep / manual entry
   sync?: boolean;
   add?: boolean;
@@ -1549,6 +1558,14 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.into = args[++i];
     } else if (a === "--check") {
       flags.check = true;
+    } else if (a === "--plan" && command === "batch") {
+      const file = args[++i];
+      if (!file || file.startsWith("-")) die("--plan requires a plan file path (batch --plan <plan.json>)");
+      flags.planFile = file;
+    } else if (a === "--apply-plan") {
+      const file = args[++i];
+      if (!file || file.startsWith("-")) die("--apply-plan requires a plan file path");
+      flags.applyPlan = file;
     } else if (a === "--plan") {
       flags.plan = true;
     } else if (a === "--apply") {
@@ -1608,6 +1625,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
 // --- Output ---
 
 function out(data: unknown, flags: Flags): void {
+  if (flags.collect) {
+    flags.collect.push(data);
+    return;
+  }
   if (flags.quiet) return;
   // In --dry-run, stamp an object result with dryRun:true so callers can tell a
   // preview from a committed write. Arrays (read commands) are left untouched.
@@ -4305,7 +4326,7 @@ interface BatchOp {
 }
 
 function execBatchOp(draft: Draft, filePath: string, op: BatchOp, flags: Flags): void {
-  const silent = { ...flags, quiet: true };
+  const silent = { ...flags, quiet: true, collect: flags.collect };
   switch (op.cmd) {
     case "set-text":
       if (!op.id || op.text === undefined) die(`batch set-text requires id and text`);
@@ -4340,34 +4361,171 @@ function execBatchOp(draft: Draft, filePath: string, op: BatchOp, flags: Flags):
   }
 }
 
-function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
-  const input = stripBom(readFileSync(0, "utf-8")).trim();
-  if (!input) die("No input on stdin");
+type BatchLine = { line: number; input: string; op: BatchOp | null; parseError?: string };
+
+function parseBatchLines(input: string): BatchLine[] {
+  const parsed: BatchLine[] = [];
   const lines = input.split("\n");
-  let working = structuredClone(draft);
-  const errors: Array<{ line: number; input: string; error: string }> = [];
-  let succeeded = 0;
   for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    const trimmed = line.trim();
+    const trimmed = lines[index].trim();
     if (!trimmed) continue;
     try {
       const op = JSON.parse(trimmed) as BatchOp;
       if (!op || typeof op !== "object" || typeof op.cmd !== "string") {
         throw new Error("batch line must be an object with a string cmd field");
       }
+      parsed.push({ line: index + 1, input: trimmed, op });
+    } catch (e) {
+      parsed.push({
+        line: index + 1,
+        input: trimmed,
+        op: null,
+        parseError: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  return parsed;
+}
+
+// Run parsed operations against a clone of `draft`. `previews`, when given,
+// receives each operation's own result object (what the command would have
+// printed) for the reviewed-plan file.
+function runBatchOps(
+  draft: Draft,
+  filePath: string,
+  ops: BatchLine[],
+  flags: Flags,
+  previews?: Array<Record<string, unknown>>,
+): { working: Draft; succeeded: number; errors: Array<{ line: number; input: string; error: string }> } {
+  let working = structuredClone(draft);
+  const errors: Array<{ line: number; input: string; error: string }> = [];
+  let succeeded = 0;
+  for (const { line, input, op, parseError } of ops) {
+    const collect: unknown[] = [];
+    try {
+      if (op === null) throw new Error(parseError ?? "batch line must be an object with a string cmd field");
       // Each operation runs against its own clone. A failing operation can
       // never leave a partial mutation behind, even in --continue-on-error.
       const candidate = structuredClone(working);
-      execBatchOp(candidate, filePath, op, flags);
+      execBatchOp(candidate, filePath, op, previews ? { ...flags, collect } : flags);
       working = candidate;
       succeeded++;
+      previews?.push({ line, cmd: op.cmd, ok: true, result: collect[collect.length - 1] ?? null });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      errors.push({ line: index + 1, input: trimmed, error: msg });
+      errors.push({ line, input, error: msg });
+      previews?.push({ line, cmd: op?.cmd ?? null, ok: false, error: msg });
       if (!flags.continueOnError) break;
     }
   }
+  return { working, succeeded, errors };
+}
+
+// Reviewed batch plans. `batch --plan <file>` validates the operations the way
+// a real run would (in memory, under dry-run) and records them with two
+// hashes: the timeline document as loaded, and a canonical serialization of
+// the operations. `batch --apply-plan <file>` re-checks both before applying,
+// so what runs is exactly what was reviewed, against exactly the draft it was
+// reviewed on.
+const BATCH_PLAN_FORMAT = "capcut-cli.batch-plan";
+const BATCH_PLAN_VERSION = 1;
+
+// JSON with object keys sorted at every level: equal operations hash equal
+// however the plan file was re-indented or its keys reordered.
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const entries = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256Hex(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
+
+// Hash of the canonical timeline document's bytes as loaded (BOM-stripped,
+// as the changed-on-disk guard compares them).
+function loadedDraftSha256(filePath: string): string {
+  const raw = loadedDraftStore(filePath).canonical.raw;
+  return sha256Hex(raw ?? stripBom(readFileSync(filePath, "utf-8")));
+}
+
+function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
+  if (flags.planFile !== undefined && flags.applyPlan !== undefined)
+    die("--plan and --apply-plan are mutually exclusive: write a plan, review it, then apply it.");
+  // --apply-plan takes its operations from the reviewed plan only; stdin is never read.
+  if (flags.applyPlan !== undefined) {
+    cmdBatchApplyPlan(draft, filePath, flags.applyPlan, flags);
+    return;
+  }
+
+  const input = stripBom(readFileSync(0, "utf-8")).trim();
+  if (!input) die("No input on stdin");
+  const ops = parseBatchLines(input);
+  if (flags.planFile !== undefined) writeBatchPlan(draft, filePath, ops, flags.planFile, flags);
+  else commitBatch(draft, filePath, ops, flags);
+}
+
+function writeBatchPlan(draft: Draft, filePath: string, ops: BatchLine[], planFile: string, flags: Flags): void {
+  const previews: Array<Record<string, unknown>> = [];
+  const wasDryRun = isDryRun();
+  setDryRun(true);
+  let run: ReturnType<typeof runBatchOps>;
+  try {
+    run = runBatchOps(draft, filePath, ops, flags, previews);
+  } finally {
+    setDryRun(wasDryRun);
+  }
+  if (run.errors.length > 0 && !flags.continueOnError) {
+    throw new Error(
+      `batch plan rejected at line ${run.errors[0].line}; no plan written: ${run.errors[0].error}. ` +
+        "Pass --continue-on-error to plan only the operations that validate.",
+    );
+  }
+  // Only operations that validated go into the plan, so applying it is the
+  // transactional run the preview showed.
+  const failed = new Set(run.errors.map((error) => error.line));
+  const operations = ops.filter((item) => !failed.has(item.line)).map((item) => item.op as BatchOp);
+  const plan = {
+    format: BATCH_PLAN_FORMAT,
+    version: BATCH_PLAN_VERSION,
+    project: filePath,
+    draft_sha256: loadedDraftSha256(filePath),
+    operations,
+    operations_sha256: sha256Hex(canonicalJson(operations)),
+    preview: previews,
+  };
+  writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`, "utf-8");
+  if (run.errors.length > 0) process.exitCode = 1;
+  out(
+    {
+      ok: run.errors.length === 0,
+      plan: planFile,
+      project: filePath,
+      operations: operations.length,
+      failed: run.errors.length,
+      errors: run.errors,
+      draft_sha256: plan.draft_sha256,
+      operations_sha256: plan.operations_sha256,
+    },
+    flags,
+  );
+}
+
+function commitBatch(
+  draft: Draft,
+  filePath: string,
+  ops: BatchLine[],
+  flags: Flags,
+  extra: Record<string, unknown> = {},
+): void {
+  const { working, succeeded, errors } = runBatchOps(draft, filePath, ops, flags);
 
   if (errors.length > 0 && !flags.continueOnError) {
     throw new Error(
@@ -4382,9 +4540,66 @@ function cmdBatch(draft: Draft, filePath: string, flags: Flags): void {
   }
   if (errors.length > 0) process.exitCode = 1;
   out(
-    { ok: errors.length === 0, transactional: !flags.continueOnError, succeeded, failed: errors.length, errors },
+    {
+      ok: errors.length === 0,
+      transactional: !flags.continueOnError,
+      succeeded,
+      failed: errors.length,
+      errors,
+      ...extra,
+    },
     flags,
   );
+}
+
+function cmdBatchApplyPlan(draft: Draft, filePath: string, planPath: string, flags: Flags): void {
+  let plan: Record<string, unknown>;
+  try {
+    plan = JSON.parse(stripBom(readFileSync(planPath, "utf-8"))) as Record<string, unknown>;
+  } catch (e) {
+    die(`Cannot read plan ${planPath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!plan || typeof plan !== "object" || plan.format !== BATCH_PLAN_FORMAT)
+    die(`${planPath} is not a batch plan (expected format "${BATCH_PLAN_FORMAT}").`);
+  if (plan.version !== BATCH_PLAN_VERSION)
+    die(
+      `Unsupported batch plan version ${String(plan.version)} in ${planPath} (this CLI reads ${BATCH_PLAN_VERSION}).`,
+    );
+  if (
+    !Array.isArray(plan.operations) ||
+    typeof plan.operations_sha256 !== "string" ||
+    typeof plan.draft_sha256 !== "string"
+  )
+    die(`Batch plan ${planPath} is missing operations, operations_sha256 or draft_sha256.`);
+  if (typeof plan.project === "string" && path.resolve(plan.project) !== path.resolve(filePath)) {
+    throw new Error(
+      `refused [plan-project-mismatch]: plan ${planPath} was made for ${plan.project}, not ${filePath}. ` +
+        "Apply it to the project it was planned on.",
+    );
+  }
+  const draftSha = loadedDraftSha256(filePath);
+  if (draftSha !== plan.draft_sha256) {
+    throw new Error(
+      `refused [plan-draft-changed]: ${filePath} changed since the plan was made ` +
+        `(${draftSha} != ${plan.draft_sha256}). Re-run batch --plan against the current draft and review it again.`,
+    );
+  }
+  const operationsSha = sha256Hex(canonicalJson(plan.operations));
+  if (operationsSha !== plan.operations_sha256) {
+    throw new Error(
+      `refused [plan-tampered]: the operations in ${planPath} no longer match its operations_sha256 ` +
+        `(${operationsSha} != ${plan.operations_sha256}). Re-run batch --plan and review the new plan.`,
+    );
+  }
+  const ops: BatchLine[] = (plan.operations as unknown[]).map((op, index) => {
+    const valid = op !== null && typeof op === "object" && typeof (op as BatchOp).cmd === "string";
+    return {
+      line: index + 1,
+      input: JSON.stringify(op),
+      op: valid ? (op as BatchOp) : null,
+    };
+  });
+  commitBatch(draft, filePath, ops, flags, { plan: planPath, operations_sha256: operationsSha });
 }
 
 async function cmdDoctor(flags: Flags): Promise<boolean> {
@@ -4959,7 +5174,20 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
   const snaps = listSnapshots(filePath);
 
   if (flags.list) {
-    out({ ok: true, count: snaps.length, snapshots: snaps.map((s) => ({ step: s.step, path: s.path })) }, flags);
+    // Each step names the write it undoes when the journal has its index;
+    // snapshots from before the journal (or with a torn line) list with nulls.
+    const journal = readJournal(filePath);
+    const snapshots = snaps.map((s) => {
+      const entry = journal.get(s.index);
+      return {
+        step: s.step,
+        path: s.path,
+        command: entry?.command ?? null,
+        argv: entry?.argv ?? null,
+        time: entry?.time ?? null,
+      };
+    });
+    out({ ok: true, count: snaps.length, snapshots }, flags);
     return;
   }
 
@@ -5948,6 +6176,11 @@ async function main(): Promise<void> {
   // Global --dry-run: gate every saveDraft write (see src/draft.ts).
   setDryRun(flags.dryRun === true);
   setForceWrite(flags.forceWrite === true);
+  // Write journal: every history snapshot records the command that made it.
+  if (positional[0] !== undefined) {
+    const at = raw.indexOf(positional[0]);
+    setWriteContext(positional[0], at >= 0 ? raw.slice(at + 1) : []);
+  }
   if (flags.activeTimeline && ["compile", "import-timeline"].includes(positional[0]) && !flags.into)
     die("--active-timeline requires --into for this command.");
   setActiveTimelineSelection(flags.activeTimeline === true);

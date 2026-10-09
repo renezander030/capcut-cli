@@ -223,7 +223,8 @@ const usages = {
   "save-template": "capcut save-template <project> <id> <name> --out <path>",
   "apply-template": "capcut apply-template <project> <template> <start> <duration> [text] [options]",
   "make-preset": "capcut make-preset <project> <text-segment-id> --out <preset.json>",
-  batch: "capcut batch <project> [--continue-on-error] < operations.jsonl",
+  batch:
+    "capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl | capcut batch <project> --apply-plan <plan.json>",
   "import-srt": "capcut import-srt <project> <srt-or-> [options]",
   "import-ass": "capcut import-ass <project> <ass-or-> [options]",
   "text-ranges": "capcut text-ranges <project> <id> --styles <json-or-@file>",
@@ -511,6 +512,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "boolean",
       "Commit only successful operations and exit 1 if any fail.",
     ),
+    option(
+      "plan",
+      ["--plan"],
+      "path",
+      "Validate the stdin operations as a real run would and write a reviewable plan file (draft and operations sha256, per-operation preview) instead of changing the draft.",
+    ),
+    option(
+      "apply_plan",
+      ["--apply-plan"],
+      "path",
+      "Apply a plan written by --plan (no stdin). Refused if the draft changed since the plan or its operations were edited.",
+    ),
   ],
   "export-srt": [
     option("granularity", ["--granularity"], "enum", "Cue granularity: one cue per caption or per word.", {
@@ -791,7 +804,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   restore: [
     option("step", ["--step"], "number", "Snapshot number."),
-    option("list", ["--list"], "boolean", "List snapshots."),
+    option("list", ["--list"], "boolean", "List snapshots, newest first, with the command that made each write."),
   ],
   serve: [
     option("queue", ["--queue"], "path", "JSONL queue file."),
@@ -988,6 +1001,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --strict, --verify   -> render (v0.29 fidelity census gate + output duration check)
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
+//   --apply-plan         -> batch (v0.29 reviewed batch plans)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
 //   --recursive -> relink (v0.27 nested media search)
@@ -1000,6 +1014,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--add",
   "--audio-stream",
   "--apply",
+  "--apply-plan",
   "--bind",
   "--captions",
   "--catalogue",
