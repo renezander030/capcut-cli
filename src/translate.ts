@@ -6,7 +6,7 @@ export interface TranslateOptions {
   to: string; // target language (free-form, e.g. "Spanish", "de", "Mandarin Chinese")
   from?: string; // source language; default "auto"
   apiKey?: string; // overrides ANTHROPIC_API_KEY env var
-  model?: string; // default "claude-haiku-4-5-20251001"
+  model?: string; // default "claude-haiku-5-5"
   dryRun?: boolean;
   outPath: string; // required: where to write the translated draft
 }
@@ -55,7 +55,7 @@ export async function translateDraft(draft: Draft, opts: TranslateOptions): Prom
         "Get one at https://console.anthropic.com/. (Use --dry-run to see what would be translated without calling the API.)",
     );
   }
-  const model = opts.model ?? "claude-haiku-4-5-20251001";
+  const model = opts.model ?? "claude-haiku-5-5";
 
   const translations = await callAnthropicBatch(
     apiKey,
