@@ -861,6 +861,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
     option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
+    option(
+      "strict",
+      ["--strict"],
+      "boolean",
+      "Refuse (refused [render-unfaithful], nothing rendered) when the fidelity census finds anything the proxy drops: transitions, effects, filters, masks, keyframes, uncomposited tracks, stickers, text, animations, blend modes, chroma, matting, gaps or missing media.",
+    ),
+    option(
+      "verify",
+      ["--verify"],
+      "boolean",
+      "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept.",
+    ),
+    option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary for output verification."),
   ],
   "detect-scenes": [
     option("threshold", ["--threshold"], "number", "Scene-change score a cut must exceed (0..1).", { default: 0.4 }),
@@ -956,6 +969,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --script             -> caption (v0.22 transcript-guided alignment)
 //   --window, --similarity, --min-words -> detect-retakes (v0.22); --json also scopes there
 //   --soft-captions      -> render (v0.22 mov_text subtitle stream)
+//   --strict, --verify   -> render (v0.29 fidelity census gate + output duration check)
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
@@ -1017,12 +1031,14 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--script",
   "--similarity",
   "--soft-captions",
+  "--strict",
   "--sync",
   "--text",
   "--text-file",
   "--threshold",
   "--threshold-db",
   "--tts-cmd",
+  "--verify",
   "--window",
 ]);
 

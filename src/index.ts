@@ -1078,6 +1078,9 @@ interface Flags {
   videoBitrate?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
+  // render: refuse an unfaithful proxy / fail on output duration drift
+  strict?: boolean;
+  verify?: boolean;
   progress?: boolean;
   maxCps?: number;
   safeArea?: number;
@@ -1263,6 +1266,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.minWords = parseInt(args[++i], 10);
     } else if (a === "--soft-captions") {
       flags.softCaptions = true;
+    } else if (a === "--strict") {
+      flags.strict = true;
+    } else if (a === "--verify") {
+      flags.verify = true;
     } else if (a === "--center-x" && i + 1 < args.length) {
       flags.centerX = parseFloat(args[++i]);
     } else if (a === "--center-y" && i + 1 < args.length) {
@@ -5591,7 +5598,7 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
 // it never mutates the draft. With --dry-run it returns the ffmpeg plan without
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
 async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { buildRenderPlan, renderDraft } = await import("./render.js");
+  const { assertFaithful, buildRenderPlan, renderDraft } = await import("./render.js");
   if (flags.crf !== undefined && flags.videoBitrate !== undefined) {
     die("--crf and --video-bitrate are mutually exclusive.");
   }
@@ -5614,6 +5621,8 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     allVideoTracks: flags.allVideoTracks,
     dryRun: isDryRun(),
     progress: flags.progress,
+    strict: flags.strict,
+    ffprobeCmd: flags.ffprobeCmd,
   };
   if (opts.dryRun) {
     // Build-only: surface the plan; no ffmpeg needed.
@@ -5621,12 +5630,25 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
       ...opts,
       out: opts.out ?? path.join(draftProjectDir(filePath), "preview.mp4"),
     });
+    if (opts.strict) assertFaithful(plan.fidelity);
     out({ ok: true, executed: false, ...plan }, flags);
     return;
   }
   const result = renderDraft(draft, filePath, opts);
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
+  // --verify: the file stays on disk either way; the result above says why.
+  const check = result.verification;
+  if (flags.verify && check) {
+    if (!check.verified) die(`render --verify: output could not be verified: ${check.reason}`);
+    if (!check.within_tolerance) {
+      die(
+        `render --verify: output duration ${check.duration_us}us drifts ${check.drift_us}us from the draft's ` +
+          `${check.expected_duration_us}us, beyond the one-frame tolerance of ${check.tolerance_us}us. ` +
+          `The file was kept at ${result.output}; the result's \`fidelity\` lists what the proxy dropped (main_track_gaps shortens it).`,
+      );
+    }
+  }
 }
 
 async function cmdDetectScenes(positional: string[], flags: Flags): Promise<void> {

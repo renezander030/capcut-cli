@@ -6585,6 +6585,33 @@
           "description": "Stream ffmpeg's progress to stderr instead of buffering it."
         },
         {
+          "name": "strict",
+          "flags": [
+            "--strict"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Refuse (refused [render-unfaithful], nothing rendered) when the fidelity census finds anything the proxy drops: transitions, effects, filters, masks, keyframes, uncomposited tracks, stickers, text, animations, blend modes, chroma, matting, gaps or missing media."
+        },
+        {
+          "name": "verify",
+          "flags": [
+            "--verify"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept."
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary for output verification."
+        },
+        {
           "name": "active_timeline",
           "flags": [
             "--active-timeline"

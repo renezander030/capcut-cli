@@ -3,6 +3,7 @@ import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
+import { ffprobeAvailable, probeMedia } from "./probe.js";
 import { renderSrt } from "./srt.js";
 import { draftProjectDir } from "./store.js";
 
@@ -16,6 +17,9 @@ import { draftProjectDir } from "./store.js";
  * with `--burn-captions`. The result is a watchable preview MP4 — NOT CapCut's
  * final render (no multi-track video compositing, no effects/transitions). It
  * exists to verify "did my edit land where I meant it" without launching CapCut.
+ * Every plan carries a `fidelity` census of what this proxy leaves out for the
+ * draft at hand (`--strict` refuses when it is not faithful), and a real render
+ * probes the written file's duration against the draft's (`--verify` gates it).
  *
  * Architecture mirrors `caption` (shell-out to an external binary, here ffmpeg)
  * and `export --batch` (a deterministic, unit-tested command builder, with the
@@ -39,6 +43,8 @@ export interface RenderOptions {
   allVideoTracks?: boolean; // composite overlay video tracks
   dryRun?: boolean; // build the plan, do not execute ffmpeg
   progress?: boolean; // stream ffmpeg's own stderr instead of buffering it
+  strict?: boolean; // refuse (nothing rendered) when the fidelity census is not faithful
+  ffprobeCmd?: string; // ffprobe binary for output verification (default "ffprobe")
 }
 
 /**
@@ -161,11 +167,27 @@ export interface RenderPlan {
   /** Long graphs are supplied through a file so Windows command-line limits cannot truncate them. */
   filterScript?: { path: string; content: string };
   quality: { mode: "crf"; crf: number } | { mode: "bitrate"; bitrate: string };
+  /** What the draft carries that this proxy does not reproduce (see fidelityCensus). */
+  fidelity: FidelityCensus;
 }
 
 export interface RenderResult extends RenderPlan {
   ok: boolean;
   executed: boolean;
+  /** Present after a real render: the written file's duration against the draft's. */
+  verification?: OutputVerification;
+}
+
+/**
+ * The --strict gate, shared by renderDraft and the CLI's ffmpeg-free dry-run
+ * path. Throws before anything is written.
+ */
+export function assertFaithful(census: FidelityCensus): void {
+  if (census.faithful) return;
+  throw new Error(
+    `refused [render-unfaithful]: the proxy would drop ${describeDropped(census)} that the app shows. ` +
+      "Nothing was rendered. Drop --strict to render the approximation anyway; the result's `fidelity` lists the affected segment ids.",
+  );
 }
 
 /**
@@ -384,6 +406,247 @@ function textSegments(draft: Draft): Array<{ seg: Segment; text: string; color: 
     }
   }
   return out.sort((a, b) => a.seg.target_timerange.start - b.seg.target_timerange.start);
+}
+
+/**
+ * Fidelity census: what the draft carries that this proxy does not put on the
+ * picture. The header comment above states the limits (main track only unless
+ * --all-video-tracks, no effects/transitions); the census turns those limits
+ * into counts for THIS draft, so a reader of `render`'s JSON knows whether the
+ * preview can be trusted as "what the app shows" or only as a timing check.
+ *
+ * Pure, deterministic and one pass over tracks + materials (no ffmpeg, no
+ * clock). It is computed from the options the plan was actually built with,
+ * so renderDraft's drawtext/overlay fallbacks show up as dropped text/overlays.
+ */
+export const FIDELITY_CATEGORIES = [
+  "missing_media",
+  "main_track_gaps",
+  "overlay_tracks",
+  "text",
+  "stickers",
+  "transitions",
+  "effects",
+  "filters",
+  "masks",
+  "keyframes",
+  "text_animations",
+  "video_animations",
+  "mix_modes",
+  "chroma",
+  "matting",
+] as const;
+
+export type FidelityCategory = (typeof FIDELITY_CATEGORIES)[number];
+
+/** Affected segment ids are listed up to this many per category; `count` is always the full total. */
+export const FIDELITY_ID_CAP = 20;
+
+const FIDELITY_HINTS: Record<FidelityCategory, string> = {
+  missing_media: "segment media is missing or has no path; `capcut relink` repairs moved media",
+  main_track_gaps: "the proxy concatenates main-track segments, so timeline gaps close up and later clips play early",
+  overlay_tracks: "extra video tracks are not composited; pass --all-video-tracks",
+  text: "text is not drawn on the picture; pass --burn-captions (--soft-captions only adds a subtitle stream)",
+  stickers: "sticker tracks are not rendered",
+  transitions: "transitions are not rendered; segments cut hard",
+  effects: "video effects are not rendered",
+  filters: "filters (colour looks) are not rendered",
+  masks: "masks are not applied",
+  keyframes: "keyframed animation is not applied; segments hold their base transform/volume",
+  text_animations: "text intro/outro animations are not rendered",
+  video_animations: "video/photo in/out/combo animations are not rendered",
+  mix_modes: "blend modes are not applied; overlays composite as Normal",
+  chroma: "chroma key is not applied",
+  matting: "smart portrait matting is not applied",
+};
+
+// The three on-disk mask array spellings (decorators.ts MASK_FIELDS; inlined
+// so render does not load the decorator module).
+const MASK_MATERIAL_FIELDS = ["common_masks", "common_mask", "masks"] as const;
+
+export interface FidelityEntry {
+  count: number;
+  segment_ids: string[];
+  hint: string;
+}
+
+export interface FidelityCensus {
+  /** True when no category below has anything dropped. */
+  faithful: boolean;
+  /** The draft duration the proxy targets (draft.duration, else the last segment end). */
+  expected_duration_us: number;
+  /** Only categories with at least one affected segment, in FIDELITY_CATEGORIES order. */
+  dropped: Partial<Record<FidelityCategory, FidelityEntry>>;
+  /** Every category the census checks, so an absent key reads as "checked, none". */
+  checked: FidelityCategory[];
+}
+
+export function expectedDurationUs(draft: Draft): number {
+  if (Number.isFinite(draft.duration) && draft.duration > 0) return draft.duration;
+  let end = 0;
+  for (const track of draft.tracks) {
+    for (const seg of track.segments) {
+      end = Math.max(end, seg.target_timerange.start + seg.target_timerange.duration);
+    }
+  }
+  return end;
+}
+
+function hasKeyframes(seg: Segment): boolean {
+  const lists = seg.common_keyframes;
+  if (!Array.isArray(lists)) return false;
+  return lists.some((list) => {
+    const frames = (list as { keyframe_list?: unknown } | null)?.keyframe_list;
+    return !Array.isArray(frames) || frames.length > 0;
+  });
+}
+
+export function fidelityCensus(
+  draft: Draft,
+  opts: Pick<RenderOptions, "allVideoTracks" | "burnCaptions">,
+  skipped: Array<{ segmentId: string; reason: string }> = [],
+): FidelityCensus {
+  const hits = new Map<FidelityCategory, string[]>();
+  const add = (category: FidelityCategory, segId: string) => {
+    const list = hits.get(category) ?? [];
+    if (!list.includes(segId)) list.push(segId);
+    hits.set(category, list);
+  };
+  const materials = draft.materials as Record<string, unknown>;
+  const byId = (field: string): Map<string, Record<string, unknown>> => {
+    const arr = materials[field];
+    const map = new Map<string, Record<string, unknown>>();
+    if (Array.isArray(arr)) {
+      for (const m of arr as Array<Record<string, unknown>>) if (m && typeof m.id === "string") map.set(m.id, m);
+    }
+    return map;
+  };
+  const transitions = byId("transitions");
+  const chromas = byId("chromas");
+  const animations = byId("material_animations");
+  const effectMaterials = new Map([...byId("effects"), ...byId("video_effects")]);
+  const maskIds = new Set(MASK_MATERIAL_FIELDS.flatMap((field) => [...byId(field).keys()]));
+  const videoMaterials = new Map((draft.materials.videos ?? []).map((v) => [v.id, v as Record<string, unknown>]));
+
+  const segmentIds = new Set(draft.tracks.flatMap((t) => t.segments.map((s) => s.id)));
+  for (const { segmentId } of skipped) if (segmentIds.has(segmentId)) add("missing_media", segmentId);
+
+  // Gaps on the main track: concat ignores target starts, so any segment that
+  // begins after the previous one ended (or after 0) is shifted earlier.
+  let cursor = 0;
+  for (const seg of mainVideoSegments(draft)) {
+    if (seg.target_timerange.start > cursor) add("main_track_gaps", seg.id);
+    cursor = Math.max(cursor, seg.target_timerange.start + seg.target_timerange.duration);
+  }
+
+  const mainTrack = draft.tracks.find((t) => t.type === "video");
+  for (const track of draft.tracks) {
+    for (const seg of track.segments) {
+      if (track.type === "video" && track !== mainTrack && !opts.allVideoTracks) add("overlay_tracks", seg.id);
+      if (track.type === "sticker") add("stickers", seg.id);
+      if (track.type === "effect") add("effects", seg.id);
+      if (track.type === "filter") add("filters", seg.id);
+      if (hasKeyframes(seg)) add("keyframes", seg.id);
+      for (const ref of seg.extra_material_refs ?? []) {
+        if (transitions.has(ref)) add("transitions", seg.id);
+        if (maskIds.has(ref)) add("masks", seg.id);
+        if (chromas.has(ref)) add("chroma", seg.id);
+        const effect = effectMaterials.get(ref);
+        if (effect) add(effect.type === "filter" ? "filters" : "effects", seg.id);
+        const anim = animations.get(ref);
+        if (anim && Array.isArray(anim.animations) && anim.animations.length > 0) {
+          if (track.type === "text") add("text_animations", seg.id);
+          else if (track.type === "video") add("video_animations", seg.id);
+        }
+      }
+      if (track.type === "video") {
+        const mat = videoMaterials.get(seg.material_id);
+        const mix = mat?.mix_mode;
+        if (typeof mix === "string" && mix !== "" && mix !== "Normal") add("mix_modes", seg.id);
+        const flag = (mat?.matting as { flag?: unknown } | undefined)?.flag;
+        if (typeof flag === "number" && flag !== 0) add("matting", seg.id);
+      }
+    }
+  }
+  if (!opts.burnCaptions) for (const { seg } of textSegments(draft)) add("text", seg.id);
+
+  const dropped: Partial<Record<FidelityCategory, FidelityEntry>> = {};
+  for (const category of FIDELITY_CATEGORIES) {
+    const ids = hits.get(category);
+    if (!ids || ids.length === 0) continue;
+    dropped[category] = {
+      count: ids.length,
+      segment_ids: ids.slice(0, FIDELITY_ID_CAP),
+      hint: FIDELITY_HINTS[category],
+    };
+  }
+  return {
+    faithful: Object.keys(dropped).length === 0,
+    expected_duration_us: expectedDurationUs(draft),
+    dropped,
+    checked: [...FIDELITY_CATEGORIES],
+  };
+}
+
+/** One-line summary of a census for refusal messages: "transitions 2, masks 1". */
+export function describeDropped(census: FidelityCensus): string {
+  return Object.entries(census.dropped)
+    .map(([category, entry]) => `${category} ${entry?.count}`)
+    .join(", ");
+}
+
+/**
+ * Output verification: the written file's duration against the draft's, with
+ * a one-frame tolerance at the render fps. Pure so the arithmetic is testable
+ * without ffprobe; probeRenderOutput does the probing.
+ */
+export interface OutputVerification {
+  verified: boolean;
+  /** Present when verified is false. */
+  reason?: string;
+  duration_us?: number;
+  expected_duration_us: number;
+  drift_us?: number;
+  tolerance_us: number;
+  within_tolerance?: boolean;
+}
+
+export function frameToleranceUs(fps: number): number {
+  return Math.round(US / (fps > 0 ? fps : 30));
+}
+
+export function checkOutputDuration(durationUs: number, expectedUs: number, fps: number): OutputVerification {
+  const tolerance = frameToleranceUs(fps);
+  const drift = durationUs - expectedUs;
+  return {
+    verified: true,
+    duration_us: durationUs,
+    expected_duration_us: expectedUs,
+    drift_us: drift,
+    tolerance_us: tolerance,
+    within_tolerance: Math.abs(drift) <= tolerance,
+  };
+}
+
+export function probeRenderOutput(
+  output: string,
+  expectedUs: number,
+  fps: number,
+  ffprobeCmd = "ffprobe",
+): OutputVerification {
+  const unverified = (reason: string): OutputVerification => ({
+    verified: false,
+    reason,
+    expected_duration_us: expectedUs,
+    tolerance_us: frameToleranceUs(fps),
+  });
+  if (!existsSync(output)) return unverified(`output file not found: ${output}`);
+  if (!ffprobeAvailable(ffprobeCmd)) {
+    return unverified(`ffprobe is unavailable at '${ffprobeCmd}'; install ffmpeg or pass --ffprobe-cmd <path>`);
+  }
+  const probe = probeMedia(output, ffprobeCmd, false);
+  if (!probe || probe.durationUs === null) return unverified(`ffprobe could not read a duration from ${output}`);
+  return checkOutputDuration(probe.durationUs, expectedUs, fps);
 }
 
 // atempo only accepts 0.5..2.0 per filter instance; we keep proxy audio simple
@@ -698,6 +961,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     ...(softCaptions ? { softCaptions } : {}),
     ...(filterScript ? { filterScript } : {}),
     quality,
+    fidelity: fidelityCensus(draft, opts, skipped),
   };
 }
 
@@ -765,6 +1029,7 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   }
   const basePlan = buildRenderPlan(draft, effective);
   const plan = { ...basePlan, capabilities, skipped: [...basePlan.skipped, ...fallbackSkipped] };
+  if (opts.strict) assertFaithful(plan.fidelity);
 
   // Speed/volume/fade filters are checked against the plan actually built:
   // a draft that never sets them must keep rendering on a build without them,
@@ -865,5 +1130,11 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
         "Re-run with --dry-run to inspect the filter graph without executing.",
     );
   }
-  return { ...plan, ok: true, executed: true };
+  const verification = probeRenderOutput(
+    plan.output,
+    plan.fidelity.expected_duration_us,
+    plan.fps,
+    opts.ffprobeCmd ?? "ffprobe",
+  );
+  return { ...plan, ok: true, executed: true, verification };
 }
