@@ -27,7 +27,7 @@
 | `add-audio` | `capcut add-audio <project> <file-or-url> <start> [duration] [options]` | yes | Add a local or Wikimedia audio file on an audio track. |
 | `add-video` | `capcut add-video <project> <file-or-url> <start> [duration] [options]` | yes | Add a local or Wikimedia video/image on a video track. |
 | `add-text` | `capcut add-text <project> <start> <duration> <text> [options]` | yes | Add a text segment with font/color/position options. |
-| `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [options]` | yes | Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment. |
+| `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]` | yes | Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment. |
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | yes | Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset). |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | yes | Extract a time range into a new standalone draft. |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | yes | Duplicate a segment at its same timeline position onto a track above the source. |
@@ -51,11 +51,11 @@
 | `apply-template` | `capcut apply-template <project> <template> <start> <duration> [text] [options]` | yes | Stamp a template into a project with new timing/text. |
 | `make-preset` | `capcut make-preset <project> <text-segment-id> --out <preset.json>` | no | Extract a text segment's styling as a reusable preset JSON (apply via --preset). |
 | `templates` | `capcut templates <project>` | no | List bundled reusable templates. |
-| `batch` | `capcut batch <project> [--continue-on-error] < operations.jsonl` | yes | Run multiple edits from stdin (JSONL), one file write. |
+| `batch` | `capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl \| capcut batch <project> --apply-plan <plan.json>` | yes | Run multiple edits from stdin (JSONL), one file write. |
 | `import-srt` | `capcut import-srt <project> <srt-or-> [options]` | yes | Import an SRT file/stdin as one text segment per cue. |
 | `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | yes | Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles. |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | yes | Apply byte-accurate multi-style ranges to a text segment. |
-| `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | yes | Transcribe audio via whisper into real caption-track segments. |
+| `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id> \| --words <file.json\|->) [options]` | yes | Transcribe audio via whisper into real caption-track segments. |
 | `translate` | `capcut translate <project> --to <language> --out <path> [options]` | yes | Clone a draft into another language via the Anthropic API. |
 | `migrate` | `capcut migrate <project> (--from <version> --to <version> \| --like <project> \| --from-store)` | yes | Apply known schema migrations across version boundaries. |
 | `add-sfx` | `capcut add-sfx <project> <slug> <start> <duration> [options]` | yes | Add a sound effect on a dedicated track. |

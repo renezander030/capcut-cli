@@ -82,9 +82,10 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
+> **v0.29.0 新增：** 用任意对齐工具的逐字/逐词时间戳生成字幕，无需安装 Whisper（`caption --words`）；与草稿哈希绑定、可先审后执行的批量计划（`batch --plan` / `--apply-plan`）；渲染保真度清单与输出时长校验（`render --strict` / `--verify`）；TTS 发音词典（`tts --lexicon`）；`segment-overlap` 与 `segment-offscreen` 两项 lint 检查；`restore --list` 显示每一步由哪条命令产生。完整说明见[更新日志](./CHANGELOG.md)。
+
 > **v0.28.0 新增：** 显式选择活动时间线、向应用创建的空项目编译，以及精简的命令发现索引与按命令名筛选；Python 客户端 v0.1.3 修复 Windows 命令路径的引号解析，并在 Linux、macOS、Windows 上运行客户端 CI。详见 [更新日志](./CHANGELOG.md)。
 
-> **v0.27.0 新增：** 按文件内容安全替换媒体；替换和重链接后自动更新媒体导入登记；递归搜索并报告同名歧义；精确处理小数秒时间边界；编译前校验操作并清理失败输出；将队列 ID 绑定到任务参数；统一项目锁；限制队列输出；以及解析 OTIO 的本地文件 URL 和相对路径。完整说明见[更新日志](./CHANGELOG.md)。
 
 ## 使用 capcut-cli 构建
 

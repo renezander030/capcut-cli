@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -1405,7 +1405,7 @@
     {
       "name": "tts",
       "summary": "Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment.",
-      "usage": "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
+      "usage": "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]",
       "positionals": [
         {
           "name": "project",
@@ -1416,6 +1416,11 @@
           "name": "string",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "file",
+          "type": "path",
+          "required": false
         },
         {
           "name": "start",
@@ -1455,6 +1460,15 @@
           "type": "string",
           "required": false,
           "description": "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must write, {text} with the text as one argument; without {text} the text is piped to stdin."
+        },
+        {
+          "name": "lexicon",
+          "flags": [
+            "--lexicon"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Pronunciation lexicon JSON ({\"rules\": [{\"text\", \"say\", \"case_sensitive\"?}]} or a bare array) applied to the spoken text only: longest match first, at word boundaries (CJK rules match anywhere). Equal-length rules that say different things refuse [lexicon-ambiguous]; lexicon.applied offsets are UTF-16 code unit indices into the trimmed text."
         },
         {
           "name": "volume",
@@ -3588,12 +3602,17 @@
     {
       "name": "batch",
       "summary": "Run multiple edits from stdin (JSONL), one file write.",
-      "usage": "capcut batch <project> [--continue-on-error] < operations.jsonl",
+      "usage": "capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl | capcut batch <project> --apply-plan <plan.json>",
       "positionals": [
         {
           "name": "project",
           "type": "path",
           "required": true
+        },
+        {
+          "name": "plan.json",
+          "type": "string",
+          "required": false
         }
       ],
       "options": [
@@ -3605,6 +3624,24 @@
           "type": "boolean",
           "required": false,
           "description": "Commit only successful operations and exit 1 if any fail."
+        },
+        {
+          "name": "plan",
+          "flags": [
+            "--plan"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Validate the stdin operations as a real run would and write a reviewable plan file (draft and operations sha256, per-operation preview) instead of changing the draft."
+        },
+        {
+          "name": "apply_plan",
+          "flags": [
+            "--apply-plan"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Apply a plan written by --plan (no stdin). Refused if the draft changed since the plan or its operations were edited."
         },
         {
           "name": "active_timeline",
@@ -4343,7 +4380,7 @@
     {
       "name": "caption",
       "summary": "Transcribe audio via whisper into real caption-track segments.",
-      "usage": "capcut caption <project> (--audio <path> | --from-segment <id>) [options]",
+      "usage": "capcut caption <project> (--audio <path> | --from-segment <id> | --words <file.json|->) [options]",
       "positionals": [
         {
           "name": "project",
@@ -4374,6 +4411,15 @@
           "type": "path",
           "required": false,
           "description": "Audio input."
+        },
+        {
+          "name": "words",
+          "flags": [
+            "--words"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper/whisper.cpp segments[].words[], WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*."
         },
         {
           "name": "audio_stream",
@@ -5956,7 +6002,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "List snapshots."
+          "description": "List snapshots, newest first, with the command that made each write."
         },
         {
           "name": "active_timeline",
@@ -6583,6 +6629,33 @@
           "type": "boolean",
           "required": false,
           "description": "Stream ffmpeg's progress to stderr instead of buffering it."
+        },
+        {
+          "name": "strict",
+          "flags": [
+            "--strict"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Refuse (refused [render-unfaithful], nothing rendered) when the fidelity census finds anything the proxy drops: transitions, effects, filters, masks, keyframes, uncomposited tracks, stickers, text, animations, blend modes, chroma, matting, gaps or missing media."
+        },
+        {
+          "name": "verify",
+          "flags": [
+            "--verify"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept."
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary for output verification."
         },
         {
           "name": "active_timeline",

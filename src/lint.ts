@@ -40,7 +40,8 @@ export interface LintIssue {
 
 // Codes that lintDraft can mechanically repair via fixDraft. Membership here
 // is necessary but not sufficient for fixable:true — line-too-long,
-// caption-gap-too-small, main-track-gap, and media-outside-draft are
+// caption-gap-too-small, main-track-gap, segment-overlap (only overlaps of at
+// most one frame), and media-outside-draft are
 // additionally stamped per instance, so an issue is only marked fixable when
 // fixDraft can actually clear that exact instance. dangling-companion-ref is
 // always safely fixable: the repair drops a ref that points at nothing —
@@ -62,6 +63,7 @@ const FIXABLE_CODES = new Set<string>([
   "media-unlinked",
   "text-range-doubled",
   "segment-off-frame-grid",
+  "segment-overlap",
 ]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
@@ -182,7 +184,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
   };
 
   if (opts.frameGrid) {
-    const fps = typeof draft.fps === "number" && Number.isFinite(draft.fps) && draft.fps > 0 ? draft.fps : 30;
+    const fps = draftFps(draft);
     for (const track of draft.tracks) {
       for (const segment of track.segments) {
         const start = segment.target_timerange.start;
@@ -369,6 +371,128 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           });
         }
       }
+    }
+  }
+
+  // Overlaps on every other track type. Text tracks keep caption-overlap
+  // above; on a video, audio, sticker, effect or filter track two segments
+  // sharing the same microseconds is a draft the app either refuses or
+  // resolves by its own rule (one clip hides the other, or the later one is
+  // pushed to a new track on the first edit). Consecutive pairs by start, the
+  // caption-overlap walk. The classic cause is independent rounding — start
+  // and duration rounded separately leave the earlier clip a microsecond past
+  // the next one's start — so an overlap of at most one frame is fixable
+  // (--fix pulls the earlier end back to the next start); anything wider is a
+  // real edit collision and stays report-only, because which clip should give
+  // way is an authoring decision.
+  const overlapFrameUs = Math.ceil(1_000_000 / draftFps(draft));
+  for (const track of draft.tracks) {
+    if (track.type === "text") continue;
+    const segs = [...track.segments].sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+    for (let i = 0; i < segs.length - 1; i++) {
+      const s = segs[i];
+      const next = segs[i + 1];
+      const overlap = s.target_timerange.start + s.target_timerange.duration - next.target_timerange.start;
+      if (overlap <= 0) continue;
+      const repairable = overlap <= overlapFrameUs && s.target_timerange.duration - overlap > 0;
+      issues.push({
+        severity: "error",
+        code: "segment-overlap",
+        message:
+          `Segments ${shortId(s.id)} and ${shortId(next.id)} overlap by ${overlap}us on ${track.type} track "${track.name}"` +
+          (repairable
+            ? " — a sub-frame rounding overlap; --fix ends the earlier segment where the next begins"
+            : ` — wider than one frame (${overlapFrameUs}us at ${draftFps(draft)}fps), so --fix leaves it: trim or move one of them`),
+        fixable: FIXABLE_CODES.has("segment-overlap") && repairable,
+        location: { track: track.name, segment_id: s.id },
+      });
+    }
+  }
+
+  // Visual segments nobody can see: a clip transform that parks the whole
+  // bounding box off the canvas, a zero scale on either axis, or zero
+  // opacity. Usually the leftover of a botched batch edit (a percent written
+  // where a fraction was meant, x in pixels instead of canvas units), and
+  // invisible in every timeline view except the preview itself.
+  //
+  // Transform convention (render.ts's overlay math, the same one the app
+  // uses): clip.transform x/y are normalized to the canvas with the origin at
+  // its centre, one unit = half the canvas — x = +/-1 puts the clip's centre
+  // on the right/left edge, y = +/-1 on the top/bottom edge (y points up).
+  // The material is first fitted inside the canvas (contain, aspect kept),
+  // then multiplied by clip.scale. A box of width w (pixels) is therefore
+  // fully off-canvas once |x| * W/2 >= W/2 + w/2, i.e. |x| >= 1 + w/W; same
+  // for y. Rotation widens the box to its rotated bounding box. Without a
+  // known material size (stickers, text, a video material with no
+  // width/height) the material is assumed to fill the canvas at scale 1 —
+  // the generous reading, so an unknown size never produces a false alarm.
+  //
+  // `visible` is not judged: the CLI only ever writes `visible: true` and
+  // nothing in the code base establishes how the app treats false.
+  //
+  // Keyframes: a reason is skipped when the segment animates the property
+  // behind it (position for off-canvas, scale for zero scale, alpha for zero
+  // opacity) — the static value is then only the pre-animation value, and a
+  // fade-in from alpha 0 is the most common keyframe there is. Warning, no
+  // --fix: where the clip was meant to be is not recoverable.
+  const canvasW = draft.canvas_config?.width;
+  const canvasH = draft.canvas_config?.height;
+  const hasCanvas = typeof canvasW === "number" && canvasW > 0 && typeof canvasH === "number" && canvasH > 0;
+  for (const track of draft.tracks) {
+    if (track.type !== "video" && track.type !== "sticker" && track.type !== "text") continue;
+    for (const s of track.segments) {
+      const clip = s.clip;
+      if (!clip || typeof clip !== "object") continue;
+      const animated = keyframedProperties(s);
+      const reasons: string[] = [];
+      const sx = clip.scale?.x;
+      const sy = clip.scale?.y;
+      const scaleAnimated =
+        animated.has("KFTypeScaleX") || animated.has("KFTypeScaleY") || animated.has("UNIFORM_SCALE");
+      if (!scaleAnimated && (sx === 0 || sy === 0)) reasons.push("zero scale");
+      if (!animated.has("KFTypeAlpha") && clip.alpha === 0) reasons.push("zero opacity");
+      const x = clip.transform?.x;
+      const y = clip.transform?.y;
+      const positionAnimated = animated.has("KFTypePositionX") || animated.has("KFTypePositionY");
+      if (!positionAnimated && typeof x === "number" && typeof y === "number" && !reasons.includes("zero scale")) {
+        // Fitted material size as a fraction of the canvas (1 = fills that axis).
+        let fitW = 1;
+        let fitH = 1;
+        if (track.type === "video" && hasCanvas) {
+          const mat = findMaterial(draft.materials?.videos ?? [], s.material_id) as
+            | { width?: unknown; height?: unknown }
+            | undefined;
+          const mw = mat?.width;
+          const mh = mat?.height;
+          if (typeof mw === "number" && mw > 0 && typeof mh === "number" && mh > 0) {
+            const fit = Math.min(canvasW / mw, canvasH / mh);
+            fitW = (mw * fit) / canvasW;
+            fitH = (mh * fit) / canvasH;
+          }
+        }
+        // Work in pixels so a rotation mixes the axes at the right aspect; an
+        // unknown canvas uses a square unit canvas (only the ratio matters).
+        const W = hasCanvas ? canvasW : 1;
+        const H = hasCanvas ? canvasH : 1;
+        const w = fitW * W * Math.abs(typeof sx === "number" ? sx : 1);
+        const h = fitH * H * Math.abs(typeof sy === "number" ? sy : 1);
+        const rad = ((typeof clip.rotation === "number" ? clip.rotation : 0) * Math.PI) / 180;
+        const cos = Math.abs(Math.cos(rad));
+        const sin = Math.abs(Math.sin(rad));
+        const boxW = w * cos + h * sin;
+        const boxH = w * sin + h * cos;
+        if (Math.abs(x) >= 1 + boxW / W || Math.abs(y) >= 1 + boxH / H) reasons.push("outside canvas");
+      }
+      if (reasons.length === 0) continue;
+      issues.push({
+        severity: "warning",
+        code: "segment-offscreen",
+        message:
+          `Segment ${shortId(s.id)} on ${track.type} track "${track.name}" cannot be seen: ${reasons.join(", ")}` +
+          ` (scale ${sx ?? "?"}x${sy ?? "?"}, alpha ${clip.alpha ?? "?"}, position ${x ?? "?"},${y ?? "?"} in canvas half-widths)`,
+        fixable: false,
+        location: { track: track.name, segment_id: s.id },
+      });
     }
   }
 
@@ -1059,7 +1183,7 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
   // Pass -2: snap the two boundaries, then derive duration. Rounding start
   // and duration independently is the exact 1us-overlap failure this fixes.
   if (opts.frameGrid) {
-    const fps = typeof draft.fps === "number" && Number.isFinite(draft.fps) && draft.fps > 0 ? draft.fps : 30;
+    const fps = draftFps(draft);
     const timelineEnd = (): number => {
       let maxEnd = 0;
       for (const track of draft.tracks) {
@@ -1078,10 +1202,7 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
         const newEnd = quantizeToFrame(oldStart + oldDuration, fps);
         if (newEnd <= newStart) continue;
         segment.target_timerange.start = newStart;
-        segment.target_timerange.duration = newEnd - newStart;
-        if (segment.source_timerange?.duration === oldDuration && (segment.speed ?? 1) === 1) {
-          segment.source_timerange.duration = newEnd - newStart;
-        }
+        setTargetDuration(segment, newEnd - newStart);
       }
     }
     if (draft.duration === oldMaxEnd) {
@@ -1119,6 +1240,25 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
       const gap = original[i].start - original[i - 1].end;
       if (gap > 0 && canCloseMainTrackGap(draft, mainTrack, original[i - 1].end)) shift += gap;
       if (shift > 0) original[i].seg.target_timerange.start = original[i].start - shift;
+    }
+  }
+
+  // Pass 0b: end the earlier of two overlapping non-text segments where the
+  // next one begins — only for overlaps of at most one frame, exactly the
+  // instances lintDraft stamped fixable. After pass 0 on purpose: shortening
+  // a non-main-track clip could flip canCloseMainTrackGap from unsafe to
+  // safe, and pass 0 must act on the state the stamp was read from. Pass 0
+  // moves both members of an overlapping pair by the same shift, so the
+  // overlap widths read here are the ones lint reported.
+  const overlapFrameUs = Math.ceil(1_000_000 / draftFps(draft));
+  for (const track of draft.tracks) {
+    if (track.type === "text") continue;
+    const segs = [...track.segments].sort((a, b) => a.target_timerange.start - b.target_timerange.start);
+    for (let i = 0; i < segs.length - 1; i++) {
+      const s = segs[i];
+      const overlap = s.target_timerange.start + s.target_timerange.duration - segs[i + 1].target_timerange.start;
+      if (overlap <= 0 || overlap > overlapFrameUs || s.target_timerange.duration - overlap <= 0) continue;
+      setTargetDuration(s, s.target_timerange.duration - overlap);
     }
   }
 
@@ -1449,6 +1589,49 @@ function undoubleContent(content: string): string | null {
     }
   }
   return JSON.stringify(parsed);
+}
+
+// The draft's frame rate, 30 when absent or malformed (the template default).
+function draftFps(draft: Draft): number {
+  return typeof draft.fps === "number" && Number.isFinite(draft.fps) && draft.fps > 0 ? draft.fps : 30;
+}
+
+// Set a segment's target duration and keep its source span consistent with
+// it: source.duration = target.duration * speed, the invariant `capcut speed`
+// maintains. The source span is only rewritten when it satisfied that
+// invariant before (exactly at speed 1, within the speed-timerange-mismatch
+// 1% tolerance otherwise) — a span that already disagreed is
+// speed-timerange-mismatch's report, not something a timing repair should
+// silently reinterpret.
+function setTargetDuration(segment: Segment, newDuration: number): void {
+  const oldDuration = segment.target_timerange.duration;
+  segment.target_timerange.duration = newDuration;
+  const src = segment.source_timerange;
+  if (!src || typeof src.duration !== "number") return;
+  const speed =
+    typeof segment.speed === "number" && Number.isFinite(segment.speed) && segment.speed > 0 ? segment.speed : 1;
+  if (speed === 1) {
+    if (src.duration === oldDuration) src.duration = newDuration;
+    return;
+  }
+  if (oldDuration > 0 && Math.abs(src.duration / oldDuration - speed) / speed <= 0.01) {
+    src.duration = Math.round(newDuration * speed);
+  }
+}
+
+// Keyframed property types on a segment (common_keyframes[].property_type,
+// e.g. KFTypePositionX), for checks that judge a static clip value only when
+// nothing animates it.
+function keyframedProperties(segment: Segment): Set<string> {
+  const out = new Set<string>();
+  const lists = (segment as { common_keyframes?: unknown }).common_keyframes;
+  if (!Array.isArray(lists)) return out;
+  for (const list of lists as Array<{ property_type?: unknown; keyframe_list?: unknown }>) {
+    if (typeof list?.property_type !== "string") continue;
+    if (Array.isArray(list.keyframe_list) && list.keyframe_list.length === 0) continue;
+    out.add(list.property_type);
+  }
+  return out;
 }
 
 // True when closing the main-track gap that opens at `gapStartUs` is

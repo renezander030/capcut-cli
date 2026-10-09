@@ -1,0 +1,23 @@
+{
+  "segments": [
+    {
+      "start": 0.5,
+      "end": 3.0,
+      "text": "We shipped 42 drafts today.",
+      "words": [
+        { "word": "We", "start": 0.5, "end": 0.7, "score": 0.91 },
+        { "word": "shipped", "start": 0.75, "end": 1.2, "score": 0.88 },
+        { "word": "42" },
+        { "word": "drafts", "start": 1.9, "end": 2.4, "score": 0.9 },
+        { "word": "today.", "start": 2.45, "end": 3.0, "score": 0.93 }
+      ]
+    }
+  ],
+  "word_segments": [
+    { "word": "We", "start": 0.5, "end": 0.7, "score": 0.91 },
+    { "word": "shipped", "start": 0.75, "end": 1.2, "score": 0.88 },
+    { "word": "42" },
+    { "word": "drafts", "start": 1.9, "end": 2.4, "score": 0.9 },
+    { "word": "today.", "start": 2.45, "end": 3.0, "score": 0.93 }
+  ]
+}

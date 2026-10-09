@@ -198,7 +198,7 @@ const usages = {
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
   "add-audio": "capcut add-audio <project> <file-or-url> <start> [duration] [options]",
-  tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
+  tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]",
   "add-video": "capcut add-video <project> <file-or-url> <start> [duration] [options]",
   "add-text": "capcut add-text <project> <start> <duration> <text> [options]",
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
@@ -223,11 +223,12 @@ const usages = {
   "save-template": "capcut save-template <project> <id> <name> --out <path>",
   "apply-template": "capcut apply-template <project> <template> <start> <duration> [text] [options]",
   "make-preset": "capcut make-preset <project> <text-segment-id> --out <preset.json>",
-  batch: "capcut batch <project> [--continue-on-error] < operations.jsonl",
+  batch:
+    "capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl | capcut batch <project> --apply-plan <plan.json>",
   "import-srt": "capcut import-srt <project> <srt-or-> [options]",
   "import-ass": "capcut import-ass <project> <ass-or-> [options]",
   "text-ranges": "capcut text-ranges <project> <id> --styles <json-or-@file>",
-  caption: "capcut caption <project> (--audio <path> | --from-segment <id>) [options]",
+  caption: "capcut caption <project> (--audio <path> | --from-segment <id> | --words <file.json|->) [options]",
   translate: "capcut translate <project> --to <language> --out <path> [options]",
   migrate: "capcut migrate <project> (--from <version> --to <version> | --like <project> | --from-store)",
   "add-sfx": "capcut add-sfx <project> <slug> <start> <duration> [options]",
@@ -352,6 +353,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "string",
       "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must " +
         "write, {text} with the text as one argument; without {text} the text is piped to stdin.",
+    ),
+    option(
+      "lexicon",
+      ["--lexicon"],
+      "path",
+      'Pronunciation lexicon JSON ({"rules": [{"text", "say", "case_sensitive"?}]} or a bare array) applied to the ' +
+        "spoken text only: longest match first, at word boundaries (CJK rules match anywhere). Equal-length rules " +
+        "that say different things refuse [lexicon-ambiguous]; lexicon.applied offsets are UTF-16 code unit " +
+        "indices into the trimmed text.",
     ),
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
     TRACK_NAME,
@@ -502,6 +512,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "boolean",
       "Commit only successful operations and exit 1 if any fail.",
     ),
+    option(
+      "plan",
+      ["--plan"],
+      "path",
+      "Validate the stdin operations as a real run would and write a reviewable plan file (draft and operations sha256, per-operation preview) instead of changing the draft.",
+    ),
+    option(
+      "apply_plan",
+      ["--apply-plan"],
+      "path",
+      "Apply a plan written by --plan (no stdin). Refused if the draft changed since the plan or its operations were edited.",
+    ),
   ],
   "export-srt": [
     option("granularity", ["--granularity"], "enum", "Cue granularity: one cue per caption or per word.", {
@@ -563,6 +585,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Known transcript (plain text). Whisper's word timing is kept, the script's wording is used; each non-empty line is a cue boundary. The result's `script` block reports matched/substituted/inserted words.",
     ),
     option("audio", ["--audio"], "path", "Audio input."),
+    option(
+      "words",
+      ["--words"],
+      "path",
+      "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper/whisper.cpp segments[].words[], WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*.",
+    ),
     option(
       "audio_stream",
       ["--audio-stream"],
@@ -776,7 +804,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   restore: [
     option("step", ["--step"], "number", "Snapshot number."),
-    option("list", ["--list"], "boolean", "List snapshots."),
+    option("list", ["--list"], "boolean", "List snapshots, newest first, with the command that made each write."),
   ],
   serve: [
     option("queue", ["--queue"], "path", "JSONL queue file."),
@@ -861,6 +889,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
     option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
+    option(
+      "strict",
+      ["--strict"],
+      "boolean",
+      "Refuse (refused [render-unfaithful], nothing rendered) when the fidelity census finds anything the proxy drops: transitions, effects, filters, masks, keyframes, uncomposited tracks, stickers, text, animations, blend modes, chroma, matting, gaps or missing media.",
+    ),
+    option(
+      "verify",
+      ["--verify"],
+      "boolean",
+      "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept.",
+    ),
+    option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary for output verification."),
   ],
   "detect-scenes": [
     option("threshold", ["--threshold"], "number", "Scene-change score a cut must exceed (0..1).", { default: 0.4 }),
@@ -946,6 +987,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
+//   --lexicon            -> tts (pronunciation rules for the spoken text)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
 //   --pip                -> lint (v0.21 PIP + mask validation report)
 //   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
@@ -956,8 +998,10 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --script             -> caption (v0.22 transcript-guided alignment)
 //   --window, --similarity, --min-words -> detect-retakes (v0.22); --json also scopes there
 //   --soft-captions      -> render (v0.22 mov_text subtitle stream)
+//   --strict, --verify   -> render (v0.29 fidelity census gate + output duration check)
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
+//   --apply-plan         -> batch (v0.29 reviewed batch plans)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
 //   --recursive -> relink (v0.27 nested media search)
@@ -970,6 +1014,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--add",
   "--audio-stream",
   "--apply",
+  "--apply-plan",
   "--bind",
   "--captions",
   "--catalogue",
@@ -997,6 +1042,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keyword-color",
   "--keyword-size",
   "--kind",
+  "--lexicon",
   "--like",
   "--limit",
   "--mask-field",
@@ -1017,12 +1063,14 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--script",
   "--similarity",
   "--soft-captions",
+  "--strict",
   "--sync",
   "--text",
   "--text-file",
   "--threshold",
   "--threshold-db",
   "--tts-cmd",
+  "--verify",
   "--window",
 ]);
 

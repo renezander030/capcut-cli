@@ -63,6 +63,14 @@ Restart CapCut / JianYing once so it lists the new draft, then open it.
 - other engines: any command that writes a WAV to `{out}`. `{text}` is optional; without it the script is piped to stdin (how piper works). macOS `say`: `--tts-cmd "say -o {out} --data-format=LEI16@24000 {text}"`; in the script, override with the `CAPCUT_TTS_CMD` environment variable
 - caption styling: `caption --preset <preset.json>` (extract one with `make-preset` from a caption you styled in the app) or `--style-ref <segment-id>`; `--karaoke` for word highlighting
 
+### Captions without Whisper
+
+`caption --audio` / `--from-segment` need Whisper installed. Three routes work without it:
+
+- **The app's own auto captions.** Run CapCut's "Auto captions" (JianYing 识别字幕), save, close the app, then keep going from the CLI: `capcut restyle "<draft_path>" --preset preset.json` (add `--track-name <name>` to touch one caption track) and `capcut export-srt "<draft_path>" > captions.srt` (`--format vtt`, `--granularity word`).
+- **An SRT you already have**, for example one the app exported: `capcut import-srt "<draft_path>" captions.srt --clone-style` (`--time-offset 2s` shifts it).
+- **Word timings from an external forced aligner** such as WhisperX (`whisperx voice.wav --output_format json`) or Qwen3-ForcedAligner (per character for Chinese): `capcut caption "<draft_path>" --words aligned.json`, with `--script script.txt` to keep your script's wording on the aligner's timing, `--karaoke` / `--word-reveal` as usual, and `--words -` to read stdin. Accepted shapes, detected automatically and reported as `words_format`: Whisper / whisper.cpp `segments[].words[]`, WhisperX `word_segments[]`, or a plain array of `{"word"|"text"|"char", "start", "end"}` in seconds (`start_ms`/`end_ms` and `start_time`/`end_time` keys work too). Times are timeline positions, as with `--audio`. Entries without timing are skipped (`words_skipped`); an entry that ends before it starts or goes back in time is refused with `refused [words-invalid]` and its index.
+
 ## JianYing 6.0+
 
 A draft created this way is plaintext; JianYing 11.4 (macOS) is reported to open and upgrade it in place, other builds are unverified. Existing encrypted drafts are not read by this CLI; `capcut decrypt <project>` reports the state, and [jianying-encryption.md](../docs/jianying-encryption.md) has the background.

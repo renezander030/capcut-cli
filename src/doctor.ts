@@ -133,7 +133,10 @@ export function runDoctor(options: DoctorOptions = {}): DoctorReport {
     status: whisper ? "ok" : "warn",
     detail: whisper ? `found: ${whisper}` : "no whisper binary on PATH",
     affects: ["caption"],
-    fix: whisper ? undefined : "pip install openai-whisper · brew install whisper-cpp · or pass --whisper-cmd <path>",
+    fix: whisper
+      ? undefined
+      : "pip install openai-whisper · brew install whisper-cpp · or pass --whisper-cmd <path>" +
+        " · without Whisper: caption --words <aligner.json> or import-srt <file.srt>",
   });
 
   // TTS — needed by `tts`. --tts-cmd takes any local tool, so this only
