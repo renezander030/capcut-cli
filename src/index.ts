@@ -690,7 +690,17 @@ Discovery (Phase 3):
 Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
   caption    <project> --audio <path> [options]
   caption    <project> --from-segment <id> [options]
+  caption    <project> --words <file.json|-> [options]
              Auto-caption via whisper; emits real CapCut subtitle-track objects.
+             --words takes word timings from any external aligner instead
+             (Whisper / whisper.cpp JSON with segments[].words[], WhisperX
+             word_segments[], or a plain [{word|text|char, start, end}] array
+             in seconds, start_ms/end_ms or start_time/end_time keys — e.g.
+             Qwen3-ForcedAligner's per-character Chinese output) and does not
+             need Whisper installed. Times are timeline positions, as with
+             --audio. Entries without timing are skipped (words_skipped);
+             end<start or out-of-order entries are refused. Not combinable
+             with --audio/--from-segment/--audio-stream/--whisper-*.
              Options:
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
@@ -1017,6 +1027,8 @@ interface Flags {
   fix?: boolean;
   // caption
   audio?: string;
+  /** caption --words: word timings from an external aligner (path or "-"). */
+  words?: string;
   audioStream?: number;
   fromSegment?: string;
   whisperCmd?: string;
@@ -1413,6 +1425,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.audio = args[++i];
     } else if (a === "--from-segment" && i + 1 < args.length) {
       flags.fromSegment = args[++i];
+    } else if (a === "--words" && i + 1 < args.length) {
+      flags.words = args[++i];
     } else if (a === "--whisper-cmd" && i + 1 < args.length) {
       flags.whisperCmd = args[++i];
     } else if (a === "--whisper-engine" && i + 1 < args.length) {
@@ -4014,8 +4028,25 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
 async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   const { loadPresetFile } = await import("./preset.js");
   const { captionDraft } = await import("./caption.js");
-  if (!flags.audio && !flags.fromSegment) {
-    die("Missing --audio <path> or --from-segment <id>. One is required.");
+  if (flags.words !== undefined) {
+    // --words replaces the transcription step entirely, so every flag that
+    // only steers Whisper (or the audio it would hear) is a contradiction.
+    const conflicting = [
+      flags.audio !== undefined && "--audio",
+      flags.fromSegment !== undefined && "--from-segment",
+      flags.audioStream !== undefined && "--audio-stream",
+      flags.ffmpegCmd !== undefined && "--ffmpeg-cmd",
+      flags.whisperCmd !== undefined && "--whisper-cmd",
+      flags.whisperEngine !== undefined && "--whisper-engine",
+      flags.whisperModel !== undefined && "--whisper-model",
+    ].filter(Boolean);
+    if (conflicting.length > 0) {
+      die(
+        `--words is mutually exclusive with ${conflicting.join(", ")}: the word timings come from the file, Whisper does not run.`,
+      );
+    }
+  } else if (!flags.audio && !flags.fromSegment) {
+    die("Missing --audio <path>, --from-segment <id> or --words <file.json>. One is required.");
   }
   if (flags.karaoke && flags.wordReveal) die("--karaoke and --word-reveal are mutually exclusive.");
   if (
@@ -4036,7 +4067,16 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     if (!existsSync(flags.script)) die(`--script file not found: ${flags.script}`);
     scriptText = stripBom(readFileSync(flags.script, "utf-8"));
   }
+  let wordsJson: string | undefined;
+  if (flags.words !== undefined) {
+    if (flags.words !== "-" && !existsSync(flags.words)) die(`--words file not found: ${flags.words}`);
+    wordsJson = stripBom(readFileSync(flags.words === "-" ? 0 : flags.words, "utf-8"));
+    if (!wordsJson.trim())
+      die(flags.words === "-" ? "No input on stdin for --words" : `--words file is empty: ${flags.words}`);
+  }
   const result = captionDraft(draft, {
+    wordsJson,
+    wordsSource: flags.words === "-" ? "stdin" : flags.words,
     audio: flags.audio,
     audioStream: flags.audioStream,
     ffmpegCmd: flags.ffmpegCmd,
@@ -4066,7 +4106,7 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
   // refuse — a heavy accent or a noisy room legitimately lowers the ratio.
   if (result.script && result.script.match_ratio < 0.5 && !flags.quiet) {
     process.stderr.write(
-      `Warning: only ${Math.round(result.script.match_ratio * 100)}% of the script's words matched what whisper heard ` +
+      `Warning: only ${Math.round(result.script.match_ratio * 100)}% of the script's words matched ${flags.words !== undefined ? "the --words timings" : "what whisper heard"} ` +
         `(${result.script.matched}/${result.script.script_words}). Check that --script belongs to this audio.\n`,
     );
   }

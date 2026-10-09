@@ -1,0 +1,20 @@
+[
+  { "text": "今", "start_time": 0.0, "end_time": 0.2 },
+  { "text": "天", "start_time": 0.2, "end_time": 0.4 },
+  { "text": "我", "start_time": 0.4, "end_time": 0.6 },
+  { "text": "们", "start_time": 0.6, "end_time": 0.8 },
+  { "text": "来", "start_time": 0.8, "end_time": 1.0 },
+  { "text": "聊", "start_time": 1.0, "end_time": 1.2 },
+  { "text": "一", "start_time": 1.2, "end_time": 1.4 },
+  { "text": "聊", "start_time": 1.4, "end_time": 1.6 },
+  { "text": "剪", "start_time": 1.6, "end_time": 1.8 },
+  { "text": "映", "start_time": 1.8, "end_time": 2.0 },
+  { "text": "草", "start_time": 2.0, "end_time": 2.2 },
+  { "text": "稿", "start_time": 2.2, "end_time": 2.4 },
+  { "text": "的", "start_time": 2.4, "end_time": 2.6 },
+  { "text": "自", "start_time": 2.6, "end_time": 2.8 },
+  { "text": "动", "start_time": 2.8, "end_time": 3.0 },
+  { "text": "化", "start_time": 3.0, "end_time": 3.2 },
+  { "text": "处", "start_time": 3.2, "end_time": 3.4 },
+  { "text": "理", "start_time": 3.4, "end_time": 3.6 }
+]

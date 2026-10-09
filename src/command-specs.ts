@@ -227,7 +227,7 @@ const usages = {
   "import-srt": "capcut import-srt <project> <srt-or-> [options]",
   "import-ass": "capcut import-ass <project> <ass-or-> [options]",
   "text-ranges": "capcut text-ranges <project> <id> --styles <json-or-@file>",
-  caption: "capcut caption <project> (--audio <path> | --from-segment <id>) [options]",
+  caption: "capcut caption <project> (--audio <path> | --from-segment <id> | --words <file.json|->) [options]",
   translate: "capcut translate <project> --to <language> --out <path> [options]",
   migrate: "capcut migrate <project> (--from <version> --to <version> | --like <project> | --from-store)",
   "add-sfx": "capcut add-sfx <project> <slug> <start> <duration> [options]",
@@ -572,6 +572,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Known transcript (plain text). Whisper's word timing is kept, the script's wording is used; each non-empty line is a cue boundary. The result's `script` block reports matched/substituted/inserted words.",
     ),
     option("audio", ["--audio"], "path", "Audio input."),
+    option(
+      "words",
+      ["--words"],
+      "path",
+      "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper/whisper.cpp segments[].words[], WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*.",
+    ),
     option(
       "audio_stream",
       ["--audio-stream"],

@@ -87,6 +87,38 @@ capcut transition <草稿> <片段ID> "_3D空间" --jianying
 
 完整的命令、参数与说明见 **[命令参考（简体中文）](./command-reference.zh-CN.md)**。
 
+## 不装 Whisper 的字幕路线
+
+`caption --audio` 需要本机装好 Whisper。装不上或不想装，也有三条路：
+
+**(a) 剪映 / CapCut 自带「识别字幕」，再用 CLI 继续处理。** 在应用里识别完字幕、保存并关闭应用，然后：
+
+```bash
+capcut restyle <草稿> --preset 字幕样式.json            # 统一套用一套样式（可加 --track-name 只改某条字幕轨）
+capcut export-srt <草稿> > 字幕.srt                     # 导出 SRT；--format vtt 导出 WebVTT
+capcut export-srt <草稿> --granularity word > 逐字.srt  # 逐字/逐词一条
+```
+
+样式文件可以用 `capcut make-preset` 从你在应用里调好的一条字幕提取。
+
+**(b) 已有 SRT（比如剪映导出的），用 `import-srt`。**
+
+```bash
+capcut import-srt <草稿> 字幕.srt --track-name 字幕 --clone-style
+capcut import-srt <草稿> 字幕.srt --time-offset 2s     # 整体后移 2 秒
+```
+
+**(c) 用外部强制对齐工具输出逐字 / 逐词时间戳 JSON，再用 `caption --words`。** 例如 Qwen3-ForcedAligner（中文逐字）、WhisperX（`whisperx 音频.wav --output_format json`）。`--words` 自动识别三种格式：Whisper / whisper.cpp 的 `segments[].words[]`、WhisperX 的 `word_segments[]`，以及普通数组 `[{"text": "今", "start_time": 0.0, "end_time": 0.2}, ...]`（键名也可以是 `word` / `char`，时间可以是秒的 `start` / `end`，或毫秒的 `start_ms` / `end_ms`）。这条路不调用 Whisper。
+
+```bash
+capcut caption <草稿> --words 对齐结果.json                       # 中文逐字自动拼成不带空格的字幕
+capcut caption <草稿> --words 对齐结果.json --script 文稿.txt     # 时间用对齐结果，文字保留文稿原文（每行一条字幕）
+capcut caption <草稿> --words 对齐结果.json --karaoke             # 卡拉 OK 逐字高亮
+cat 对齐结果.json | capcut caption <草稿> --words -              # 从标准输入读取
+```
+
+时间戳按时间线位置写入（和 `--audio` 一样从 0 开始）。没有时间戳的条目会被跳过并计入结果里的 `words_skipped`；结束早于开始、或顺序倒退的条目会以 `refused [words-invalid]` 拒绝并指出是第几条。结果里的 `words_format` 显示识别到的格式。
+
 ## 写入安全
 
 - 每次写入都是原子操作，先留 `.bak` 再落盘；`capcut restore <草稿>` 可按步撤销。

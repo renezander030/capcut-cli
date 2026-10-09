@@ -1,0 +1,6 @@
+[
+  { "word": "Cut", "start_ms": 1000, "end_ms": 1300 },
+  { "word": "the", "start_ms": 1350, "end_ms": 1450 },
+  { "word": "silence", "start_ms": 1500, "end_ms": 2000 },
+  { "word": "first", "start_ms": 3000, "end_ms": 3400 }
+]

@@ -4357,7 +4357,7 @@
     {
       "name": "caption",
       "summary": "Transcribe audio via whisper into real caption-track segments.",
-      "usage": "capcut caption <project> (--audio <path> | --from-segment <id>) [options]",
+      "usage": "capcut caption <project> (--audio <path> | --from-segment <id> | --words <file.json|->) [options]",
       "positionals": [
         {
           "name": "project",
@@ -4388,6 +4388,15 @@
           "type": "path",
           "required": false,
           "description": "Audio input."
+        },
+        {
+          "name": "words",
+          "flags": [
+            "--words"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper/whisper.cpp segments[].words[], WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*."
         },
         {
           "name": "audio_stream",

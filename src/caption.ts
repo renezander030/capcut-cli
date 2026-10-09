@@ -19,6 +19,12 @@ import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
 
 export interface CaptionOptions {
+  /**
+   * --words: the raw JSON of word timings from an external aligner. When set,
+   * Whisper does not run; see parseWordTimings for the accepted shapes.
+   */
+  wordsJson?: string;
+  wordsSource?: string; // where wordsJson came from (path or "stdin"), for the result
   audio?: string; // path to audio file; if absent, derived from --from-segment
   audioStream?: number; // zero-based audio stream inside the input container
   ffmpegCmd?: string; // ffmpeg binary used only when audioStream is selected
@@ -68,13 +74,19 @@ export interface CaptionResult {
   track_name: string;
   first_cue?: { start_us: number; text: string };
   last_cue?: { start_us: number; text: string };
-  source_audio: string;
-  engine: "whisper-cli" | "shell" | "openai" | "stdin-srt";
+  /** Absent with --words: no audio was read. */
+  source_audio?: string;
+  engine: "whisper-cli" | "shell" | "openai" | "stdin-srt" | "words";
   engine_name?: string;
   words?: number;
   karaoke?: boolean;
   word_reveal?: boolean;
   audio_stream?: number;
+  /** --words: the file the timings came from, its detected shape, and how
+   * many entries had no usable timing and were left out. */
+  source_words?: string;
+  words_format?: WordsFormat;
+  words_skipped?: number;
   keyword_matches?: number;
   color_cycle?: number;
   /** --script alignment quality (only when a script was given). */
@@ -115,16 +127,43 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
   if (opts.audioStream !== undefined && (!Number.isInteger(opts.audioStream) || opts.audioStream < 0)) {
     throw new Error("--audio-stream must be a zero-based non-negative integer.");
   }
-  const sourceAudio = resolveAudio(draft, opts);
-  const selectedAudio =
-    opts.audioStream === undefined
-      ? undefined
-      : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
+  const fromWords = opts.wordsJson !== undefined;
+  if (
+    fromWords &&
+    (opts.audio !== undefined ||
+      opts.fromSegment !== undefined ||
+      opts.audioStream !== undefined ||
+      opts.whisperCmd !== undefined ||
+      opts.whisperEngine !== undefined ||
+      opts.whisperModel !== undefined)
+  ) {
+    throw new Error("--words is mutually exclusive with --audio, --from-segment, --audio-stream and --whisper-*.");
+  }
+  let sourceAudio: string | undefined;
   let transcription: TranscriptionResult;
-  try {
-    transcription = runWhisper(selectedAudio?.path ?? sourceAudio, opts);
-  } finally {
-    selectedAudio?.cleanup();
+  let external: ParsedWordTimings | undefined;
+  if (fromWords) {
+    // External aligner output stands in for the Whisper run; everything after
+    // this point (script detection, grouping, --script, karaoke, reveal,
+    // track writing) is the same path the Whisper words take.
+    external = parseWordTimings(opts.wordsJson as string);
+    if (external.words.length === 0) {
+      throw new Error(
+        `--words has no timed words (${external.skipped} entr${external.skipped === 1 ? "y" : "ies"} without timing skipped).`,
+      );
+    }
+    transcription = { cues: [], words: external.words, engine: "words" };
+  } else {
+    sourceAudio = resolveAudio(draft, opts);
+    const selectedAudio =
+      opts.audioStream === undefined
+        ? undefined
+        : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
+    try {
+      transcription = runWhisper(selectedAudio?.path ?? sourceAudio, opts);
+    } finally {
+      selectedAudio?.cleanup();
+    }
   }
   const recognizedWords = transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues);
   // The transcript's script decides how words join into a cue (no space inside
@@ -181,7 +220,18 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
             (opts.maxGapMs ?? 500) * 1000,
             separator,
           )
-        : transcription.cues;
+        : fromWords
+          ? // Aligner output carries words only, no sentence segments: line
+            // cues group the words at the script's line width and close on a
+            // pause, as the karaoke grouping does.
+            groupWords(
+              recognizedWords,
+              opts.maxWords ?? Number.POSITIVE_INFINITY,
+              opts.maxChars ?? grouping.lineMaxChars,
+              (opts.maxGapMs ?? 500) * 1000,
+              separator,
+            )
+          : transcription.cues;
   }
   if (cues.length === 0) {
     throw new Error("Whisper produced no cues. Check the audio file is not silent and the model name is valid.");
@@ -288,13 +338,16 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     first_cue: { start_us: cues[0].startUs, text: cues[0].text },
     last_cue: { start_us: cues[cues.length - 1].startUs, text: cues[cues.length - 1].text },
     source_audio: sourceAudio,
-    engine: opts.whisperCmd ? "shell" : "whisper-cli",
-    engine_name: transcription.engine,
+    engine: fromWords ? "words" : opts.whisperCmd ? "shell" : "whisper-cli",
+    engine_name: fromWords ? undefined : transcription.engine,
     caption_script: textScript,
     words: transcription.words.length,
     karaoke: opts.karaoke ?? false,
     word_reveal: opts.wordReveal || undefined,
     audio_stream: opts.audioStream,
+    source_words: external ? (opts.wordsSource ?? "stdin") : undefined,
+    words_format: external?.format,
+    words_skipped: external?.skipped,
     // undefined when the flags are off, so JSON output stays byte-identical.
     keyword_matches: highlightWords.length > 0 ? keywordMatches : undefined,
     color_cycle: colorCycle.length > 0 ? colorCycle.length : undefined,
@@ -392,7 +445,128 @@ function resolveAudio(draft: Draft, opts: CaptionOptions): string {
 interface TranscriptionResult {
   cues: CaptionCue[];
   words: CaptionWord[];
-  engine: "openai" | "whisper-cpp" | "faster-whisper";
+  engine: "openai" | "whisper-cpp" | "faster-whisper" | "words";
+}
+
+/**
+ * The word-timing shapes --words recognises:
+ *   whisper   — openai-whisper / whisper.cpp JSON, segments[].words[] {word,start,end}
+ *   whisperx  — WhisperX, word_segments[] (or segments[].words[] carrying a score)
+ *   word-list — a plain array of {word|text|char, start, end} in seconds, or
+ *               start_ms/end_ms, or start_time/end_time (Qwen3-ForcedAligner)
+ */
+export type WordsFormat = "whisper" | "whisperx" | "word-list";
+
+export interface ParsedWordTimings {
+  format: WordsFormat;
+  words: CaptionWord[];
+  /** Entries with text but no usable start/end (WhisperX leaves digits unaligned). */
+  skipped: number;
+}
+
+function timeValue(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Parse word timings from an external aligner into caption words, detecting
+ * the shape. Entries without timing are skipped and counted; an entry whose
+ * end precedes its start, or that starts before the previous timed entry, is
+ * refused with its index, since every cue built from it would be wrong.
+ */
+export function parseWordTimings(raw: string): ParsedWordTimings {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`refused [words-format]: --words is not valid JSON (${(error as Error).message}).`);
+  }
+  let format: WordsFormat;
+  const entries: Array<{ item: unknown; path: string }> = [];
+  if (Array.isArray(parsed)) {
+    format = "word-list";
+    parsed.forEach((item, index) => {
+      entries.push({ item, path: `[${index}]` });
+    });
+  } else if (parsed !== null && typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>;
+    const segments = Array.isArray(record.segments) ? (record.segments as unknown[]) : [];
+    if (Array.isArray(record.word_segments)) {
+      format = "whisperx";
+      record.word_segments.forEach((item, index) => {
+        entries.push({ item, path: `word_segments[${index}]` });
+      });
+    } else if (segments.some((segment) => Array.isArray((segment as Record<string, unknown> | null)?.words))) {
+      // WhisperX writes the same segments[].words[] layout plus a per-word score.
+      let scored = false;
+      segments.forEach((segment, segmentIndex) => {
+        const words = (segment as Record<string, unknown> | null)?.words;
+        if (!Array.isArray(words)) return;
+        words.forEach((item, index) => {
+          if (item !== null && typeof item === "object" && "score" in item) scored = true;
+          entries.push({ item, path: `segments[${segmentIndex}].words[${index}]` });
+        });
+      });
+      format = scored ? "whisperx" : "whisper";
+    } else {
+      throw new Error(
+        "refused [words-format]: --words JSON has no word timings. Expected segments[].words[], word_segments[], " +
+          "or an array of {word|text|char, start, end}.",
+      );
+    }
+  } else {
+    throw new Error("refused [words-format]: --words JSON must be an object or an array of word entries.");
+  }
+
+  const words: CaptionWord[] = [];
+  let skipped = 0;
+  let previous: { startUs: number; path: string } | undefined;
+  for (const { item, path } of entries) {
+    if (item === null || typeof item !== "object") {
+      throw new Error(`refused [words-invalid]: entry ${path} is not an object.`);
+    }
+    const entry = item as Record<string, unknown>;
+    const text = String(entry.word ?? entry.text ?? entry.char ?? "").trim();
+    if (!text) continue;
+    let start: number | undefined;
+    let end: number | undefined;
+    let scale = 1_000_000; // seconds → µs
+    if (timeValue(entry.start) !== undefined || timeValue(entry.end) !== undefined) {
+      start = timeValue(entry.start);
+      end = timeValue(entry.end);
+    } else if (timeValue(entry.start_ms) !== undefined || timeValue(entry.end_ms) !== undefined) {
+      start = timeValue(entry.start_ms);
+      end = timeValue(entry.end_ms);
+      scale = 1000;
+    } else {
+      start = timeValue(entry.start_time);
+      end = timeValue(entry.end_time);
+    }
+    if (start === undefined || end === undefined) {
+      skipped++;
+      continue;
+    }
+    const startUs = Math.round(start * scale);
+    const endUs = Math.round(end * scale);
+    if (startUs < 0) throw new Error(`refused [words-invalid]: entry ${path} ("${text}") starts before 0.`);
+    if (endUs < startUs) {
+      throw new Error(`refused [words-invalid]: entry ${path} ("${text}") ends before it starts (${start} > ${end}).`);
+    }
+    if (previous && startUs < previous.startUs) {
+      throw new Error(
+        `refused [words-invalid]: entry ${path} ("${text}") starts before entry ${previous.path}; ` +
+          "word timings must be in time order.",
+      );
+    }
+    previous = { startUs, path };
+    words.push({ word: text, startUs, endUs });
+  }
+  return { format, words, skipped };
 }
 
 function detectEngine(opts: CaptionOptions): TranscriptionResult["engine"] {
