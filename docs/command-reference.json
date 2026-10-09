@@ -1405,7 +1405,7 @@
     {
       "name": "tts",
       "summary": "Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment.",
-      "usage": "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
+      "usage": "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]",
       "positionals": [
         {
           "name": "project",
@@ -1416,6 +1416,11 @@
           "name": "string",
           "type": "string",
           "required": true
+        },
+        {
+          "name": "file",
+          "type": "path",
+          "required": false
         },
         {
           "name": "start",
@@ -1455,6 +1460,15 @@
           "type": "string",
           "required": false,
           "description": "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must write, {text} with the text as one argument; without {text} the text is piped to stdin."
+        },
+        {
+          "name": "lexicon",
+          "flags": [
+            "--lexicon"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Pronunciation lexicon JSON ({\"rules\": [{\"text\", \"say\", \"case_sensitive\"?}]} or a bare array) applied to the spoken text only: longest match first, at word boundaries (CJK rules match anywhere). Equal-length rules that say different things refuse [lexicon-ambiguous]; lexicon.applied offsets are UTF-16 code unit indices into the trimmed text."
         },
         {
           "name": "volume",

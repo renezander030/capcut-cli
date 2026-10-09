@@ -198,7 +198,7 @@ const usages = {
   segment: "capcut segment <project> <id>",
   material: "capcut material <project> <id>",
   "add-audio": "capcut add-audio <project> <file-or-url> <start> [duration] [options]",
-  tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [options]",
+  tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]",
   "add-video": "capcut add-video <project> <file-or-url> <start> [duration] [options]",
   "add-text": "capcut add-text <project> <start> <duration> <text> [options]",
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
@@ -352,6 +352,15 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "string",
       "TTS command template, run without a shell: {out} (required) is replaced with the .wav path the tool must " +
         "write, {text} with the text as one argument; without {text} the text is piped to stdin.",
+    ),
+    option(
+      "lexicon",
+      ["--lexicon"],
+      "path",
+      'Pronunciation lexicon JSON ({"rules": [{"text", "say", "case_sensitive"?}]} or a bare array) applied to the ' +
+        "spoken text only: longest match first, at word boundaries (CJK rules match anywhere). Equal-length rules " +
+        "that say different things refuse [lexicon-ambiguous]; lexicon.applied offsets are UTF-16 code unit " +
+        "indices into the trimmed text.",
     ),
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
     TRACK_NAME,
@@ -959,6 +968,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
+//   --lexicon            -> tts (pronunciation rules for the spoken text)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
 //   --pip                -> lint (v0.21 PIP + mask validation report)
 //   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
@@ -1011,6 +1021,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--keyword-color",
   "--keyword-size",
   "--kind",
+  "--lexicon",
   "--like",
   "--limit",
   "--mask-field",

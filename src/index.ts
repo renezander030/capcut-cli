@@ -55,6 +55,7 @@ import type { Category, Namespace } from "./enums.js";
 import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CropRect, CutOptions } from "./factory.js";
 import type { NestedTimelinesEvidence } from "./fixture.js";
 import type { ImportPlan } from "./interchange.js";
+import type { LexiconApplied } from "./lexicon.js";
 import type { LintOptions } from "./lint.js";
 import type { TextStylePreset } from "./preset.js";
 import type { SegmentCue } from "./srt.js";
@@ -384,6 +385,9 @@ Add:
                --tts-cmd 'say -o {out} {text}'          (macOS)
                --tts-cmd 'espeak-ng -w {out} {text}'
              Options:
+               --lexicon <file>   Pronunciation rules {"rules":[{"text","say",
+                                  "case_sensitive"?}]} applied to the spoken
+                                  text only (longest match, word boundaries)
                --volume <n>       Volume 0.0-1.0 (default: 1.0)
                --track-name <s>   Track name (default: "audio")
 
@@ -1033,6 +1037,7 @@ interface Flags {
   text?: string;
   textFile?: string;
   ttsCmd?: string;
+  lexicon?: string;
   // export-srt
   granularity?: "line" | "word";
   format?: "srt" | "vtt";
@@ -1442,6 +1447,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.textFile = args[++i];
     } else if (a === "--tts-cmd" && i + 1 < args.length) {
       flags.ttsCmd = args[++i];
+    } else if (a === "--lexicon" && i + 1 < args.length) {
+      flags.lexicon = args[++i];
     } else if (a === "--granularity" && i + 1 < args.length) {
       const granularity = args[++i];
       if (!["line", "word"].includes(granularity)) {
@@ -2705,13 +2712,38 @@ async function cmdTts(draft: Draft, filePath: string, positional: string[], flag
         "The tool must write a wav (or other CapCut-supported) audio file at {out}.",
     );
   }
+  // The lexicon rewrites only what the engine hears; refusals land here,
+  // before any engine runs.
+  let lexicon: { rules: number; applied: LexiconApplied[]; spoken_text: string } | undefined;
+  if (flags.lexicon !== undefined) {
+    const { applyLexicon, LexiconError, parseLexicon } = await import("./lexicon.js");
+    if (!existsSync(flags.lexicon)) die(`refused [lexicon-invalid]: lexicon file not found: ${flags.lexicon}`);
+    let doc: unknown;
+    try {
+      doc = JSON.parse(stripBom(readFileSync(flags.lexicon, "utf-8")));
+    } catch (e) {
+      die(`refused [lexicon-invalid]: ${flags.lexicon} is not valid JSON (${(e as Error).message}).`);
+    }
+    try {
+      const rules = parseLexicon(doc);
+      const r = applyLexicon(text, rules);
+      lexicon = { rules: rules.length, applied: r.applied, spoken_text: r.spoken_text };
+    } catch (e) {
+      if (e instanceof LexiconError) die(`refused [${e.gate}]: ${flags.lexicon}: ${e.message}`);
+      throw e;
+    }
+    if (lexicon.spoken_text.trim().length === 0) {
+      die("refused [lexicon-invalid]: the lexicon rewrote the voiceover text to nothing; there is nothing to speak.");
+    }
+  }
+  const spokenText = lexicon?.spoken_text ?? text;
   const start = positional[2] ? parseTimeInput(positional[2]) : 0;
   const durationStr = positional[3];
   // Synthesize straight into the dir addAudio copies into (like the Wikimedia
   // fetch path) so its copyAssetDeduped becomes a no-op on the same file.
   const assetsDir = path.resolve(draftProjectDir(filePath), "assets", "audio");
   const outPath = collisionSafeOutPath(assetsDir);
-  const synthesis = synthesizeSpeech(text, flags.ttsCmd, outPath);
+  const synthesis = synthesizeSpeech(spokenText, flags.ttsCmd, outPath);
   const media = flags.noProbe ? null : probeMedia(outPath, flags.ffprobeCmd);
   const duration = durationStr ? parseTimeInput(durationStr) : media?.durationUs;
   if (!duration || duration <= 0) {
@@ -2742,6 +2774,9 @@ async function cmdTts(draft: Draft, filePath: string, positional: string[], flag
       duration_us: duration,
       duration_source: durationStr ? "argument" : "ffprobe",
       media_probe: media,
+      // Offsets are UTF-16 code unit indices into the trimmed source text;
+      // text_chars above stays the original (displayed) text's length.
+      ...(lexicon ? { lexicon } : {}),
     },
     flags,
   );
