@@ -112,7 +112,7 @@ jobs:
     name: Python client (${{ matrix.os }}, ${{ matrix.python }})
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s python/tests -v
