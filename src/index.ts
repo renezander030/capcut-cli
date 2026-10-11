@@ -753,7 +753,7 @@ Translate (v0.4 — multi-language draft clone):
              Options:
                --from <lang>        Source language (default: "auto")
                --api-key <key>      Override ANTHROPIC_API_KEY env var
-               --model <id>         Model (default: claude-haiku-4-5-20251001)
+               --model <id>         Model (default: claude-haiku-5-5)
                --dry-run            List what would be translated, no API call
 
 Migrate (v0.4 — survive JianYing/CapCut version jumps):
