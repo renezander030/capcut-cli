@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { runFfmpegAnalysis } from "./ffmpeg-pass.js";
 import { probeMedia } from "./probe.js";
 import { parseFfmpegDuration, type SceneSegment } from "./scenes.js";
 
@@ -193,44 +193,17 @@ export function detectSilence(mediaPath: string, opts: SilenceDetectOptions = {}
     "null",
     "-",
   ];
-  let r: ReturnType<typeof spawnSync>;
-  try {
-    r = spawnSync(cmd, args, { encoding: "utf-8", timeout: timeoutMs, maxBuffer });
-  } catch (e) {
-    throw new Error(
-      `detect-silence: ffmpeg is unavailable at '${cmd}'. Install ffmpeg or pass --ffmpeg-cmd <path>. (${
-        e instanceof Error ? e.message : String(e)
-      })`,
-    );
-  }
-  if (r.error) {
-    // spawnSync reports its own limits via r.error, not by throwing — a tripped
-    // timeout/buffer means ffmpeg RAN, so "install ffmpeg" would be a lie.
-    const code = (r.error as NodeJS.ErrnoException).code;
-    if (code === "ETIMEDOUT") {
-      throw new Error(
-        `detect-silence: silence detection timed out after ${timeoutMs / 1000}s on ${mediaPath}. ` +
-          "Try a shorter input.",
-      );
-    }
-    if (code === "ENOBUFS") {
-      const mib = maxBuffer / (1024 * 1024);
-      const cap = mib >= 1 ? `${Math.round(mib)} MiB` : `${maxBuffer}-byte`;
-      throw new Error(
-        `detect-silence: ffmpeg output exceeded the ${cap} buffer on ${mediaPath}. ` +
-          "Raise --min-silence to report fewer silence spans.",
-      );
-    }
-    throw new Error(
-      `detect-silence: ffmpeg is unavailable at '${cmd}'. Install ffmpeg or pass --ffmpeg-cmd <path>. (${
-        code ?? r.error.message
-      })`,
-    );
-  }
-  const stderr = typeof r.stderr === "string" ? r.stderr : "";
-  if (r.status !== 0) {
-    throw new Error(`detect-silence: ffmpeg failed on ${mediaPath}.\n${stderr.slice(-600)}`);
-  }
+  const stderr = runFfmpegAnalysis({
+    label: "detect-silence",
+    what: "silence detection",
+    cmd,
+    mediaPath: mediaPath,
+    args,
+    timeoutMs,
+    maxBuffer,
+    timeoutHint: "Try a shorter input.",
+    bufferHint: "Raise --min-silence to report fewer silence spans.",
+  });
   // Keep segments must span the whole file, so the bound is the CONTAINER
   // duration (silence applies to the file timeline `cut` operates on, not one
   // stream). ffprobe reads the precise metadata; the centisecond-rounded

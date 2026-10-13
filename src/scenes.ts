@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { runFfmpegAnalysis } from "./ffmpeg-pass.js";
 import { probeMedia } from "./probe.js";
 
 /**
@@ -187,44 +187,17 @@ export function detectScenes(videoPath: string, opts: SceneDetectOptions = {}): 
     "null",
     "-",
   ];
-  let r: ReturnType<typeof spawnSync>;
-  try {
-    r = spawnSync(cmd, args, { encoding: "utf-8", timeout: timeoutMs, maxBuffer });
-  } catch (e) {
-    throw new Error(
-      `detect-scenes: ffmpeg is unavailable at '${cmd}'. Install ffmpeg or pass --ffmpeg-cmd <path>. (${
-        e instanceof Error ? e.message : String(e)
-      })`,
-    );
-  }
-  if (r.error) {
-    // spawnSync reports its own limits via r.error, not by throwing — a tripped
-    // timeout/buffer means ffmpeg RAN, so "install ffmpeg" would be a lie.
-    const code = (r.error as NodeJS.ErrnoException).code;
-    if (code === "ETIMEDOUT") {
-      throw new Error(
-        `detect-scenes: scene detection timed out after ${timeoutMs / 1000}s on ${videoPath}. ` +
-          "Try a shorter or lower-resolution input.",
-      );
-    }
-    if (code === "ENOBUFS") {
-      const mib = maxBuffer / (1024 * 1024);
-      const cap = mib >= 1 ? `${Math.round(mib)} MiB` : `${maxBuffer}-byte`;
-      throw new Error(
-        `detect-scenes: ffmpeg output exceeded the ${cap} buffer on ${videoPath}. ` +
-          "Raise --threshold to emit fewer cut candidates.",
-      );
-    }
-    throw new Error(
-      `detect-scenes: ffmpeg is unavailable at '${cmd}'. Install ffmpeg or pass --ffmpeg-cmd <path>. (${
-        code ?? r.error.message
-      })`,
-    );
-  }
-  const stderr = typeof r.stderr === "string" ? r.stderr : "";
-  if (r.status !== 0) {
-    throw new Error(`detect-scenes: ffmpeg failed on ${videoPath}.\n${stderr.slice(-600)}`);
-  }
+  const stderr = runFfmpegAnalysis({
+    label: "detect-scenes",
+    what: "scene detection",
+    cmd,
+    mediaPath: videoPath,
+    args,
+    timeoutMs,
+    maxBuffer,
+    timeoutHint: "Try a shorter or lower-resolution input.",
+    bufferHint: "Raise --threshold to emit fewer cut candidates.",
+  });
   // Segment ends must come from the VIDEO stream's duration. The container
   // header ("Duration:") is the LONGEST stream — when the audio track outlasts
   // the video (common in screen recordings), it would point the final segment
