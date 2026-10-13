@@ -13,7 +13,7 @@ import {
   trackAppVersion,
 } from "./app-versions.js";
 import type { AssEvent, AssStyleDef } from "./ass.js";
-import { stripBom } from "./bom.js";
+import { parseJsonObject, stripBom } from "./bom.js";
 import {
   buildCommandSpecs,
   commandDeclaresFlag,
@@ -4806,15 +4806,7 @@ async function addMaterialsToRegistrationPlan(
   const sidecarWrite = result.writes.find((w) => w.file === "draft_meta_info.json");
   const onDiskRaw = existsSync(sidecarPath) ? stripBom(readFileSync(sidecarPath, "utf-8")) : null;
   const baseRaw = sidecarWrite ? sidecarWrite.content : onDiskRaw;
-  let base: Record<string, unknown> | null = null;
-  if (baseRaw !== null) {
-    try {
-      const parsed = JSON.parse(baseRaw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed as Record<string, unknown>;
-    } catch {
-      base = null;
-    }
-  }
+  const base = baseRaw === null ? null : parseJsonObject(baseRaw);
   const { target, fixed } = planDraftMaterials(draft, base, { sidecarPath, projectDir: plan.project_dir });
   if (fixed) {
     const content = JSON.stringify(fixed, null, 0);

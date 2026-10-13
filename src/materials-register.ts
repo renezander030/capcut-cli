@@ -28,7 +28,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
-import { stripBom } from "./bom.js";
+import { parseJsonObject, stripBom } from "./bom.js";
 import { type Draft, writeAtomic } from "./draft.js";
 
 export type MetaMaterialKind = "video" | "photo" | "music";
@@ -165,8 +165,7 @@ export function readSidecar(projectDir: string): Record<string, unknown> | null 
   const sidecarPath = resolve(projectDir, "draft_meta_info.json");
   if (!existsSync(sidecarPath)) return null;
   try {
-    const parsed = JSON.parse(stripBom(readFileSync(sidecarPath, "utf-8"))) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    return parseJsonObject(stripBom(readFileSync(sidecarPath, "utf-8")));
   } catch {
     return null;
   }
@@ -286,15 +285,13 @@ export function planChangedMediaRegistration(
   if (changed.size === 0) return null;
   const sidecarPath = resolve(projectDir, "draft_meta_info.json");
   let raw: string;
-  let sidecar: Record<string, unknown>;
   try {
     raw = readFileSync(sidecarPath, "utf-8");
-    const parsed: unknown = JSON.parse(stripBom(raw));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    sidecar = parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+  const sidecar = parseJsonObject(stripBom(raw));
+  if (sidecar === null) return null;
 
   const byPath = new Map<string, string>();
   for (const entry of registeredEntries(sidecar.draft_materials)) {

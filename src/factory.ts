@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { stripBom } from "./bom.js";
+import { readJsonObjectFile, stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
@@ -1045,17 +1045,8 @@ export function planDraftRegistration(
 
   // Target 1: the per-folder draft_meta_info.json sidecar.
   const metaPath = resolve(projectDir, "draft_meta_info.json");
-  const metaRaw = existsSync(metaPath) ? stripBom(readFileSync(metaPath, "utf-8")) : null;
-  let metaParsed: Record<string, unknown> | null = null;
-  if (metaRaw !== null) {
-    try {
-      const parsed = JSON.parse(metaRaw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-        metaParsed = parsed as Record<string, unknown>;
-    } catch {
-      // Unparseable sidecar: metaParsed stays null and is treated as corrupt below.
-    }
-  }
+  // An unparseable sidecar leaves metaParsed null and is treated as corrupt below.
+  const { raw: metaRaw, obj: metaParsed } = readJsonObjectFile(metaPath);
   if (storeRoot === null) {
     // Without a known store root there is no draft_root_path to derive and no
     // index to update — report only, never write (the contract for drafts
@@ -1140,7 +1131,7 @@ export function planDraftRegistration(
 
     // Target 2: the draft's entry in the store's root_meta_info.json index.
     const indexPath = resolve(storeRoot, "root_meta_info.json");
-    const indexRaw = existsSync(indexPath) ? stripBom(readFileSync(indexPath, "utf-8")) : null;
+    const { raw: indexRaw, obj: index } = readJsonObjectFile(indexPath);
     if (indexRaw === null) {
       // No index yet (fresh CapCut / custom --drafts dir): create a minimal
       // one, exactly like init's registerDraftInIndex.
@@ -1159,13 +1150,7 @@ export function planDraftRegistration(
         previous: null,
       });
     } else {
-      let index: Record<string, unknown> | null = null;
-      try {
-        const parsed = JSON.parse(indexRaw) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) index = parsed as Record<string, unknown>;
-      } catch {
-        // Unreadable index — leave it untouched rather than corrupt it (it lists every draft).
-      }
+      // Unreadable index — leave it untouched rather than corrupt it (it lists every draft).
       if (index === null) {
         targets.push({
           file: "root_meta_info.json",
@@ -1427,22 +1412,12 @@ export function planDraftRename(
   // proceeding would leave the app a sidecar whose recorded name/paths can
   // never be updated. register --apply repairs it (with a .bak) first.
   const metaPath = resolve(projectDir, "draft_meta_info.json");
-  const metaRaw = existsSync(metaPath) ? stripBom(readFileSync(metaPath, "utf-8")) : null;
-  let metaParsed: Record<string, unknown> | null = null;
-  if (metaRaw !== null) {
-    try {
-      const parsed = JSON.parse(metaRaw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-        metaParsed = parsed as Record<string, unknown>;
-    } catch {
-      // metaParsed stays null → refused below.
-    }
-    if (metaParsed === null) {
-      throw new Error(
-        "rename must update draft_meta_info.json but it does not parse as JSON. " +
-          `Repair it first — capcut register ${projectDir} --apply rewrites the sidecar with a .bak — then re-run rename.`,
-      );
-    }
+  const { raw: metaRaw, obj: metaParsed } = readJsonObjectFile(metaPath);
+  if (metaRaw !== null && metaParsed === null) {
+    throw new Error(
+      "rename must update draft_meta_info.json but it does not parse as JSON. " +
+        `Repair it first — capcut register ${projectDir} --apply rewrites the sidecar with a .bak — then re-run rename.`,
+    );
   }
 
   const oldName =
@@ -1501,7 +1476,7 @@ export function planDraftRename(
     });
   } else {
     const indexPath = resolve(storeRoot, "root_meta_info.json");
-    const indexRaw = existsSync(indexPath) ? stripBom(readFileSync(indexPath, "utf-8")) : null;
+    const { raw: indexRaw, obj: index } = readJsonObjectFile(indexPath);
     if (indexRaw === null) {
       targets.push({
         file: "root_meta_info.json",
@@ -1512,13 +1487,7 @@ export function planDraftRename(
         updated_fields: [],
       });
     } else {
-      let index: Record<string, unknown> | null = null;
-      try {
-        const parsed = JSON.parse(indexRaw) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) index = parsed as Record<string, unknown>;
-      } catch {
-        // Unreadable index — refused below rather than renamed around (it lists every draft).
-      }
+      // Unreadable index — refused below rather than renamed around (it lists every draft).
       if (index === null) {
         throw new Error(
           "rename must update the draft's entry in root_meta_info.json, but the index does not parse as JSON; " +
