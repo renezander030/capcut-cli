@@ -1205,6 +1205,216 @@ function fishCompletion(): string {
     .join("\n");
 }
 
+// Flags that only set one field, by value kind: a boolean switch, or a flag
+// that consumes the next token as text or a number. Flags with validation,
+// several values or command-scoped meaning stay in parseFlags's chain.
+type FlagKey<T> = {
+  [K in keyof Flags]-?: [NonNullable<Flags[K]>] extends [T] ? ([T] extends [NonNullable<Flags[K]>] ? K : never) : never;
+}[keyof Flags];
+const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
+  ["--off", "off"],
+  ["--materials", "materials"],
+  ["--from-store", "fromStore"],
+  ["--ripple", "ripple"],
+  ["--word-reveal", "wordReveal"],
+  ["--soft-captions", "softCaptions"],
+  ["--strict", "strict"],
+  ["--verify", "verify"],
+  ["--invert", "invert"],
+  ["--vertical", "vertical"],
+  ["--shadow", "shadow"],
+  ["--full", "full"],
+  ["--bubbles", "bubbles"],
+  ["--jianying", "jianying"],
+  ["--force-license", "forceLicense"],
+  ["--progress", "progress"],
+  ["--no-check-paths", "noCheckPaths"],
+  ["--fix", "fix"],
+  ["--karaoke", "karaoke"],
+  ["--no-probe", "noProbe"],
+  ["--retime", "retime"],
+  ["--dry-run", "dryRun"],
+  ["--fail-fast", "failFast"],
+  ["--recursive", "recursive"],
+  ["--list", "list"],
+  ["--names", "names"],
+  ["--burn-captions", "burnCaptions"],
+  ["--all-video-tracks", "allVideoTracks"],
+  ["--force-write", "forceWrite"],
+  ["--continue-on-error", "continueOnError"],
+  ["--check", "check"],
+  ["--apply", "apply"],
+  ["--nested", "nested"],
+  ["--pip", "pip"],
+  ["--frame-grid", "frameGrid"],
+  ["--clone-style", "cloneStyle"],
+  ["--stage", "stage"],
+  ["--sync", "sync"],
+  ["--add", "add"],
+  ["--json", "json"],
+  ["--reset", "reset"],
+  ["--new-track", "newTrack"],
+  ["--keep-track", "keepTrack"],
+  ["--keep-materials", "keepMaterials"],
+]);
+const STRING_FLAGS = new Map<string, FlagKey<string>>([
+  ["--out", "out"],
+  ["--color", "color"],
+  ["--track-name", "trackName"],
+  ["--template", "template"],
+  ["--drafts", "drafts"],
+  ["--duration", "duration"],
+  ["--like", "like"],
+  ["--captions", "captions"],
+  ["--script", "script"],
+  ["--catalogue", "catalogue"],
+  ["--shadow-color", "shadowColor"],
+  ["--border-color", "borderColor"],
+  ["--bg-color", "bgColor"],
+  ["--intro", "intro"],
+  ["--outro", "outro"],
+  ["--intro-duration", "introDuration"],
+  ["--outro-duration", "outroDuration"],
+  ["--combo", "combo"],
+  ["--combo-duration", "comboDuration"],
+  ["--resource-id", "resourceId"],
+  ["--params", "params"],
+  ["--bind", "bind"],
+  ["--style-ref", "styleRef"],
+  ["--time-offset", "timeOffset"],
+  ["--fade-out", "fadeOut"],
+  ["--time", "time"],
+  ["--bubble", "bubble"],
+  ["--effect-id", "effectId"],
+  ["--styles", "styles"],
+  ["--preset", "preset"],
+  ["--audio", "audio"],
+  ["--from-segment", "fromSegment"],
+  ["--words", "words"],
+  ["--whisper-cmd", "whisperCmd"],
+  ["--whisper-model", "whisperModel"],
+  ["--language", "language"],
+  ["--highlight-words", "highlightWords"],
+  ["--keyword-color", "keywordColor"],
+  ["--color-cycle", "colorCycle"],
+  ["--text", "text"],
+  ["--text-file", "textFile"],
+  ["--tts-cmd", "ttsCmd"],
+  ["--lexicon", "lexicon"],
+  ["--ffprobe-cmd", "ffprobeCmd"],
+  ["--video", "video"],
+  ["--srt", "srt"],
+  ["--to", "to"],
+  ["--api-key", "apiKey"],
+  ["--model", "model"],
+  ["--app", "app"],
+  ["--queue", "queue"],
+  ["--dir", "dir"],
+  ["--ffmpeg-cmd", "ffmpegCmd"],
+  ["--encoder", "encoder"],
+  ["--video-bitrate", "videoBitrate"],
+  ["--bundle", "bundle"],
+  ["--data", "data"],
+  ["--into", "into"],
+  ["--kind", "kind"],
+  ["--ratio", "ratio"],
+  ["--rect", "rect"],
+]);
+const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
+  ["--font-size", "fontSize"],
+  ["--x", "x"],
+  ["--y", "y"],
+  ["--width", "width"],
+  ["--height", "height"],
+  ["--volume", "volume"],
+  ["--min-script-match", "minScriptMatch"],
+  ["--window", "window"],
+  ["--similarity", "similarity"],
+  ["--center-x", "centerX"],
+  ["--center-y", "centerY"],
+  ["--size", "size"],
+  ["--rotation", "rotation"],
+  ["--feather", "feather"],
+  ["--rect-width", "rectWidth"],
+  ["--round-corner", "roundCorner"],
+  ["--alpha", "alpha"],
+  ["--fixed-width", "fixedWidth"],
+  ["--fixed-height", "fixedHeight"],
+  ["--shadow-alpha", "shadowAlpha"],
+  ["--shadow-angle", "shadowAngle"],
+  ["--shadow-distance", "shadowDistance"],
+  ["--shadow-smoothing", "shadowSmoothing"],
+  ["--border-width", "borderWidth"],
+  ["--border-alpha", "borderAlpha"],
+  ["--bg-alpha", "bgAlpha"],
+  ["--bg-round-radius", "bgRoundRadius"],
+  ["--bg-width", "bgWidth"],
+  ["--bg-height", "bgHeight"],
+  ["--bg-h-offset", "bgHOffset"],
+  ["--bg-v-offset", "bgVOffset"],
+  ["--scale", "scale"],
+  ["--max-cue-secs", "maxCueSecs"],
+  ["--min-gap-ms", "minGapMs"],
+  ["--max-cps", "maxCps"],
+  ["--safe-area", "safeArea"],
+  ["--max-gap-ms", "maxGapMs"],
+  ["--keyword-size", "keywordSize"],
+  ["--intensity", "intensity"],
+  ["--fps", "fps"],
+  ["--crf", "crf"],
+  ["--threshold", "threshold"],
+  ["--min-gap", "minGap"],
+  ["--threshold-db", "thresholdDb"],
+  ["--min-silence", "minSilence"],
+  ["--pad", "pad"],
+]);
+const INTEGER_FLAGS = new Map<string, FlagKey<number>>([
+  ["--align", "align"],
+  ["--min-words", "minWords"],
+  ["--bg-style", "bgStyle"],
+  ["--max-chars", "maxChars"],
+  ["--max-words", "maxWords"],
+  ["--step", "step"],
+  ["--cols", "cols"],
+  ["--limit", "limit"],
+]);
+const NUMBER_FLAGS = new Map<string, FlagKey<number>>([
+  ["--audio-stream", "audioStream"],
+  ["--workers", "workers"],
+  ["--retries", "retries"],
+  ["--timeout", "timeoutMs"],
+  ["--backoff-ms", "backoffMs"],
+  ["--max-buffer-mb", "maxBufferMb"],
+]);
+
+/**
+ * Apply args[i] when it is a table flag (and, for a value flag, a value token
+ * follows). Returns false otherwise, leaving args[i] to parseFlags's chain —
+ * a value flag at the end of the line falls through exactly as before.
+ */
+function applyTableFlag(flags: Flags, args: string[], i: number): boolean {
+  const a = args[i];
+  const flag = BOOLEAN_FLAGS.get(a);
+  if (flag) {
+    flags[flag] = true;
+    return true;
+  }
+  if (i + 1 >= args.length) return false;
+  const value = args[i + 1];
+  const text = STRING_FLAGS.get(a);
+  if (text) flags[text] = value;
+  else {
+    const float = FLOAT_FLAGS.get(a);
+    const integer = INTEGER_FLAGS.get(a);
+    const number = NUMBER_FLAGS.get(a);
+    if (float) flags[float] = parseFloat(value);
+    else if (integer) flags[integer] = parseInt(value, 10);
+    else if (number) flags[number] = Number(value);
+    else return false;
+  }
+  return true;
+}
+
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = { human: false, quiet: false, batch: false };
@@ -1219,6 +1429,10 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
     // never strip tokens from another command's free-text arguments.
     if (RELEASE_SCOPED_FLAGS.has(a) && !commandDeclaresFlag(command, a)) {
       positional.push(a);
+      continue;
+    }
+    if (applyTableFlag(flags, args, i)) {
+      if (!BOOLEAN_FLAGS.has(a)) i++;
       continue;
     }
     if (a === "-H" || a === "--human") flags.human = true;
@@ -1236,242 +1450,28 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.easing = args[++i];
     } else if ((a === "--track" || a === "--type") && i + 1 < args.length) {
       flags.track = args[++i];
-    } else if (a === "--out" && i + 1 < args.length) {
-      flags.out = args[++i];
-    } else if (a === "--font-size" && i + 1 < args.length) {
-      flags.fontSize = parseFloat(args[++i]);
-    } else if (a === "--color" && i + 1 < args.length) {
-      flags.color = args[++i];
-    } else if (a === "--align" && i + 1 < args.length) {
-      flags.align = parseInt(args[++i], 10);
-    } else if (a === "--x" && i + 1 < args.length) {
-      flags.x = parseFloat(args[++i]);
-    } else if (a === "--y" && i + 1 < args.length) {
-      flags.y = parseFloat(args[++i]);
-    } else if (a === "--track-name" && i + 1 < args.length) {
-      flags.trackName = args[++i];
-    } else if (a === "--width" && i + 1 < args.length) {
-      flags.width = parseFloat(args[++i]);
-    } else if (a === "--height" && i + 1 < args.length) {
-      flags.height = parseFloat(args[++i]);
-    } else if (a === "--volume" && i + 1 < args.length) {
-      flags.volume = parseFloat(args[++i]);
-    } else if (a === "--template" && i + 1 < args.length) {
-      flags.template = args[++i];
-    } else if (a === "--drafts" && i + 1 < args.length) {
-      flags.drafts = args[++i];
-    } else if (a === "--duration" && i + 1 < args.length) {
-      flags.duration = args[++i];
-    } else if (a === "--off") {
-      flags.off = true;
-    } else if (a === "--materials") {
-      flags.materials = true;
-    } else if (a === "--like" && i + 1 < args.length) {
-      flags.like = args[++i];
-    } else if (a === "--from-store") {
-      flags.fromStore = true;
     } else if (a === "--from" && command === "shift-all" && i + 1 < args.length) {
       flags.fromTime = args[++i];
-    } else if (a === "--ripple") {
-      flags.ripple = true;
-    } else if (a === "--captions" && i + 1 < args.length) {
-      flags.captions = args[++i];
-    } else if (a === "--script" && i + 1 < args.length) {
-      flags.script = args[++i];
-    } else if (a === "--word-reveal") {
-      flags.wordReveal = true;
-    } else if (a === "--min-script-match" && i + 1 < args.length) {
-      flags.minScriptMatch = parseFloat(args[++i]);
-    } else if (a === "--audio-stream" && i + 1 < args.length) {
-      flags.audioStream = Number(args[++i]);
-    } else if (a === "--window" && i + 1 < args.length) {
-      flags.window = parseFloat(args[++i]);
-    } else if (a === "--similarity" && i + 1 < args.length) {
-      flags.similarity = parseFloat(args[++i]);
-    } else if (a === "--min-words" && i + 1 < args.length) {
-      flags.minWords = parseInt(args[++i], 10);
-    } else if (a === "--soft-captions") {
-      flags.softCaptions = true;
-    } else if (a === "--strict") {
-      flags.strict = true;
-    } else if (a === "--verify") {
-      flags.verify = true;
-    } else if (a === "--center-x" && i + 1 < args.length) {
-      flags.centerX = parseFloat(args[++i]);
-    } else if (a === "--center-y" && i + 1 < args.length) {
-      flags.centerY = parseFloat(args[++i]);
-    } else if (a === "--size" && i + 1 < args.length) {
-      flags.size = parseFloat(args[++i]);
-    } else if (a === "--rotation" && i + 1 < args.length) {
-      flags.rotation = parseFloat(args[++i]);
-    } else if (a === "--feather" && i + 1 < args.length) {
-      flags.feather = parseFloat(args[++i]);
-    } else if (a === "--invert") {
-      flags.invert = true;
-    } else if (a === "--rect-width" && i + 1 < args.length) {
-      flags.rectWidth = parseFloat(args[++i]);
-    } else if (a === "--round-corner" && i + 1 < args.length) {
-      flags.roundCorner = parseFloat(args[++i]);
     } else if (a === "--mask-field" && i + 1 < args.length) {
       const field = args[++i];
       if (!["masks", "common_mask", "common_masks"].includes(field)) {
         throw new Error("--mask-field must be masks|common_mask|common_masks");
       }
       flags.maskField = field as Flags["maskField"];
-    } else if (a === "--catalogue" && i + 1 < args.length) {
-      flags.catalogue = args[++i];
-    } else if (a === "--alpha" && i + 1 < args.length) {
-      flags.alpha = parseFloat(args[++i]);
-    } else if (a === "--vertical") {
-      flags.vertical = true;
-    } else if (a === "--fixed-width" && i + 1 < args.length) {
-      flags.fixedWidth = parseFloat(args[++i]);
-    } else if (a === "--fixed-height" && i + 1 < args.length) {
-      flags.fixedHeight = parseFloat(args[++i]);
-    } else if (a === "--shadow") {
-      flags.shadow = true;
     } else if (a === "--no-shadow") {
       flags.shadow = false;
-    } else if (a === "--shadow-alpha" && i + 1 < args.length) {
-      flags.shadowAlpha = parseFloat(args[++i]);
-    } else if (a === "--shadow-angle" && i + 1 < args.length) {
-      flags.shadowAngle = parseFloat(args[++i]);
-    } else if (a === "--shadow-color" && i + 1 < args.length) {
-      flags.shadowColor = args[++i];
-    } else if (a === "--shadow-distance" && i + 1 < args.length) {
-      flags.shadowDistance = parseFloat(args[++i]);
-    } else if (a === "--shadow-smoothing" && i + 1 < args.length) {
-      flags.shadowSmoothing = parseFloat(args[++i]);
-    } else if (a === "--border-width" && i + 1 < args.length) {
-      flags.borderWidth = parseFloat(args[++i]);
-    } else if (a === "--border-color" && i + 1 < args.length) {
-      flags.borderColor = args[++i];
-    } else if (a === "--border-alpha" && i + 1 < args.length) {
-      flags.borderAlpha = parseFloat(args[++i]);
-    } else if (a === "--bg-color" && i + 1 < args.length) {
-      flags.bgColor = args[++i];
-    } else if (a === "--bg-alpha" && i + 1 < args.length) {
-      flags.bgAlpha = parseFloat(args[++i]);
-    } else if (a === "--bg-style" && i + 1 < args.length) {
-      flags.bgStyle = parseInt(args[++i], 10);
-    } else if (a === "--bg-round-radius" && i + 1 < args.length) {
-      flags.bgRoundRadius = parseFloat(args[++i]);
-    } else if (a === "--bg-width" && i + 1 < args.length) {
-      flags.bgWidth = parseFloat(args[++i]);
-    } else if (a === "--bg-height" && i + 1 < args.length) {
-      flags.bgHeight = parseFloat(args[++i]);
-    } else if (a === "--bg-h-offset" && i + 1 < args.length) {
-      flags.bgHOffset = parseFloat(args[++i]);
-    } else if (a === "--bg-v-offset" && i + 1 < args.length) {
-      flags.bgVOffset = parseFloat(args[++i]);
-    } else if (a === "--intro" && i + 1 < args.length) {
-      flags.intro = args[++i];
-    } else if (a === "--outro" && i + 1 < args.length) {
-      flags.outro = args[++i];
-    } else if (a === "--intro-duration" && i + 1 < args.length) {
-      flags.introDuration = args[++i];
-    } else if (a === "--outro-duration" && i + 1 < args.length) {
-      flags.outroDuration = args[++i];
-    } else if (a === "--combo" && i + 1 < args.length) {
-      flags.combo = args[++i];
-    } else if (a === "--combo-duration" && i + 1 < args.length) {
-      flags.comboDuration = args[++i];
-    } else if (a === "--scale" && i + 1 < args.length) {
-      flags.scale = parseFloat(args[++i]);
-    } else if (a === "--resource-id" && i + 1 < args.length) {
-      flags.resourceId = args[++i];
-    } else if (a === "--params" && i + 1 < args.length) {
-      flags.params = args[++i];
-    } else if (a === "--bind" && i + 1 < args.length) {
-      flags.bind = args[++i];
-    } else if (a === "--full") {
-      flags.full = true;
-    } else if (a === "--style-ref" && i + 1 < args.length) {
-      flags.styleRef = args[++i];
-    } else if (a === "--time-offset" && i + 1 < args.length) {
-      flags.timeOffset = args[++i];
     } else if (a === "--font" && i + 1 < args.length) {
       // Accepted and ignored: no command ever read it. The value token stays
       // consumed so the positional stream still parses exactly as it did.
       i++;
     } else if ((a === "--in" || a === "--fade-in") && i + 1 < args.length) {
       flags.fadeIn = args[++i];
-    } else if (a === "--fade-out" && i + 1 < args.length) {
-      flags.fadeOut = args[++i];
-    } else if (a === "--time" && i + 1 < args.length) {
-      flags.time = args[++i];
-    } else if (a === "--bubble" && i + 1 < args.length) {
-      flags.bubble = args[++i];
-    } else if (a === "--effect-id" && i + 1 < args.length) {
-      flags.effectId = args[++i];
-    } else if (a === "--bubbles") {
-      flags.bubbles = true;
-    } else if (a === "--jianying") {
-      flags.jianying = true;
-    } else if (a === "--styles" && i + 1 < args.length) {
-      flags.styles = args[++i];
-    } else if (a === "--preset" && i + 1 < args.length) {
-      flags.preset = args[++i];
-    } else if (a === "--force-license") {
-      flags.forceLicense = true;
-    } else if (a === "--max-chars" && i + 1 < args.length) {
-      flags.maxChars = parseInt(args[++i], 10);
-    } else if (a === "--max-cue-secs" && i + 1 < args.length) {
-      flags.maxCueSecs = parseFloat(args[++i]);
-    } else if (a === "--min-gap-ms" && i + 1 < args.length) {
-      flags.minGapMs = parseFloat(args[++i]);
-    } else if (a === "--max-cps" && i + 1 < args.length) {
-      flags.maxCps = parseFloat(args[++i]);
-    } else if (a === "--safe-area" && i + 1 < args.length) {
-      flags.safeArea = parseFloat(args[++i]);
-    } else if (a === "--progress") {
-      flags.progress = true;
-    } else if (a === "--no-check-paths") {
-      flags.noCheckPaths = true;
-    } else if (a === "--fix") {
-      flags.fix = true;
-    } else if (a === "--audio" && i + 1 < args.length) {
-      flags.audio = args[++i];
-    } else if (a === "--from-segment" && i + 1 < args.length) {
-      flags.fromSegment = args[++i];
-    } else if (a === "--words" && i + 1 < args.length) {
-      flags.words = args[++i];
-    } else if (a === "--whisper-cmd" && i + 1 < args.length) {
-      flags.whisperCmd = args[++i];
     } else if (a === "--whisper-engine" && i + 1 < args.length) {
       const engine = args[++i];
       if (!["auto", "openai", "whisper-cpp", "faster-whisper"].includes(engine)) {
         throw new Error("--whisper-engine must be auto|openai|whisper-cpp|faster-whisper");
       }
       flags.whisperEngine = engine as Flags["whisperEngine"];
-    } else if (a === "--whisper-model" && i + 1 < args.length) {
-      flags.whisperModel = args[++i];
-    } else if (a === "--language" && i + 1 < args.length) {
-      flags.language = args[++i];
-    } else if (a === "--karaoke") {
-      flags.karaoke = true;
-    } else if (a === "--max-words" && i + 1 < args.length) {
-      flags.maxWords = parseInt(args[++i], 10);
-    } else if (a === "--max-gap-ms" && i + 1 < args.length) {
-      flags.maxGapMs = parseFloat(args[++i]);
-    } else if (a === "--highlight-words" && i + 1 < args.length) {
-      flags.highlightWords = args[++i];
-    } else if (a === "--keyword-color" && i + 1 < args.length) {
-      flags.keywordColor = args[++i];
-    } else if (a === "--keyword-size" && i + 1 < args.length) {
-      flags.keywordSize = parseFloat(args[++i]);
-    } else if (a === "--color-cycle" && i + 1 < args.length) {
-      flags.colorCycle = args[++i];
-    } else if (a === "--no-probe") {
-      flags.noProbe = true;
-    } else if (a === "--text" && i + 1 < args.length) {
-      flags.text = args[++i];
-    } else if (a === "--text-file" && i + 1 < args.length) {
-      flags.textFile = args[++i];
-    } else if (a === "--tts-cmd" && i + 1 < args.length) {
-      flags.ttsCmd = args[++i];
-    } else if (a === "--lexicon" && i + 1 < args.length) {
-      flags.lexicon = args[++i];
     } else if (a === "--granularity" && i + 1 < args.length) {
       const granularity = args[++i];
       if (!["line", "word"].includes(granularity)) {
@@ -1484,80 +1484,8 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
         throw new Error("--format must be srt|vtt");
       }
       flags.format = format as Flags["format"];
-    } else if (a === "--ffprobe-cmd" && i + 1 < args.length) {
-      flags.ffprobeCmd = args[++i];
-    } else if (a === "--video" && i + 1 < args.length) {
-      flags.video = args[++i];
-    } else if (a === "--srt" && i + 1 < args.length) {
-      flags.srt = args[++i];
-    } else if (a === "--retime") {
-      flags.retime = true;
-    } else if (a === "--to" && i + 1 < args.length) {
-      flags.to = args[++i];
     } else if (a === "--from" && i + 1 < args.length) {
       flags.from = args[++i];
-    } else if (a === "--api-key" && i + 1 < args.length) {
-      flags.apiKey = args[++i];
-    } else if (a === "--model" && i + 1 < args.length) {
-      flags.model = args[++i];
-    } else if (a === "--dry-run") {
-      flags.dryRun = true;
-    } else if (a === "--intensity" && i + 1 < args.length) {
-      flags.intensity = parseFloat(args[++i]);
-    } else if (a === "--app" && i + 1 < args.length) {
-      flags.app = args[++i];
-    } else if (a === "--queue" && i + 1 < args.length) {
-      flags.queue = args[++i];
-    } else if (a === "--fail-fast") {
-      flags.failFast = true;
-    } else if (a === "--workers" && i + 1 < args.length) {
-      flags.workers = Number(args[++i]);
-    } else if (a === "--retries" && i + 1 < args.length) {
-      flags.retries = Number(args[++i]);
-    } else if (a === "--timeout" && i + 1 < args.length) {
-      flags.timeoutMs = Number(args[++i]);
-    } else if (a === "--backoff-ms" && i + 1 < args.length) {
-      flags.backoffMs = Number(args[++i]);
-    } else if (a === "--max-buffer-mb" && i + 1 < args.length) {
-      flags.maxBufferMb = Number(args[++i]);
-    } else if (a === "--recursive") {
-      flags.recursive = true;
-    } else if (a === "--dir" && i + 1 < args.length) {
-      flags.dir = args[++i];
-    } else if (a === "--step" && i + 1 < args.length) {
-      flags.step = parseInt(args[++i], 10);
-    } else if (a === "--list") {
-      flags.list = true;
-    } else if (a === "--cols" && i + 1 < args.length) {
-      flags.cols = parseInt(args[++i], 10);
-    } else if (a === "--names") {
-      flags.names = true;
-    } else if (a === "--fps" && i + 1 < args.length) {
-      flags.fps = parseFloat(args[++i]);
-    } else if (a === "--ffmpeg-cmd" && i + 1 < args.length) {
-      flags.ffmpegCmd = args[++i];
-    } else if (a === "--encoder" && i + 1 < args.length) {
-      flags.encoder = args[++i];
-    } else if (a === "--crf" && i + 1 < args.length) {
-      flags.crf = parseFloat(args[++i]);
-    } else if (a === "--video-bitrate" && i + 1 < args.length) {
-      flags.videoBitrate = args[++i];
-    } else if (a === "--burn-captions") {
-      flags.burnCaptions = true;
-    } else if (a === "--all-video-tracks") {
-      flags.allVideoTracks = true;
-    } else if (a === "--force-write") {
-      flags.forceWrite = true;
-    } else if (a === "--bundle" && i + 1 < args.length) {
-      flags.bundle = args[++i];
-    } else if (a === "--continue-on-error") {
-      flags.continueOnError = true;
-    } else if (a === "--data" && i + 1 < args.length) {
-      flags.data = args[++i];
-    } else if (a === "--into" && i + 1 < args.length) {
-      flags.into = args[++i];
-    } else if (a === "--check") {
-      flags.check = true;
     } else if (a === "--plan" && command === "batch") {
       const file = args[++i];
       if (!file || file.startsWith("-")) die("--plan requires a plan file path (batch --plan <plan.json>)");
@@ -1568,50 +1496,6 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
       flags.applyPlan = file;
     } else if (a === "--plan") {
       flags.plan = true;
-    } else if (a === "--apply") {
-      flags.apply = true;
-    } else if (a === "--nested") {
-      flags.nested = true;
-    } else if (a === "--pip") {
-      flags.pip = true;
-    } else if (a === "--frame-grid") {
-      flags.frameGrid = true;
-    } else if (a === "--kind" && i + 1 < args.length) {
-      flags.kind = args[++i];
-    } else if (a === "--clone-style") {
-      flags.cloneStyle = true;
-    } else if (a === "--stage") {
-      flags.stage = true;
-    } else if (a === "--sync") {
-      flags.sync = true;
-    } else if (a === "--add") {
-      flags.add = true;
-    } else if (a === "--threshold" && i + 1 < args.length) {
-      flags.threshold = parseFloat(args[++i]);
-    } else if (a === "--min-gap" && i + 1 < args.length) {
-      flags.minGap = parseFloat(args[++i]);
-    } else if (a === "--limit" && i + 1 < args.length) {
-      flags.limit = parseInt(args[++i], 10);
-    } else if (a === "--json") {
-      flags.json = true;
-    } else if (a === "--threshold-db" && i + 1 < args.length) {
-      flags.thresholdDb = parseFloat(args[++i]);
-    } else if (a === "--min-silence" && i + 1 < args.length) {
-      flags.minSilence = parseFloat(args[++i]);
-    } else if (a === "--pad" && i + 1 < args.length) {
-      flags.pad = parseFloat(args[++i]);
-    } else if (a === "--ratio" && i + 1 < args.length) {
-      flags.ratio = args[++i];
-    } else if (a === "--rect" && i + 1 < args.length) {
-      flags.rect = args[++i];
-    } else if (a === "--reset") {
-      flags.reset = true;
-    } else if (a === "--new-track") {
-      flags.newTrack = true;
-    } else if (a === "--keep-track") {
-      flags.keepTrack = true;
-    } else if (a === "--keep-materials") {
-      flags.keepMaterials = true;
     } else {
       const hit = ENUM_FLAG_MAP.find((f) => f.flag === a);
       if (hit) {
