@@ -118,10 +118,3 @@ export function clearMatting(draft: Draft, segId: string): MattingResult {
     shared_segments: shared,
   };
 }
-
-/** Read the matting state of a segment's material without writing. */
-export function mattingState(draft: Draft, segId: string): { segmentId: string; materialId: string; flag: number } {
-  const { segment, material } = resolveVideoMaterial(draft, segId);
-  const flag = isRecord(material.matting) && typeof material.matting.flag === "number" ? material.matting.flag : 0;
-  return { segmentId: segment.id, materialId: material.id, flag };
-}

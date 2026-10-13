@@ -389,16 +389,6 @@ function seedOutranks(a: StoreSeed, b: StoreSeed): boolean {
   return a.mtimeMs > b.mtimeMs;
 }
 
-/**
- * Newest `platform.app_version` across the drafts already in a drafts ROOT, or
- * null when the folder holds no readable draft. store.ts's highestVersion does
- * the same job across one project's siblings; `init` has no project to discover
- * yet, so it scans the store instead.
- */
-export function detectStoreAppVersion(draftsDir: string): string | null {
-  return scanStore(draftsDir).newestVersion;
-}
-
 /** True when the store's projects come from a materially newer app than the template declares (#67's gate). */
 export function storeOutgrowsTemplate(templateVersion: string | null, storeVersion: string | null): boolean {
   if (!templateVersion || !storeVersion) return false;
