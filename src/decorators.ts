@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Draft, MaterialText, Segment } from "./draft.js";
-import { findMaterial, findSegment } from "./draft.js";
+import { findMaterial } from "./draft.js";
 import { findEnum, type Namespace, slugsFor } from "./enums.js";
+import { requireSegment } from "./segment-lookup.js";
 import { storedTextLength, toStoredOffset } from "./text-offsets.js";
 import { atLeast } from "./version.js";
 
@@ -334,8 +335,7 @@ export function addKeyframes(
   holdKeyframes: number;
 } {
   resolveEasing(easing); // fail fast even when every keyframe overrides it
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment as Segment & { common_keyframes?: unknown };
 
   if (!Array.isArray(seg.common_keyframes)) {
@@ -416,8 +416,7 @@ export function addTransition(
     const hint = namespace === "jianying" ? " --jianying" : "";
     throw new Error(`Unknown transition: ${slug}. Run 'capcut enums --transitions${hint}' for the full list.`);
   }
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment;
   draft.materials.transitions ??= [];
   const transitions = draft.materials.transitions;
@@ -518,8 +517,7 @@ export function addMask(
     const hint = namespace === "jianying" ? " --jianying" : "";
     throw new Error(`Unknown mask: ${slug}. Run 'capcut enums --masks${hint}' for the full list.`);
   }
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment;
 
   const field = maskTargetField(draft, opts.field);
@@ -584,8 +582,7 @@ export function setBgBlur(
   segmentId: string,
   level: 1 | 2 | 3 | 4 | "off",
 ): { segmentId: string; canvas_id: string | null; blur: number | null } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment;
 
   draft.materials.canvases ??= [] as Array<Record<string, unknown>>;
@@ -633,8 +630,7 @@ export function requireTextMaterial(
   segmentId: string,
   label?: string,
 ): { seg: Segment; text: MaterialText } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   if (label !== undefined && found.track.type !== "text") {
     throw new Error(`${label} only applies to text segments (track type: ${found.track.type})`);
   }
@@ -943,8 +939,7 @@ export function addImageAnim(
     throw new Error("at least one of --intro, --outro, --combo is required");
   }
 
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment;
 
   const container = ensureAnimContainer(draft, seg);
@@ -1036,8 +1031,7 @@ export function addTextAnim(
 } {
   if (!opts.intro && !opts.outro) throw new Error("at least one of --intro or --outro is required");
 
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment;
 
   const container = ensureAnimContainer(draft, seg);

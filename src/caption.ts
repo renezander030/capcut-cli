@@ -15,6 +15,7 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { findSegment } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
 import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } from "./script.js";
+import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
 
@@ -430,8 +431,7 @@ function resolveAudio(draft: Draft, opts: CaptionOptions): string {
     return opts.audio;
   }
   if (opts.fromSegment) {
-    const found = findSegment(draft, opts.fromSegment);
-    if (!found) throw new Error(`Segment not found: ${opts.fromSegment}`);
+    const found = requireSegment(draft, opts.fromSegment);
     if (found.track.type !== "audio")
       throw new Error(`--from-segment must be on an audio track (got ${found.track.type})`);
     const mat = draft.materials.audios.find((m) => m.id === found.segment.material_id);

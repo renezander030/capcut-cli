@@ -8,9 +8,10 @@
 
 import { existsSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { type Draft, findMaterialGlobal, findSegment } from "./draft.js";
+import { type Draft, findMaterialGlobal } from "./draft.js";
 import { copyAssetDeduped, planAssetCopy } from "./factory.js";
 import { probeMedia } from "./probe.js";
+import { requireSegment } from "./segment-lookup.js";
 import { draftProjectDir } from "./store.js";
 
 export interface ReplaceMediaOptions {
@@ -53,8 +54,7 @@ export function replaceMedia(draft: Draft, filePath: string, opts: ReplaceMediaO
   if (!existsSync(opts.newPath)) throw new Error(`Replacement file not found: ${opts.newPath}`);
   if (!statSync(opts.newPath).isFile()) throw new Error(`Replacement media must be a regular file: ${opts.newPath}`);
 
-  const hit = findSegment(draft, opts.segmentId);
-  if (!hit) throw new Error(`Segment not found: ${opts.segmentId}`);
+  const hit = requireSegment(draft, opts.segmentId);
   const materialId = hit.segment.material_id;
   if (!materialId) throw new Error(`Segment ${opts.segmentId} has no material_id to replace.`);
 

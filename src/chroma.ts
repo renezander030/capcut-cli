@@ -1,6 +1,6 @@
 import { randomUUID as uuid } from "node:crypto";
 import type { Draft, Segment } from "./draft.js";
-import { findSegment } from "./draft.js";
+import { requireSegment } from "./segment-lookup.js";
 
 export interface ChromaOptions {
   color: string; // hex like "#00FF00"
@@ -13,8 +13,7 @@ export function setChroma(
   segId: string,
   opts: ChromaOptions,
 ): { ok: true; segmentId: string; materialId: string; color: string; intensity: number; shadow: number } {
-  const found = findSegment(draft, segId);
-  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const found = requireSegment(draft, segId);
   if (found.track.type !== "video") {
     throw new Error(
       `Chroma key can only be applied to video segments (segment ${segId} is on a ${found.track.type} track)`,
@@ -46,8 +45,7 @@ export function setChroma(
 }
 
 export function removeChroma(draft: Draft, segId: string): { ok: true; segmentId: string; removed: string[] } {
-  const found = findSegment(draft, segId);
-  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const found = requireSegment(draft, segId);
   const seg = found.segment as Segment & { extra_material_refs?: string[] };
   const removed: string[] = [];
   const chromas = (draft.materials.chromas as Array<{ id: string }> | undefined) ?? [];

@@ -24,6 +24,7 @@ import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, loadedDraftProjectDir, makeTrack, writeAtomic } from "./draft.js";
 import { findEnum, type Namespace } from "./enums.js";
 import { PHOTO_META_DURATION_US, registerMediumInSidecar } from "./materials-register.js";
+import { requireSegment } from "./segment-lookup.js";
 import { isManagedDraftPath, parseCandidate } from "./store.js";
 import { storedTextLength } from "./text-offsets.js";
 import { atLeast, versionTuple } from "./version.js";
@@ -2324,8 +2325,7 @@ export interface RemoveSegmentResult {
  * fresh init draft).
  */
 export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOptions = {}): RemoveSegmentResult {
-  const found = findSegment(draft, segId);
-  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const found = requireSegment(draft, segId);
   const { track, segment, index } = found;
   const durationBefore = draft.duration;
   const removedStart = segment.target_timerange.start;
@@ -2413,22 +2413,7 @@ export interface Template {
 }
 
 export function saveTemplate(draft: Draft, segId: string, name: string, outPath: string): Template {
-  const shortId = segId.toLowerCase();
-  let foundSeg: Segment | null = null;
-  let foundTrack: Track | null = null;
-
-  for (const track of draft.tracks) {
-    for (const seg of track.segments) {
-      if (seg.id === segId || seg.id.toLowerCase().startsWith(shortId)) {
-        foundSeg = seg;
-        foundTrack = track;
-        break;
-      }
-    }
-    if (foundSeg) break;
-  }
-
-  if (!foundSeg || !foundTrack) throw new Error(`Segment not found: ${segId}`);
+  const { segment: foundSeg, track: foundTrack } = requireSegment(draft, segId);
 
   // Resolve primary material
   const mat = findMaterialGlobal(draft, foundSeg.material_id);
@@ -2597,8 +2582,7 @@ export function duplicateSegment(
   segId: string,
   opts: DuplicateSegmentOptions = {},
 ): DuplicateSegmentResult {
-  const found = findSegment(draft, segId);
-  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const found = requireSegment(draft, segId);
   const { track: sourceTrack, segment: sourceSeg } = found;
   const { start, duration } = sourceSeg.target_timerange;
 
@@ -2937,8 +2921,7 @@ export function addEffect(
   // full segment id so the written reference never dangles.
   let bindSegmentId = "";
   if (opts.bindSegmentId) {
-    const bound = findSegment(draft, opts.bindSegmentId);
-    if (!bound) throw new Error(`Segment not found: ${opts.bindSegmentId}`);
+    const bound = requireSegment(draft, opts.bindSegmentId);
     bindSegmentId = bound.segment.id;
   }
 
@@ -3063,8 +3046,7 @@ function findCropMaterial(
   segmentId: string,
   label = "crop",
 ): { seg: Segment; mat: Record<string, unknown> & { id: string; type?: string } } {
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   const seg = found.segment;
   const videos = (draft.materials.videos ?? []) as Array<Record<string, unknown> & { id: string; type?: string }>;
   const mat = videos.find((v) => v.id === seg.material_id);
@@ -3164,8 +3146,7 @@ export function setAudioFade(
   if (fadeIn <= 0 && fadeOut <= 0) {
     throw new Error(`audio-fade requires at least one of --in or --out (> 0)`);
   }
-  const found = findSegment(draft, segmentId);
-  if (!found) throw new Error(`Segment not found: ${segmentId}`);
+  const found = requireSegment(draft, segmentId);
   if (found.track.type !== "audio") {
     throw new Error(`audio-fade only applies to audio segments (track type: ${found.track.type})`);
   }

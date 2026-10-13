@@ -22,7 +22,7 @@
 // real thing the moment a matted app draft is shared.
 
 import type { Draft, MaterialVideo, Segment } from "./draft.js";
-import { findSegment } from "./draft.js";
+import { requireSegment } from "./segment-lookup.js";
 
 export const MATTING_OFF = 0;
 export const MATTING_SMART_PORTRAIT = 3;
@@ -73,8 +73,7 @@ function resolveVideoMaterial(
   draft: Draft,
   segId: string,
 ): { segment: Segment; material: MaterialVideo; shared: string[] } {
-  const found = findSegment(draft, segId);
-  if (!found) throw new Error(`Segment not found: ${segId}`);
+  const found = requireSegment(draft, segId);
   if (found.track.type !== "video") {
     throw new Error(
       `Smart matting only applies to video/photo segments (segment ${segId} is on a ${found.track.type} track)`,
