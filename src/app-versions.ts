@@ -1,6 +1,7 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { writeFileAtomic } from "./atomic-write.js";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
 import { discoverDraftStore } from "./store.js";
@@ -142,21 +143,6 @@ export function assessAppVersionDrift(
   return { drift: driftBetween(storeDir, stores[storeDir], evidence), error };
 }
 
-// Same atomic write the user-enums catalogue uses: temp + fsync + rename,
-// 0600, parent dir created on demand.
-function writeAtomicLocal(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.capcut-cli-${process.pid}-${Date.now()}.tmp`;
-  const fd = openSync(temp, "w", 0o600);
-  try {
-    writeSync(fd, content, undefined, "utf-8");
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(temp, path);
-}
-
 // Drift found by the most recent mutating write, for the CLI layer to stamp
 // into the command's JSON result (the isDryRun/out pattern). Consumed once.
 let pendingDrift: AppVersionDrift | null = null;
@@ -192,7 +178,7 @@ export function trackAppVersion(
       stores: { ...stores, [storeDir]: { ...evidence, seen_at: new Date().toISOString() } },
     };
     try {
-      writeAtomicLocal(statePath, `${JSON.stringify(file, null, 2)}\n`);
+      writeFileAtomic(statePath, `${JSON.stringify(file, null, 2)}\n`);
     } catch (writeError) {
       const message = writeError instanceof Error ? writeError.message : String(writeError);
       return { drift, error: error ?? `app-version state could not be written: ${message} (${statePath})` };

@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import { writeFileAtomic } from "../dist/atomic-write.js";
 import { writeAtomic } from "../dist/draft.js";
 
 // Every mutating command stages its write in a temp file next to the target,
@@ -76,5 +87,46 @@ describe("atomic write: temp files are unpredictable and exclusively created", (
 
     assert.equal(readFileSync(target, "utf-8"), "content again");
     assert.equal(readFileSync(victim, "utf-8"), "untouched");
+  });
+});
+
+// The user-enums catalogue and the app-version tracker save through
+// writeFileAtomic: the same staging as a draft save, plus the parent folder.
+describe("atomic state-file write: parent folder, private mode, no planted temp", () => {
+  const dirs = [];
+  const realNow = Date.now;
+  after(() => {
+    Date.now = realNow;
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("creates the missing parent folder and leaves only the target behind", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-atomic-state-"));
+    dirs.push(dir);
+    const target = join(dir, "config", "capcut-cli", "user-enums.json");
+    writeFileAtomic(target, '{"version":1}\n');
+    assert.equal(readFileSync(target, "utf-8"), '{"version":1}\n');
+    assert.deepEqual(readdirSync(join(dir, "config", "capcut-cli")), ["user-enums.json"]);
+    if (process.platform !== "win32") assert.equal(statSync(target).mode & 0o777, 0o600);
+  });
+
+  it("never writes through a symlink planted at the predictable temp path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-atomic-state-"));
+    dirs.push(dir);
+    mkdirSync(join(dir, "state"));
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "untouched");
+    const target = join(dir, "state", "app-versions.json");
+    for (const path of legacyTempPaths(target)) symlinkSync(victim, path);
+
+    Date.now = () => FROZEN_MS;
+    try {
+      writeFileAtomic(target, "tracked");
+    } finally {
+      Date.now = realNow;
+    }
+
+    assert.equal(readFileSync(victim, "utf-8"), "untouched");
+    assert.equal(readFileSync(target, "utf-8"), "tracked");
   });
 });
