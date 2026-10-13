@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { parseJsonObject, readJsonObjectFile } from "../dist/bom.js";
+import { parseJsonObject, readJsonObjectFile, readTextIfPresent } from "../dist/bom.js";
 
 // register, rename and media registration all read CapCut metadata files the
 // same way: "missing" (raw null) and "corrupt" (raw set, obj null) are
@@ -14,6 +14,7 @@ describe("readJsonObjectFile: missing vs corrupt metadata", () => {
 
   it("reports an absent file as raw null and obj null", () => {
     assert.deepEqual(readJsonObjectFile(join(dir, "absent.json")), { raw: null, obj: null });
+    assert.equal(readTextIfPresent(join(dir, "absent.json")), null);
   });
 
   it("strips a BOM from raw and parses the object", () => {

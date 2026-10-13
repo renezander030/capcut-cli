@@ -12,6 +12,11 @@ export function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+/** A text file BOM-stripped, or null when it does not exist; other read errors propagate. */
+export function readTextIfPresent(path: string): string | null {
+  return existsSync(path) ? stripBom(readFileSync(path, "utf-8")) : null;
+}
+
 /** `raw` parsed as JSON when it is a plain object; null for an array, a scalar or a parse error. */
 export function parseJsonObject(raw: string): Record<string, unknown> | null {
   try {
@@ -29,6 +34,6 @@ export function parseJsonObject(raw: string): Record<string, unknown> | null {
  * errors other than absence propagate.
  */
 export function readJsonObjectFile(path: string): { raw: string | null; obj: Record<string, unknown> | null } {
-  const raw = existsSync(path) ? stripBom(readFileSync(path, "utf-8")) : null;
+  const raw = readTextIfPresent(path);
   return { raw, obj: raw === null ? null : parseJsonObject(raw) };
 }

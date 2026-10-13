@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { readJsonObjectFile, stripBom } from "./bom.js";
+import { readJsonObjectFile, readTextIfPresent, stripBom } from "./bom.js";
 import { uuidHex } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
@@ -1246,6 +1246,25 @@ export function planDraftRegistration(
 }
 
 /**
+ * The sync-timelines optimistic-concurrency rule for register and rename:
+ * refuse when a planned file's text is no longer what the plan read
+ * (`previous`, null for a file that was absent).
+ */
+function assertPlannedFilesUnchanged(
+  writes: Array<{ file: string; path: string; previous: string | null }>,
+  command: "register" | "rename",
+): void {
+  for (const write of writes) {
+    if (readTextIfPresent(write.path) !== write.previous) {
+      throw new Error(
+        `Draft changed on disk after it was planned: ${write.file}. ` +
+          `Re-run ${command}, or pass --force-write to overwrite intentionally.`,
+      );
+    }
+  }
+}
+
+/**
  * Perform the writes a registration plan prepared: temp+fsync+rename per file,
  * with a `.bak` of the pre-plan content for every file that already existed.
  * Unless forceWrite, refuses when a target changed on disk between the plan
@@ -1255,17 +1274,7 @@ export function applyDraftRegistration(
   result: RegistrationResult,
   options: { forceWrite?: boolean } = {},
 ): { applied: string[]; backups: string[] } {
-  if (!options.forceWrite) {
-    for (const write of result.writes) {
-      const current = existsSync(write.path) ? stripBom(readFileSync(write.path, "utf-8")) : null;
-      if (current !== write.previous) {
-        throw new Error(
-          `Draft changed on disk after it was planned: ${write.file}. ` +
-            "Re-run register, or pass --force-write to overwrite intentionally.",
-        );
-      }
-    }
-  }
+  if (!options.forceWrite) assertPlannedFilesUnchanged(result.writes, "register");
   const applied: string[] = [];
   const backups: string[] = [];
   for (const write of result.writes) {
@@ -1578,15 +1587,10 @@ export function applyDraftRename(
 ): { renamed: boolean; applied: string[]; backups: string[] } {
   const { plan, writes } = result;
   if (!options.forceWrite) {
-    for (const write of writes) {
-      const current = existsSync(write.readPath) ? stripBom(readFileSync(write.readPath, "utf-8")) : null;
-      if (current !== write.previous) {
-        throw new Error(
-          `Draft changed on disk after it was planned: ${write.file}. ` +
-            "Re-run rename, or pass --force-write to overwrite intentionally.",
-        );
-      }
-    }
+    assertPlannedFilesUnchanged(
+      writes.map((write) => ({ ...write, path: write.readPath })),
+      "rename",
+    );
   }
   if (existsSync(plan.new_path)) {
     throw new Error(`Refusing to rename: the target folder already exists: ${plan.new_path}`);

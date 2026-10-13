@@ -287,3 +287,47 @@ describe("rename", () => {
     assert.ok(!existsSync(join(loose, "root_meta_info.json")), "no index may be invented outside a store");
   });
 });
+
+// register and rename plan their metadata writes from one read and apply them
+// later; a file edited in between (CapCut saving, another tool) must stop the
+// apply instead of being overwritten, unless the caller forces the write.
+describe("register/rename apply: optimistic concurrency", () => {
+  it("rename refuses when the sidecar changed after planning, and leaves the folder in place", async () => {
+    const { planDraftRename, applyDraftRename } = await import("../dist/factory.js");
+    const f = storeFixture();
+    after(f.cleanup);
+    const plan = planDraftRename(f.dir, "Better Name", { draftsDir: f.root });
+    writeFileSync(join(f.dir, "draft_meta_info.json"), JSON.stringify({ edited: true }));
+    assert.throws(
+      () => applyDraftRename(plan),
+      /^Error: Draft changed on disk after it was planned: draft_meta_info\.json\. Re-run rename, or pass --force-write to overwrite intentionally\.$/,
+    );
+    assert.ok(existsSync(f.dir), "the folder moved despite the refusal");
+    assert.ok(!existsSync(f.newDir));
+  });
+
+  it("rename with forceWrite proceeds over the edited sidecar", async () => {
+    const { planDraftRename, applyDraftRename } = await import("../dist/factory.js");
+    const f = storeFixture();
+    after(f.cleanup);
+    const plan = planDraftRename(f.dir, "Better Name", { draftsDir: f.root });
+    writeFileSync(join(f.dir, "draft_meta_info.json"), JSON.stringify({ edited: true }));
+    assert.equal(applyDraftRename(plan, { forceWrite: true }).renamed, true);
+    assert.ok(existsSync(f.newDir));
+  });
+
+  it("register refuses when a file it planned to create appeared after planning", async () => {
+    const { planDraftRegistration, applyDraftRegistration } = await import("../dist/factory.js");
+    const f = storeFixture({ withMeta: false });
+    after(f.cleanup);
+    const plan = planDraftRegistration(f.dir, { draftsDir: f.root });
+    const created = plan.writes.find((w) => w.file === "draft_meta_info.json");
+    assert.ok(created && created.previous === null, "fixture should plan a new sidecar");
+    writeFileSync(join(f.dir, "draft_meta_info.json"), "{}");
+    assert.throws(
+      () => applyDraftRegistration(plan),
+      /^Error: Draft changed on disk after it was planned: draft_meta_info\.json\. Re-run register, or pass --force-write to overwrite intentionally\.$/,
+    );
+    assert.equal(readFileSync(join(f.dir, "draft_meta_info.json"), "utf-8"), "{}");
+  });
+});
