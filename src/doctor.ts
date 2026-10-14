@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
 import { platform, release } from "node:os";
-import { delimiter, join } from "node:path";
 import { appVersionsPath, scanTrackedStores } from "./app-versions.js";
 import { scanStore } from "./factory.js";
 import { probeFfmpegCapabilities } from "./render.js";
 import { draftDirCandidates } from "./store.js";
+import { onPath, resolveWhisperCommand } from "./whisper.js";
 
 export type CheckStatus = "ok" | "warn" | "missing";
 
@@ -23,19 +23,6 @@ export interface DoctorReport {
   platform: string;
   node: string;
   checks: DoctorCheck[];
-}
-
-/** Minimal cross-platform PATH lookup — no `which`/`where` shell-out. */
-function onPath(cmd: string): string | null {
-  const dirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-  const exts = platform() === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const full = join(dir, cmd + ext);
-      if (existsSync(full)) return full;
-    }
-  }
-  return null;
 }
 
 function nodeMajor(): number {
@@ -127,7 +114,7 @@ export function runDoctor(options: DoctorOptions = {}): DoctorReport {
   });
 
   // whisper — needed by `caption`.
-  const whisper = onPath("whisper") ?? onPath("whisper-cli") ?? onPath("faster-whisper");
+  const whisper = resolveWhisperCommand();
   checks.push({
     name: "whisper",
     status: whisper ? "ok" : "warn",

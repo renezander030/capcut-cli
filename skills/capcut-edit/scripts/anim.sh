@@ -48,10 +48,31 @@ const crypto = require("crypto");
 
 const [, projectArg, segPrefix, slug, durOverride, cataloguePath] = process.argv;
 
-const EFFECT_CACHE_BASE = path.join(
-  process.env.HOME,
-  "Library/Containers/com.lemon.lvoverseas/Data/Movies/CapCut/User Data/Cache/effect"
-);
+// The effect cache lives in a per-platform app data directory. Resolve it at
+// runtime instead of hardcoding the macOS container path, which on Windows
+// wrote a path the app cannot resolve into the animation material.
+// CAPCUT_EFFECT_CACHE overrides both.
+function defaultEffectCacheBase() {
+  const override = process.env.CAPCUT_EFFECT_CACHE;
+  if (override) return override;
+  if (process.platform === "win32") {
+    const local =
+      process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || process.env.HOME || "", "AppData", "Local");
+    for (const app of ["CapCut", "JianyingPro"]) {
+      const candidate = path.join(local, app, "User Data", "Cache", "effect");
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return path.join(local, "CapCut", "User Data", "Cache", "effect");
+  }
+  if (process.platform === "darwin") {
+    return path.join(
+      process.env.HOME,
+      "Library/Containers/com.lemon.lvoverseas/Data/Movies/CapCut/User Data/Cache/effect"
+    );
+  }
+  return path.join(process.env.HOME || "", ".local/share/CapCut/Cache/effect");
+}
+const EFFECT_CACHE_BASE = defaultEffectCacheBase();
 
 function parseTime(input) {
   const neg = input.startsWith("-");

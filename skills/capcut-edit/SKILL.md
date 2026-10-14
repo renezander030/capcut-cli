@@ -11,6 +11,7 @@ CLI for editing CapCut / JianYing drafts through a version-aware store. v0.11 de
 
 - **macOS**: `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/<project>/`
 - **Windows**: `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\<project>\`
+- **Windows (JianYing / 剪映)**: `%LOCALAPPDATA%\JianyingPro\User Data\Projects\com.lveditor.draft\<project>\`
 
 ## Core principle — deterministic scripts
 
@@ -63,6 +64,8 @@ Batch is transactional: one failing operation writes nothing. Use `--continue-on
   - `stamp-cta.sh` — apply a saved text template (see `assets/examples/subscribe-cta.json`).
   - `_test.sh` — run every wrapper against the fixture; run after any change here.
 - **`assets/examples/`** — raw JSON snippets for hand-editing.
+
+Scripts resolve the `capcut` entry point themselves, so the skill also works when it is installed outside a `capcut-cli` checkout: `$CAPCUT_CLI` (explicit path to `dist/index.js`) wins, then the repo build, then an installed `node_modules/capcut-cli`, then `capcut-cli`/`capcut` on `PATH`. `anim.sh` resolves the CapCut effect-cache directory per platform; `$CAPCUT_EFFECT_CACHE` overrides it.
 
 ## Invariants
 

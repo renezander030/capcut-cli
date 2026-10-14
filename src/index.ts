@@ -32,7 +32,7 @@ import type {
   TextStyleOptions,
 } from "./decorators.js";
 import type { DoctorCheck } from "./doctor.js";
-import type { Draft, MaterialText, Segment, Track } from "./draft.js";
+import type { Draft, MaterialText, Segment, Timerange, Track } from "./draft.js";
 import {
   assertTargetsUnchangedOnDisk,
   commitDraftTargets,
@@ -1660,7 +1660,15 @@ function cmdTracks(draft: Draft, flags: Flags): void {
 }
 
 function segmentData(draft: Draft, track: Track, seg: Segment) {
-  const t = seg.target_timerange;
+  // Read the timing fields defensively. A segment the app itself wrote can
+  // carry a `target_timerange` without `start` (its 0 default is omitted) and
+  // no `speed`; both were typed as required, so an honest cast documents that
+  // the on-disk shape is looser than the type. Without this the tables below
+  // printed `NaN:00NaN` and `undefinedx` for a segment the app opens fine.
+  const t = seg.target_timerange as Partial<Timerange> | undefined;
+  const startUs = t?.start ?? 0;
+  const durationUs = t?.duration ?? 0;
+  const speed = typeof seg.speed === "number" ? seg.speed : 1;
   let label = "";
   if (track.type === "text") {
     const mat = findMaterial(draft.materials.texts, seg.material_id);
@@ -1675,9 +1683,9 @@ function segmentData(draft: Draft, track: Track, seg: Segment) {
   return {
     id: seg.id,
     type: track.type,
-    start_us: t.start,
-    duration_us: t.duration,
-    speed: seg.speed,
+    start_us: startUs,
+    duration_us: durationUs,
+    speed,
     volume: seg.volume,
     opacity: seg.clip?.alpha ?? 1,
     label,

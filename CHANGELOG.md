@@ -4,6 +4,16 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Changed
+
+- `skills/capcut-edit/scripts/anim.sh` derives the effect-cache base per platform instead of hardcoding the macOS container path, which on Windows wrote a path the app cannot resolve into the animation material: `%LOCALAPPDATA%\CapCut\User Data\Cache\effect` (JianYing: `%LOCALAPPDATA%\JianyingPro\...`), the macOS container on darwin, `~/.local/share/CapCut/Cache/effect` elsewhere. `CAPCUT_EFFECT_CACHE` overrides all three.
+- `skills/capcut-edit/scripts/{ken-burns,stamp-cta,long-to-short}.sh` no longer assume they sit inside a `capcut-cli` checkout. They resolve the CLI by priority `$CAPCUT_CLI` → the repo build → an installed `node_modules/capcut-cli/dist/index.js` (walking up from the script) → `capcut-cli`/`capcut` on `PATH`, so the skill works when it is copied out of the repo. `SKILL.md` documents the resolution order, the two environment variables and the JianYing draft-store path.
+
+### Fixed
+
+- `caption` and `doctor` resolve the Whisper binary through one resolver: an explicit `--whisper-cmd` first, then the first of `whisper` / `whisper-cli` / `faster-whisper` actually on `PATH`. `doctor` had always probed all three while `caption` only ever spawned `whisper` and defaulted its dialect to openai, so on a host that installs whisper.cpp — a `whisper-cli` binary and no `whisper`, the name that build has shipped since v1.7.4 — `doctor` reported the check as ok and the first `caption` run failed with ENOENT while hinting at the wrong dialect. Resolving also feeds dialect detection, so a resolved `whisper-cli` selects the whisper-cpp invocation instead of the openai one. `--whisper-cmd` and `--whisper-engine` still win.
+- `segments` no longer prints `NaN:00NaN` / `undefinedx` for a segment whose `target_timerange` omits `start` (its 0 default is simply not written) or that carries no `speed`. A draft that the app has edited can hold such a segment while the app itself shows it normally; `start_us`, `duration_us` and `speed` now fall back to `0`, `0` and `1` in the JSON result and in the `-H` tables.
+
 ## [0.29.0] — 2026-10-09
 
 ### Added
