@@ -5050,10 +5050,11 @@ function getCliVersion(): string {
 // rewrites `.bak` when it saves); --force-write restores it anyway.
 async function cmdRestore(projectPath: string | undefined, flags: Flags): Promise<void> {
   if (!projectPath) die("Missing project path. Usage: capcut restore <project> [--step N | --list]");
-  const { backupIntegrity, snapshotsWithIntegrity } = await import("./history-integrity.js");
+  const { readRecoveryHistory } = await import("./history-integrity.js");
   const filePath = findDraft(projectPath);
   const hasSynchronizedSiblings = discoverDraftStore(filePath).targets.length > 1;
-  const snaps = snapshotsWithIntegrity(filePath);
+  const history = readRecoveryHistory(filePath);
+  const snaps = history.snapshots;
 
   if (flags.list) {
     // Each step names the write it undoes when the journal has its index;
@@ -5106,7 +5107,7 @@ async function cmdRestore(projectPath: string | undefined, flags: Flags): Promis
   if (!existsSync(bakPath)) {
     die(`No backup found at ${bakPath}. Nothing to restore (a .bak is written on the first edit).`);
   }
-  const integrity = backupIntegrity(filePath);
+  const integrity = history.backup();
   if (integrity === "changed" && !flags.forceWrite) {
     const step1 =
       snaps[0]?.integrity === "intact"

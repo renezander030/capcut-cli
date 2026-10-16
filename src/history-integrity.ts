@@ -23,19 +23,26 @@ function integrityOf(path: string, entry: JournalEntry | undefined): RecoveryInt
   return journalDigest(content) === entry.before_sha256 ? "intact" : "changed";
 }
 
-/** The history snapshots newest-first (step 1 = most recent write), each with its integrity. */
-export function snapshotsWithIntegrity(
-  filePath: string,
-): Array<{ step: number; index: number; path: string; entry: JournalEntry | undefined; integrity: RecoveryIntegrity }> {
+/**
+ * A draft's recovery files, each checked against the write journal (read
+ * once): the history snapshots newest-first (step 1 = most recent write), and
+ * the `.bak`, which holds the content before the most recent write and so is
+ * checked against the newest snapshot's entry when `backup()` is called.
+ */
+export function readRecoveryHistory(filePath: string): {
+  snapshots: Array<{
+    step: number;
+    index: number;
+    path: string;
+    entry: JournalEntry | undefined;
+    integrity: RecoveryIntegrity;
+  }>;
+  backup: () => RecoveryIntegrity;
+} {
   const journal = readJournal(filePath);
-  return listSnapshots(filePath).map((snapshot) => {
+  const snapshots = listSnapshots(filePath).map((snapshot) => {
     const entry = journal.get(snapshot.index);
     return { ...snapshot, entry, integrity: integrityOf(snapshot.path, entry) };
   });
-}
-
-/** `.bak` holds the content before the most recent write, so it is checked against the newest journal entry. */
-export function backupIntegrity(filePath: string): RecoveryIntegrity {
-  const newest = listSnapshots(filePath)[0];
-  return integrityOf(`${filePath}.bak`, newest ? readJournal(filePath).get(newest.index) : undefined);
+  return { snapshots, backup: () => integrityOf(`${filePath}.bak`, snapshots[0]?.entry) };
 }
