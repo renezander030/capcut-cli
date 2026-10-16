@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { type JournalEntry, listSnapshots, readJournal } from "./draft.js";
+import { journalDigest } from "./journal-digest.js";
 
 /**
  * Whether a recovery file still holds what the CLI recorded before the write
@@ -20,7 +20,7 @@ function integrityOf(path: string, entry: JournalEntry | undefined): RecoveryInt
   } catch {
     return "changed";
   }
-  return createHash("sha256").update(content, "utf-8").digest("hex") === entry.before_sha256 ? "intact" : "changed";
+  return journalDigest(content) === entry.before_sha256 ? "intact" : "changed";
 }
 
 /** The history snapshots newest-first (step 1 = most recent write), each with its integrity. */

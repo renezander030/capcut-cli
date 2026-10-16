@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -15,6 +15,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { appVersionEvidence, formatAppVersionDriftWarning, trackAppVersion } from "./app-versions.js";
 import { writeTemp } from "./atomic-write.js";
 import { stripBom } from "./bom.js";
+import { journalDigest } from "./journal-digest.js";
 import {
   assertActiveTimelineUnchanged,
   type DraftCandidate,
@@ -250,8 +251,8 @@ function writeHistorySnapshot(filePath: string, content: string, after?: string)
     time: new Date().toISOString(),
     command: writeContext.command,
     argv: writeContext.argv,
-    before_sha256: sha256(content),
-    after_sha256: after === undefined ? null : sha256(after),
+    before_sha256: journalDigest(content),
+    after_sha256: after === undefined ? null : journalDigest(after),
   });
   // Trim oldest beyond the cap.
   const all = snapshotFiles(filePath);
@@ -284,10 +285,6 @@ let writeContext: { command: string | null; argv: string[] | null } = { command:
 
 export function setWriteContext(command: string | null, argv: string[] | null): void {
   writeContext = { command, argv: argv === null ? null : [...argv] };
-}
-
-function sha256(content: string): string {
-  return createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
 function snapshotIndex(name: string): number {
