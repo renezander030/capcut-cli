@@ -589,7 +589,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "words",
       ["--words"],
       "path",
-      "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper/whisper.cpp segments[].words[], WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*.",
+      "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper segments[].words[], whisper.cpp full JSON (whisper-cli -ojf), WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*.",
     ),
     option(
       "audio_stream",

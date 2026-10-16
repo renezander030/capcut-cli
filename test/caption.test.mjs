@@ -45,7 +45,7 @@ describe("caption engine adapters and karaoke grouping", () => {
     assert.ok(openai.args.includes("--word_timestamps"));
     const cpp = buildWhisperInvocation("whisper-cpp", "audio.wav", "ggml.bin", "en", "/tmp/out", true);
     assert.deepEqual(cpp.args.slice(0, 4), ["-m", "ggml.bin", "-f", "audio.wav"]);
-    assert.ok(cpp.args.includes("-oj"));
+    assert.ok(cpp.args.includes("-ojf"));
   });
 
   it("parses word timestamps and groups readable karaoke cues", () => {

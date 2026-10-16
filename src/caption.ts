@@ -454,8 +454,9 @@ interface TranscriptionResult {
  *   whisperx  — WhisperX, word_segments[] (or segments[].words[] carrying a score)
  *   word-list — a plain array of {word|text|char, start, end} in seconds, or
  *               start_ms/end_ms, or start_time/end_time (Qwen3-ForcedAligner)
+ *   whisper-cpp — whisper.cpp full JSON (whisper-cli -ojf), transcription[].tokens[]
  */
-export type WordsFormat = "whisper" | "whisperx" | "word-list";
+export type WordsFormat = "whisper" | "whisperx" | "word-list" | "whisper-cpp";
 
 export interface ParsedWordTimings {
   format: WordsFormat;
@@ -501,6 +502,23 @@ export function parseWordTimings(raw: string): ParsedWordTimings {
       record.word_segments.forEach((item, index) => {
         entries.push({ item, path: `word_segments[${index}]` });
       });
+    } else if (Array.isArray(record.transcription)) {
+      // whisper.cpp -ojf: words built from the tokens; a segment whose tokens
+      // do not spell its text stays one entry with the segment's own timing.
+      format = "whisper-cpp";
+      record.transcription.forEach((segment, segmentIndex) => {
+        const item = (segment ?? {}) as Record<string, unknown>;
+        const words = whisperCppWords(item);
+        const path = `transcription[${segmentIndex}]`;
+        if (words) {
+          for (const word of words) {
+            entries.push({ item: { text: word.word, start_ms: word.startUs / 1000, end_ms: word.endUs / 1000 }, path });
+          }
+        } else {
+          const offsets = (item.offsets ?? {}) as Record<string, unknown>;
+          entries.push({ item: { text: item.text, start_ms: offsets.from, end_ms: offsets.to }, path });
+        }
+      });
     } else if (segments.some((segment) => Array.isArray((segment as Record<string, unknown> | null)?.words))) {
       // WhisperX writes the same segments[].words[] layout plus a per-word score.
       let scored = false;
@@ -516,7 +534,7 @@ export function parseWordTimings(raw: string): ParsedWordTimings {
     } else {
       throw new Error(
         "refused [words-format]: --words JSON has no word timings. Expected segments[].words[], word_segments[], " +
-          "or an array of {word|text|char, start, end}.",
+          "whisper.cpp transcription[] (whisper-cli -ojf), or an array of {word|text|char, start, end}.",
       );
     }
   } else {
@@ -588,7 +606,8 @@ export function buildWhisperInvocation(
   const prefix = join(outputDir, "transcript");
   if (engine === "whisper-cpp") {
     return {
-      args: ["-m", model, "-f", audio, "-l", language, json ? "-oj" : "-osrt", "-of", prefix],
+      // -ojf (full JSON) carries per-token timings; plain -oj has segments only.
+      args: ["-m", model, "-f", audio, "-l", language, json ? "-ojf" : "-osrt", "-of", prefix],
       prefix,
       extension: json ? ".json" : ".srt",
     };
@@ -691,13 +710,64 @@ export function parseWhisperJson(raw: string): { cues: CaptionCue[]; words: Capt
     const startUs = Math.round(Number(offsets.from ?? 0) * 1000);
     const endUs = Math.round(Number(offsets.to ?? offsets.from ?? 0) * 1000);
     const text = String(item.text ?? "").trim();
-    if (text) cues.push({ startUs, endUs, text });
+    if (!text) continue;
+    const cue: CaptionCue = { startUs, endUs, text };
+    const cueWords = whisperCppWords(item) ?? wordsFromCues([cue]);
+    if (Array.isArray(item.tokens)) {
+      cue.words = cueWords;
+      words.push(...cueWords);
+    }
+    cues.push(cue);
   }
 
   if (cues.length === 0 && typeof parsed.text === "string") {
     cues.push({ startUs: 0, endUs: 1_000_000, text: parsed.text.trim() });
   }
   return { cues, words: words.length > 0 ? words : wordsFromCues(cues) };
+}
+
+/**
+ * Words of one whisper.cpp full-JSON segment (whisper-cli -ojf), timed from its
+ * tokens' offsets (ms). Special tokens ([_BEG_], [_TT_n]) are skipped. In a
+ * Chinese or Japanese segment every token is its own word; otherwise a token
+ * that starts with whitespace opens a word and any other token (a sub-word
+ * piece, punctuation) continues it. A word stamped from == to runs to the
+ * next word's start. Returns null when the segment carries no
+ * tokens, or when its tokens do not spell its text: a character split across
+ * tokens decodes as U+FFFD, and timing words from those would mislabel them.
+ */
+export function whisperCppWords(segment: Record<string, unknown>): CaptionWord[] | null {
+  if (!Array.isArray(segment.tokens)) return null;
+  const text = String(segment.text ?? "");
+  const tokens = segment.tokens
+    .map((token) => (token ?? {}) as Record<string, unknown>)
+    .filter((token) => typeof token.text === "string" && !/^\[_[^\]]*\]$/.test(token.text));
+  const spelled = tokens.map((token) => token.text).join("");
+  if (text.trim() === "" || spelled.trim() !== text.trim()) return null;
+  const eachTokenAWord = wordSeparator(captionScript(text)) === "";
+  const words: CaptionWord[] = [];
+  for (const token of tokens) {
+    const piece = token.text as string;
+    const offsets = (token.offsets ?? {}) as Record<string, unknown>;
+    const startUs = Math.round(Number(offsets.from ?? 0) * 1000);
+    const endUs = Math.round(Number(offsets.to ?? offsets.from ?? 0) * 1000);
+    const current = words[words.length - 1];
+    if (current && !eachTokenAWord && !/^\s/.test(piece)) {
+      current.word += piece;
+      current.endUs = Math.max(current.endUs, endUs);
+    } else if (piece.trim() !== "") {
+      words.push({ word: piece.trim(), startUs, endUs });
+    }
+  }
+  // whisper.cpp can stamp a token with from == to; such a word runs until the
+  // next word starts (or the segment ends) instead of lasting no time at all.
+  const segmentEndUs = Math.round(Number(((segment.offsets ?? {}) as Record<string, unknown>).to ?? 0) * 1000);
+  words.forEach((word, index) => {
+    if (word.endUs > word.startUs) return;
+    const until = words[index + 1]?.startUs ?? segmentEndUs;
+    if (until > word.startUs) word.endUs = until;
+  });
+  return words.length > 0 ? words : null;
 }
 
 export function wordsFromCues(cues: CaptionCue[]): CaptionWord[] {
