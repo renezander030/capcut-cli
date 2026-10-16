@@ -741,7 +741,7 @@ function whisperCppSpanUs(holder: Record<string, unknown>): { startUs: number; e
  * tokens, or when its tokens do not spell its text: a character split across
  * tokens decodes as U+FFFD, and timing words from those would mislabel them.
  */
-export function whisperCppWords(segment: Record<string, unknown>): CaptionWord[] | null {
+function whisperCppWords(segment: Record<string, unknown>): CaptionWord[] | null {
   if (!Array.isArray(segment.tokens)) return null;
   const text = String(segment.text ?? "");
   const tokens = segment.tokens

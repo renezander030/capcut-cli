@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { parseWhisperJson, parseWordTimings, whisperCppWords } from "../dist/caption.js";
+import { parseWhisperJson, parseWordTimings } from "../dist/caption.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const JFK = readFileSync(join(__dirname, "fixtures", "whisper-cpp", "jfk-ojf.json"), "utf-8");
 
 const token = (text, from, to) => ({ text, offsets: { from, to } });
 const segment = (text, tokens, from = 0, to = 5000) => ({ text, offsets: { from, to }, tokens });
+const wordsOf = (seg) => parseWhisperJson(JSON.stringify({ transcription: [seg] })).words;
 
 describe("whisper.cpp full JSON (-ojf) words", () => {
   it("times every word of a real whisper-cli run from its tokens", () => {
@@ -27,7 +28,7 @@ describe("whisper.cpp full JSON (-ojf) words", () => {
   });
 
   it("joins sub-word pieces and punctuation, and skips special tokens", () => {
-    const words = whisperCppWords(
+    const words = wordsOf(
       segment(" Privet, mir", [
         token("[_BEG_]", 0, 0),
         token(" Pri", 100, 200),
@@ -44,7 +45,7 @@ describe("whisper.cpp full JSON (-ojf) words", () => {
   });
 
   it("makes every token its own word in Chinese", () => {
-    const words = whisperCppWords(segment("你好世界", [token("你好", 0, 300), token("世界", 300, 700)]));
+    const words = wordsOf(segment("你好世界", [token("你好", 0, 300), token("世界", 300, 700)]));
     assert.deepEqual(
       words.map((w) => w.word),
       ["你好", "世界"],
@@ -53,9 +54,7 @@ describe("whisper.cpp full JSON (-ojf) words", () => {
 
   it("leaves a segment whose tokens do not spell its text to the even split", () => {
     const broken = segment("你好", [token("�", 0, 100), token("�好", 100, 300)], 0, 300);
-    assert.equal(whisperCppWords(broken), null);
-    const { words } = parseWhisperJson(JSON.stringify({ transcription: [broken] }));
-    assert.equal(words.length, 1, "falls back to the segment's own words");
+    assert.deepEqual(wordsOf(broken), [{ word: "你好", startUs: 0, endUs: 300_000 }], "the even split of the segment");
   });
 
   it("parses plain -oj output (no tokens) exactly as before", () => {
