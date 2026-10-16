@@ -5,6 +5,7 @@ import { writeFileAtomic } from "./atomic-write.js";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
 import type { Category, EnumEntry } from "./enums.js";
+import { MASK_FIELD_NAMES } from "./mask-fields.js";
 
 /**
  * User enum catalogue (`harvest-enums`).
@@ -234,7 +235,7 @@ export function harvestDraft(draft: Draft, knownIds: Set<string>): HarvestResult
   for (const raw of arrayOf("video_effects")) consider("video_effects", raw);
   for (const raw of arrayOf("transitions")) consider("transitions", raw);
   for (const raw of arrayOf("audio_effects")) consider("audio_effects", raw);
-  for (const key of ["masks", "common_mask", "common_masks"]) {
+  for (const key of MASK_FIELD_NAMES) {
     for (const raw of arrayOf(key)) consider("masks", raw);
   }
   // materials.filters holds colour filters AND text-shape bubbles; only real

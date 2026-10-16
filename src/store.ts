@@ -5,6 +5,7 @@ import { homedir, platform } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { stripBom } from "./bom.js";
 import type { Draft } from "./draft.js";
+import { referencedMedia } from "./materials-register.js";
 import { assessWriteSafety, atLeast, isPreRelease } from "./version.js";
 
 const STANDARD_FILES = ["draft_content.json", "draft_info.json", "draft_meta_info.json", "template-2.tmp"] as const;
@@ -1175,20 +1176,6 @@ export function planTimelineSync(
   };
 }
 
-/** Distinct local file paths the timeline's video/audio materials reference —
- * URLs never need registration, and repeated references to one file are one
- * file to relink. */
-function referencedLocalMedia(draft: Draft): number {
-  const paths = new Set<string>();
-  for (const group of [draft.materials.videos ?? [], draft.materials.audios ?? []]) {
-    for (const mat of group) {
-      const path = (mat as Record<string, unknown>).path;
-      if (typeof path === "string" && path.length > 0 && !/^https?:\/\//i.test(path)) paths.add(path);
-    }
-  }
-  return paths.size;
-}
-
 /** True when `draft_materials` provably registers nothing: an empty array, an
  * array whose every group has an empty `value` array, or an object of empty
  * arrays. Any shape not provably empty counts as populated — the note must
@@ -1232,7 +1219,7 @@ export function assessMediaRegistrationRaw(
   draft: Draft | null,
   meta: { exists: boolean; raw: string | null },
 ): MediaRegistrationNote | null {
-  const referenced = draft ? referencedLocalMedia(draft) : 0;
+  const referenced = draft ? referencedMedia(draft).length : 0;
   if (referenced === 0) return null;
   let state: MediaRegistrationNote["draft_materials"];
   if (!meta.exists) {

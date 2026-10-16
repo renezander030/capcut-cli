@@ -2945,7 +2945,8 @@ async function cmdTransition(draft: Draft, filePath: string, positional: string[
 }
 
 async function cmdMask(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
-  const { addMask, MASK_FIELDS, maskSlugs } = await import("./decorators.js");
+  const { addMask, maskSlugs } = await import("./decorators.js");
+  const { MASK_FIELDS } = await import("./mask-fields.js");
   const segId = positional[2];
   const slug = positional[3];
   const ns: Namespace = flags.jianying ? "jianying" : "capcut";

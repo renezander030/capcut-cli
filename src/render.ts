@@ -3,6 +3,7 @@ import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
+import { MASK_FIELDS } from "./mask-fields.js";
 import { ffprobeAvailable, probeMedia } from "./probe.js";
 import { renderSrt } from "./srt.js";
 import { draftProjectDir } from "./store.js";
@@ -249,26 +250,26 @@ export interface FfmpegCapabilities {
 
 type ProbedFilterFlags = Record<(typeof PROBED_FILTERS)[number], boolean>;
 
+/** One `ffmpeg -hide_banner <listing>` run: its exit status and stdout+stderr text. */
+function ffmpegListing(command: string, listing: "-filters" | "-encoders"): { status: number | null; text: string } {
+  const r = spawnSync(command, ["-hide_banner", listing], {
+    encoding: "utf-8",
+    timeout: 10_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return { status: r.status, text: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 export function probeFfmpegCapabilities(command = "ffmpeg"): FfmpegCapabilities {
   const filterFlags = (test: (name: string) => boolean): ProbedFilterFlags =>
     Object.fromEntries(PROBED_FILTERS.map((name) => [name, test(name)])) as ProbedFilterFlags;
   try {
-    const filters = spawnSync(command, ["-hide_banner", "-filters"], {
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    const encoders = spawnSync(command, ["-hide_banner", "-encoders"], {
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    const filterText = `${filters.stdout ?? ""}${filters.stderr ?? ""}`;
-    const encoderText = `${encoders.stdout ?? ""}${encoders.stderr ?? ""}`;
+    const filters = ffmpegListing(command, "-filters");
+    const encoders = ffmpegListing(command, "-encoders");
     return {
       available: filters.status === 0,
-      x264: /\blibx264\b/.test(encoderText),
-      ...filterFlags((name) => new RegExp(`\\b${name}\\b`).test(filterText)),
+      x264: /\blibx264\b/.test(encoders.text),
+      ...filterFlags((name) => new RegExp(`\\b${name}\\b`).test(filters.text)),
     };
   } catch {
     return { available: false, x264: false, ...filterFlags(() => false) };
@@ -338,12 +339,8 @@ export function parseFfmpegEncoders(output: string): Set<string> {
  */
 export function probeFfmpegEncoders(command = "ffmpeg"): { listed: boolean; encoders: Set<string> } {
   try {
-    const r = spawnSync(command, ["-hide_banner", "-encoders"], {
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    return { listed: r.status === 0, encoders: parseFfmpegEncoders(`${r.stdout ?? ""}${r.stderr ?? ""}`) };
+    const r = ffmpegListing(command, "-encoders");
+    return { listed: r.status === 0, encoders: parseFfmpegEncoders(r.text) };
   } catch {
     return { listed: false, encoders: new Set() };
   }
@@ -460,10 +457,6 @@ const FIDELITY_HINTS: Record<FidelityCategory, string> = {
   matting: "smart portrait matting is not applied",
 };
 
-// The three on-disk mask array spellings (decorators.ts MASK_FIELDS; inlined
-// so render does not load the decorator module).
-const MASK_MATERIAL_FIELDS = ["common_masks", "common_mask", "masks"] as const;
-
 export interface FidelityEntry {
   count: number;
   segment_ids: string[];
@@ -525,7 +518,7 @@ export function fidelityCensus(
   const chromas = byId("chromas");
   const animations = byId("material_animations");
   const effectMaterials = new Map([...byId("effects"), ...byId("video_effects")]);
-  const maskIds = new Set(MASK_MATERIAL_FIELDS.flatMap((field) => [...byId(field).keys()]));
+  const maskIds = new Set(MASK_FIELDS.flatMap((field) => [...byId(field).keys()]));
   const videoMaterials = new Map((draft.materials.videos ?? []).map((v) => [v.id, v as Record<string, unknown>]));
 
   const segmentIds = new Set(draft.tracks.flatMap((t) => t.segments.map((s) => s.id)));
@@ -965,6 +958,20 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
   };
 }
 
+/** The refusal for filters a render chain needs but the ffmpeg build lacks;
+ * `why` says which chain needs them and what skipping them would cost. */
+function missingFiltersError(command: string, missing: readonly string[], why: string): Error {
+  const list = missing.map((name) => `'${name}'`).join(", ");
+  return new Error(
+    `render: ffmpeg at '${command}' is missing the filter${missing.length > 1 ? "s" : ""} ${list}, ` +
+      why +
+      `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${command} -hide_banner -filters' lists what's compiled in).`,
+  );
+}
+
+const MINIMAL_BUILD_NOTE =
+  "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. ";
+
 export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions): RenderResult {
   const out = opts.out ?? join(draftProjectDir(filePath), "preview.mp4");
   const capabilities = probeFfmpegCapabilities(opts.ffmpegCmd ?? "ffmpeg");
@@ -976,22 +983,20 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   }
   const missingBaseFilters = BASE_CHAIN_FILTERS.filter((name) => !capabilities[name]);
   if (missingBaseFilters.length > 0) {
-    const list = missingBaseFilters.map((name) => `'${name}'`).join(", ");
-    throw new Error(
-      `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' is missing the filter${missingBaseFilters.length > 1 ? "s" : ""} ${list}, ` +
-        "which the base render chain applies to every segment unconditionally (not gated by any flag). " +
-        "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. " +
-        `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
+    throw missingFiltersError(
+      opts.ffmpegCmd ?? "ffmpeg",
+      missingBaseFilters,
+      "which the base render chain applies to every segment unconditionally (not gated by any flag). " +
+        MINIMAL_BUILD_NOTE,
     );
   }
   const missingAudioFilters = AUDIO_CHAIN_FILTERS.filter((name) => !capabilities[name]);
   if (missingAudioFilters.length > 0) {
-    const list = missingAudioFilters.map((name) => `'${name}'`).join(", ");
-    throw new Error(
-      `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' is missing the filter${missingAudioFilters.length > 1 ? "s" : ""} ${list}, ` +
-        "which the audio mix chain applies to every audio segment unconditionally (not gated by any flag). " +
-        "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. " +
-        `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
+    throw missingFiltersError(
+      opts.ffmpegCmd ?? "ffmpeg",
+      missingAudioFilters,
+      "which the audio mix chain applies to every audio segment unconditionally (not gated by any flag). " +
+        MINIMAL_BUILD_NOTE,
     );
   }
   if (opts.encoder) {
@@ -1037,12 +1042,11 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
   const usedFilters = new Set(filterNamesInGraph(plan.filterComplex));
   const missingConditional = AUDIO_CONDITIONAL_FILTERS.filter((name) => usedFilters.has(name) && !capabilities[name]);
   if (missingConditional.length > 0) {
-    const list = missingConditional.map((name) => `'${name}'`).join(", ");
-    throw new Error(
-      `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' is missing the filter${missingConditional.length > 1 ? "s" : ""} ${list}, ` +
-        "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
-        "Rendering without them would silently change the audio, so render refuses instead of degrading. " +
-        `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -filters' lists what's compiled in).`,
+    throw missingFiltersError(
+      opts.ffmpegCmd ?? "ffmpeg",
+      missingConditional,
+      "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
+        "Rendering without them would silently change the audio, so render refuses instead of degrading. ",
     );
   }
 

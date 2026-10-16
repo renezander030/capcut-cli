@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { stripBom } from "./bom.js";
 import { keyframePropertyTypes } from "./decorators.js";
 import type { Draft } from "./draft.js";
+import { MASK_FIELD_NAMES } from "./mask-fields.js";
 import { diagnoseDraftStore, discoverDraftStore, parseCandidate } from "./store.js";
 import { detectVersion } from "./version.js";
 
@@ -98,8 +99,7 @@ function redact(raw: string, tally: Record<string, number>): { text: string; cou
 // the missing encoding. Extraction runs on the REDACTED text — nothing the
 // redactors scrubbed can re-enter through this report.
 
-/** The three mask material array variants seen in the wild (see decorators.ts). */
-const MASK_ARRAY_KEYS = new Set(["masks", "common_mask", "common_masks"]);
+const MASK_ARRAY_KEYS = new Set<string>(MASK_FIELD_NAMES);
 
 // Keys addMask() itself writes. Anything beyond these on an app-authored mask
 // entry is surfaced — one of them may be the keyframe container #44 needs.

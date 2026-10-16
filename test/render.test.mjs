@@ -591,3 +591,70 @@ describe("render — CLI", () => {
     assert.equal(r.json.videoSegments, 2);
   });
 });
+
+// The three refuse-before-render messages (base chain, audio chain, filters
+// only this draft's audio needs) share one frame; pin each exact text so the
+// frame and its per-chain middle cannot drift.
+describe("render — missing-filter refusals (exact messages)", () => {
+  const INSTALL = (cmd) =>
+    `Install a full ffmpeg build, or point --ffmpeg-cmd at one that has it ('${cmd} -hide_banner -filters' lists what's compiled in).`;
+  const MINIMAL =
+    "This is common on minimal/custom ffmpeg builds — e.g. Remotion's bundled compositor binary — that compile in only an explicit filter allowlist. ";
+  function refusal(filters) {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-render-refuse-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    const cmd = fakeFfmpeg(dir, filters);
+    const draft = buildDraft(dir);
+    let message = null;
+    try {
+      renderDraft(draft, join(dir, "draft_content.json"), { out: join(dir, "p.mp4"), ffmpegCmd: cmd, dryRun: true });
+    } catch (err) {
+      message = err.message;
+    }
+    return { cmd, message };
+  }
+
+  it("names every missing base-chain filter (plural)", { skip: isWindows }, () => {
+    const { cmd, message } = refusal(["scale", "format", "trim", "concat"]);
+    assert.equal(
+      message,
+      `render: ffmpeg at '${cmd}' is missing the filters 'fps', 'pad', 'setsar', 'setpts', ` +
+        "which the base render chain applies to every segment unconditionally (not gated by any flag). " +
+        MINIMAL +
+        INSTALL(cmd),
+    );
+  });
+
+  it("names a single missing base-chain filter (singular)", { skip: isWindows }, () => {
+    const { cmd, message } = refusal(BASE_VIDEO_FILTERS.filter((name) => name !== "pad"));
+    assert.equal(
+      message,
+      `render: ffmpeg at '${cmd}' is missing the filter 'pad', ` +
+        "which the base render chain applies to every segment unconditionally (not gated by any flag). " +
+        MINIMAL +
+        INSTALL(cmd),
+    );
+  });
+
+  it("names missing audio-chain filters", { skip: isWindows }, () => {
+    const { cmd, message } = refusal(BASE_VIDEO_FILTERS);
+    assert.equal(
+      message,
+      `render: ffmpeg at '${cmd}' is missing the filters 'atrim', 'asetpts', 'adelay', 'anull', 'amix', ` +
+        "which the audio mix chain applies to every audio segment unconditionally (not gated by any flag). " +
+        MINIMAL +
+        INSTALL(cmd),
+    );
+  });
+
+  it("names an audio filter only this draft needs", { skip: isWindows }, () => {
+    const { cmd, message } = refusal([...BASE_VIDEO_FILTERS, ...UNCONDITIONAL_AUDIO_FILTERS]);
+    assert.equal(
+      message,
+      `render: ffmpeg at '${cmd}' is missing the filter 'volume', ` +
+        "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
+        "Rendering without them would silently change the audio, so render refuses instead of degrading. " +
+        INSTALL(cmd),
+    );
+  });
+});

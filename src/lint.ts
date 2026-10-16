@@ -5,14 +5,14 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { extractStyleRanges, extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { copyAssetDeduped, effectCatalogue, filterCatalogue, storeOutgrowsTemplate } from "./factory.js";
-import { linkLocalMaterialIds, readSidecar, unlinkedMaterials } from "./materials-register.js";
+import { jianyingMaskField, MASK_FIELD_NAMES, populatedMaskFields } from "./mask-fields.js";
+import { isLocalPath, linkLocalMaterialIds, readSidecar, unlinkedMaterials } from "./materials-register.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
 import { type CaptionScript, CJK_SCRIPT_LIMITS, captionScript, type ScriptLimit, type ScriptLimits } from "./script.js";
 import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { quantizeToFrame } from "./time.js";
 import { allUserEnumIds } from "./user-enums.js";
-import { atLeast } from "./version.js";
 
 export type { CaptionScript, ScriptLimit, ScriptLimits } from "./script.js";
 // The script detection and its limit table live in script.ts (caption shares
@@ -942,11 +942,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
   // `common_mask` is the CLI's own CapCut-verified write target. Info-severity
   // and report-only: `capcut migrate` is the repair, and guessing would move
   // app-authored materials.
-  const maskVariants = ["masks", "common_mask", "common_masks"] as const;
-  const populatedMaskVariants = maskVariants.filter((key) => {
-    const arr = (draft.materials as Record<string, unknown>)[key];
-    return Array.isArray(arr) && arr.length > 0;
-  });
+  const populatedMaskVariants = populatedMaskFields(draft);
   if (populatedMaskVariants.length > 1) {
     issues.push({
       severity: "info",
@@ -961,7 +957,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     const version = draft.platform.app_version ?? null;
     const actual = populatedMaskVariants[0];
     if (version) {
-      const expected = atLeast(version, "9.6") ? "common_masks" : "masks";
+      const expected = jianyingMaskField(version);
       if (actual !== expected) {
         const hint = expected === "common_masks" ? "--from 5.9 --to 9.6" : "--from 9.6 --to 5.9";
         issues.push({
@@ -990,7 +986,7 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
   const presentLocalMedia = (["videos", "audios"] as const).some((kind) =>
     (draft.materials?.[kind] ?? []).some((mat) => {
       const p = (mat as { path?: unknown }).path;
-      return typeof p === "string" && p.length > 0 && !/^https?:\/\//i.test(p) && fileExists(p);
+      return isLocalPath(p) && fileExists(p);
     }),
   );
   if (opts.draftDir && presentLocalMedia) {
@@ -1067,7 +1063,7 @@ function maskAttachment(draft: Draft): { attached: string[]; orphaned: string[] 
   }
   const attached: string[] = [];
   const orphaned: string[] = [];
-  for (const key of ["masks", "common_mask", "common_masks"]) {
+  for (const key of MASK_FIELD_NAMES) {
     const arr = (draft.materials as Record<string, unknown> | undefined)?.[key];
     if (!Array.isArray(arr)) continue;
     for (const mat of arr) {

@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { readJsonObjectFile, readTextIfPresent, stripBom } from "./bom.js";
-import { uuidHex } from "./decorators.js";
+import { hexToRgb01, uuidHex } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, loadedDraftProjectDir, makeTrack, writeAtomic } from "./draft.js";
@@ -1763,11 +1763,6 @@ export interface AddTextOptions {
   trackName?: string;
 }
 
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
-}
-
 function buildTextContent(text: string, fontSize: number, color: [number, number, number]): string {
   return JSON.stringify({
     styles: [
@@ -1880,7 +1875,7 @@ export function addText(
   const matId = uuid();
   const fontSize = opts.fontSize ?? 15;
   const color = opts.color ?? "#FFFFFF";
-  const rgb = hexToRgb(color);
+  const rgb = hexToRgb01(color);
   const alignment = opts.alignment ?? 1;
   const trackName = opts.trackName ?? "text";
 

@@ -94,7 +94,8 @@ export function buildMetaMaterialEntry(medium: ReferencedMedium): MetaMaterialEn
   };
 }
 
-function isLocalPath(path: unknown): path is string {
+/** A non-empty path that is not an http(s) URL — media a project must register. */
+export function isLocalPath(path: unknown): path is string {
   return typeof path === "string" && path.length > 0 && !/^https?:\/\//i.test(path);
 }
 
