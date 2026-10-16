@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -4419,7 +4419,7 @@
           ],
           "type": "path",
           "required": false,
-          "description": "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper/whisper.cpp segments[].words[], WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*."
+          "description": "Word timings from an external aligner instead of running Whisper (path or - for stdin): Whisper segments[].words[], whisper.cpp full JSON (whisper-cli -ojf), WhisperX word_segments[], or an array of {word|text|char, start, end} (seconds; start_ms/end_ms and start_time/end_time also read). The result reports words_format and words_skipped. Not combinable with --audio, --from-segment, --audio-stream or --whisper-*."
         },
         {
           "name": "audio_stream",
@@ -6002,7 +6002,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "List snapshots, newest first, with the command that made each write."
+          "description": "List snapshots, newest first, with the command that made each write and its integrity (intact, changed or unverified against the write journal)."
         },
         {
           "name": "active_timeline",

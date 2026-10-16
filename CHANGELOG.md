@@ -4,9 +4,24 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-10-16
+
 ### Added
 
+- `capcut <command> --help`, `capcut <command> -h` and `capcut help <command>` print that command's usage, options, global options, output, prerequisites and exit codes, rendered from the same registry as `describe` and the command reference. Before, 71 of the 78 commands read `--help` as a positional argument (`add-text --help` failed with "No draft found at: --help"; `doctor --help` ran the checks). `capcut help` alone, or an unknown command, prints the full help.
+- `restore --list` reports `integrity` per step: `intact` (the snapshot still matches the `before_sha256` the write journal recorded), `changed` (it was rewritten after the CLI saved it), or `unverified` (no journal entry). `restore` and `restore --step N` results carry the same field.
+- `caption --words` reads whisper.cpp full JSON (`whisper-cli -ojf`, `transcription[].tokens[]`) and reports `words_format: "whisper-cpp"`. Words are built from the tokens as in `caption --audio`; a segment whose tokens cannot be split into words stays one entry with its own timing.
 - `test/fixtures/jianying-9-0-0-windows/` — a real JianYing 9.0.0 (Windows) project captured after the app opened a tool-written draft: the plaintext `draft_info.json` primary alongside the `draft_content.json` / `template-2.tmp` / `draft_meta_info.json` mirrors the app rewrote into encrypted blobs, plus the materialised `Timelines/` layout. A regression test pins that the encrypted mirrors are reported as unparseable rather than breaking canonical selection, and `docs/version-support.md` gains a JianYing 9.0.0 (Windows) row (evidence: reported; storage shape fixture-backed). The write guard is deliberately unchanged — one machine's capture is not a round-trip claim.
+
+### Changed
+
+- With `--karaoke` or `--word-reveal`, `caption` runs whisper.cpp with `-ojf` and times each word from its tokens instead of splitting each segment evenly. A token that starts with a space opens a word and any other token (a sub-word piece, punctuation) continues it; in Chinese and Japanese every token is its own word. `[_BEG_]` / `[_TT_n]` tokens are skipped, a word stamped with zero length runs to the next word's start, and a segment whose tokens do not spell its text keeps the even split. Plain `-oj` output parses as before.
+- `translate` defaults to `claude-haiku-5-5` (was `claude-haiku-4-5-20251001`), with a 16,000-token response budget and low effort.
+
+### Fixed
+
+- `restore` no longer puts back the app's own save state after the app saved the project (#151). History snapshots were a second name (hard link) for `<draft>.bak`, which CapCut 9.5 rewrites in place when it saves; each snapshot is now its own file. `restore` and `restore --step N` check the file against the write journal first and refuse one that changed since the CLI wrote it with `refused [backup-changed]` / `refused [snapshot-changed]`; the `.bak` refusal points at `--step 1` when that snapshot is intact, and `--force-write` restores the file as it is. Snapshots written by earlier versions that still share bytes with a rewritten `.bak` list as `changed`.
+
 
 ## [0.29.0] — 2026-10-09
 

@@ -82,9 +82,10 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
+> **v0.30.0 新增：** 每条命令单独的帮助（`capcut <命令> --help`、`capcut help <命令>`）；应用保存后撤销依然可靠，每次恢复前都会对照写入日志校验（`restore`，`restore --list` 显示完整性）；whisper.cpp 的真实逐词时间戳用于卡拉 OK 与逐词显现字幕，也可通过 `caption --words` 读取。完整说明见[更新日志](./CHANGELOG.md)。
+
 > **v0.29.0 新增：** 用任意对齐工具的逐字/逐词时间戳生成字幕，无需安装 Whisper（`caption --words`）；与草稿哈希绑定、可先审后执行的批量计划（`batch --plan` / `--apply-plan`）；渲染保真度清单与输出时长校验（`render --strict` / `--verify`）；TTS 发音词典（`tts --lexicon`）；`segment-overlap` 与 `segment-offscreen` 两项 lint 检查；`restore --list` 显示每一步由哪条命令产生。完整说明见[更新日志](./CHANGELOG.md)。
 
-> **v0.28.0 新增：** 显式选择活动时间线、向应用创建的空项目编译，以及精简的命令发现索引与按命令名筛选；Python 客户端 v0.1.3 修复 Windows 命令路径的引号解析，并在 Linux、macOS、Windows 上运行客户端 CI。详见 [更新日志](./CHANGELOG.md)。
 
 
 ## 使用 capcut-cli 构建
