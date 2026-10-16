@@ -16,9 +16,11 @@ import type { AssEvent, AssStyleDef } from "./ass.js";
 import { parseJsonObject, stripBom } from "./bom.js";
 import {
   buildCommandSpecs,
+  type CommandSpec,
   commandDeclaresFlag,
   completionWords,
   GLOBAL_OPTION_SPECS,
+  type OptionSpec,
   RELEASE_SCOPED_FLAGS,
   renderCommandIndex,
 } from "./command-specs.js";
@@ -175,6 +177,7 @@ export const COMMANDS = [
 const HELP = `capcut-cli -- fast edits to CapCut projects
 
 Usage: capcut <command> <project> [options]
+       capcut <command> --help    One command's usage, options and exit codes
 
   <project> = path to draft_content.json, draft_info.json, or their parent directory
 
@@ -5406,6 +5409,53 @@ function commandSpecs() {
   return buildCommandSpecs(COMMANDS, SUMMARIES);
 }
 
+// One command's help, rendered from the same registry as `describe` and the
+// generated command reference, so the three cannot disagree.
+function renderCommandHelp(spec: CommandSpec): string {
+  const lines = [`Usage: ${spec.usage}`, "", spec.summary];
+  const optionLabel = (option: OptionSpec): string => {
+    const value =
+      option.type === "boolean" ? "" : option.values ? ` <${option.values.join("|")}>` : ` <${option.type}>`;
+    return `${option.flags.join(", ")}${value}`;
+  };
+  if (spec.options.length > 0) {
+    const width = Math.min(34, Math.max(...spec.options.map((option) => optionLabel(option).length)));
+    lines.push("", "Options:");
+    for (const option of spec.options) {
+      const label = optionLabel(option);
+      const pad = label.length > width ? `\n  ${" ".repeat(width + 2)}` : " ".repeat(width - label.length + 2);
+      lines.push(`  ${label}${pad}${option.description ?? ""}`);
+    }
+  }
+  lines.push(
+    "",
+    `Global options: ${GLOBAL_OPTION_SPECS.flatMap((option) => option.flags).join(" ")}`,
+    `Output: ${spec.output.description}`,
+  );
+  if (spec.mutates) lines.push("Writes the draft: a .bak and a history snapshot are kept (capcut restore undoes it).");
+  if (spec.prerequisites.length > 0) lines.push(`Needs: ${spec.prerequisites.join(", ")}`);
+  lines.push(
+    `Exit codes: ${Object.entries(spec.exit_codes)
+      .map(([code, meaning]) => `${code} ${meaning}`)
+      .join("; ")}`,
+    `Machine-readable contract: capcut describe --command ${spec.name}`,
+  );
+  return lines.join("\n");
+}
+
+// `capcut help [<command>]` and `capcut <command> --help|-h`. The command is
+// the first argument that is not a flag; an unknown one gets the full help.
+function helpRequest(raw: string[]): { command: string | null } | null {
+  const first = raw.findIndex((arg) => !arg.startsWith("-"));
+  const wantsHelp = raw.includes("--help") || raw.includes("-h");
+  if (first >= 0 && raw[first] === "help") {
+    const named = raw.slice(first + 1).find((arg) => !arg.startsWith("-"));
+    return { command: named ?? null };
+  }
+  if (!wantsHelp) return null;
+  return { command: first >= 0 ? raw[first] : null };
+}
+
 // --- Config (.capcutrc) ---
 
 interface CapcutConfig {
@@ -6057,8 +6107,11 @@ async function cmdDetectRetakes(draft: Draft | null, flags: Flags): Promise<void
 
 async function main(): Promise<void> {
   const raw = process.argv.slice(2);
-  if (raw.length === 0 || raw[0] === "--help" || raw[0] === "-h") {
-    console.log(`${HELP}\n\nGenerated command index:\n${renderCommandIndex(commandSpecs())}`);
+  const help = raw.length === 0 ? { command: null } : helpRequest(raw);
+  if (help) {
+    const spec = help.command ? commandSpecs().find((candidate) => candidate.name === help.command) : undefined;
+    if (spec) console.log(renderCommandHelp(spec));
+    else console.log(`${HELP}\n\nGenerated command index:\n${renderCommandIndex(commandSpecs())}`);
     process.exit(0);
   }
 
