@@ -58,7 +58,6 @@ import {
 import type { Category, Namespace } from "./enums.js";
 import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CropRect, CutOptions } from "./factory.js";
 import type { NestedTimelinesEvidence } from "./fixture.js";
-import { backupIntegrity, snapshotsWithIntegrity } from "./history-integrity.js";
 import type { ImportPlan } from "./interchange.js";
 import type { LexiconApplied } from "./lexicon.js";
 import type { LintOptions } from "./lint.js";
@@ -5049,8 +5048,9 @@ function getCliVersion(): string {
 // Every restore first checks the file against the journal's before_sha256 and
 // refuses one that changed since the CLI wrote it (issue #151: the app
 // rewrites `.bak` when it saves); --force-write restores it anyway.
-function cmdRestore(projectPath: string | undefined, flags: Flags): void {
+async function cmdRestore(projectPath: string | undefined, flags: Flags): Promise<void> {
   if (!projectPath) die("Missing project path. Usage: capcut restore <project> [--step N | --list]");
+  const { backupIntegrity, snapshotsWithIntegrity } = await import("./history-integrity.js");
   const filePath = findDraft(projectPath);
   const hasSynchronizedSiblings = discoverDraftStore(filePath).targets.length > 1;
   const snaps = snapshotsWithIntegrity(filePath);
@@ -6249,7 +6249,7 @@ async function main(): Promise<void> {
 
   // `restore` copies a backup/snapshot back over the draft — no loadDraft/parse needed.
   if (cmd === "restore") {
-    cmdRestore(projectPath, flags);
+    await cmdRestore(projectPath, flags);
     process.exit(0);
   }
 
