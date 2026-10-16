@@ -706,16 +706,12 @@ export function parseWhisperJson(raw: string): { cues: CaptionCue[]; words: Capt
   const transcription = Array.isArray(parsed.transcription) ? parsed.transcription : [];
   for (const value of transcription) {
     const item = value as Record<string, unknown>;
-    const offsets = (item.offsets ?? {}) as Record<string, unknown>;
-    const startUs = Math.round(Number(offsets.from ?? 0) * 1000);
-    const endUs = Math.round(Number(offsets.to ?? offsets.from ?? 0) * 1000);
     const text = String(item.text ?? "").trim();
     if (!text) continue;
-    const cue: CaptionCue = { startUs, endUs, text };
-    const cueWords = whisperCppWords(item) ?? wordsFromCues([cue]);
+    const cue: CaptionCue = { ...whisperCppSpanUs(item), text };
     if (Array.isArray(item.tokens)) {
-      cue.words = cueWords;
-      words.push(...cueWords);
+      cue.words = whisperCppWords(item) ?? wordsFromCues([cue]);
+      words.push(...cue.words);
     }
     cues.push(cue);
   }
@@ -724,6 +720,15 @@ export function parseWhisperJson(raw: string): { cues: CaptionCue[]; words: Capt
     cues.push({ startUs: 0, endUs: 1_000_000, text: parsed.text.trim() });
   }
   return { cues, words: words.length > 0 ? words : wordsFromCues(cues) };
+}
+
+/** A whisper.cpp segment's or token's `offsets` (ms) as µs; a missing `to` ends where it starts. */
+function whisperCppSpanUs(holder: Record<string, unknown>): { startUs: number; endUs: number } {
+  const offsets = (holder.offsets ?? {}) as Record<string, unknown>;
+  return {
+    startUs: Math.round(Number(offsets.from ?? 0) * 1000),
+    endUs: Math.round(Number(offsets.to ?? offsets.from ?? 0) * 1000),
+  };
 }
 
 /**
@@ -748,9 +753,7 @@ export function whisperCppWords(segment: Record<string, unknown>): CaptionWord[]
   const words: CaptionWord[] = [];
   for (const token of tokens) {
     const piece = token.text as string;
-    const offsets = (token.offsets ?? {}) as Record<string, unknown>;
-    const startUs = Math.round(Number(offsets.from ?? 0) * 1000);
-    const endUs = Math.round(Number(offsets.to ?? offsets.from ?? 0) * 1000);
+    const { startUs, endUs } = whisperCppSpanUs(token);
     const current = words[words.length - 1];
     if (current && !eachTokenAWord && !/^\s/.test(piece)) {
       current.word += piece;
