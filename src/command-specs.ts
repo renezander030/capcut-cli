@@ -804,7 +804,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   restore: [
     option("step", ["--step"], "number", "Snapshot number."),
-    option("list", ["--list"], "boolean", "List snapshots, newest first, with the command that made each write."),
+    option(
+      "list",
+      ["--list"],
+      "boolean",
+      "List snapshots, newest first, with the command that made each write and its integrity (intact, changed or unverified against the write journal).",
+    ),
   ],
   serve: [
     option("queue", ["--queue"], "path", "JSONL queue file."),

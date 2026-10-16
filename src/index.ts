@@ -45,10 +45,8 @@ import {
   getMaterialTypes,
   getTracksByType,
   isDryRun,
-  listSnapshots,
   loadDraft,
   loadedDraftStore,
-  readJournal,
   saveDraft,
   setDryRun,
   setForceWrite,
@@ -58,6 +56,7 @@ import {
 import type { Category, Namespace } from "./enums.js";
 import type { AddAudioOptions, AddTextOptions, AddVideoOptions, CropRect, CutOptions } from "./factory.js";
 import type { NestedTimelinesEvidence } from "./fixture.js";
+import { backupIntegrity, snapshotsWithIntegrity } from "./history-integrity.js";
 import type { ImportPlan } from "./interchange.js";
 import type { LexiconApplied } from "./lexicon.js";
 import type { LintOptions } from "./lint.js";
@@ -5044,26 +5043,26 @@ function getCliVersion(): string {
 // `restore` undoes writes. Plain form restores the most recent `.bak`. With
 // --list it shows the rolling snapshot history; with --step N it rolls back N
 // writes (step 1 == the .bak). Honors --dry-run (reports without copying).
+// Every restore first checks the file against the journal's before_sha256 and
+// refuses one that changed since the CLI wrote it (issue #151: the app
+// rewrites `.bak` when it saves); --force-write restores it anyway.
 function cmdRestore(projectPath: string | undefined, flags: Flags): void {
   if (!projectPath) die("Missing project path. Usage: capcut restore <project> [--step N | --list]");
   const filePath = findDraft(projectPath);
   const hasSynchronizedSiblings = discoverDraftStore(filePath).targets.length > 1;
-  const snaps = listSnapshots(filePath);
+  const snaps = snapshotsWithIntegrity(filePath);
 
   if (flags.list) {
     // Each step names the write it undoes when the journal has its index;
     // snapshots from before the journal (or with a torn line) list with nulls.
-    const journal = readJournal(filePath);
-    const snapshots = snaps.map((s) => {
-      const entry = journal.get(s.index);
-      return {
-        step: s.step,
-        path: s.path,
-        command: entry?.command ?? null,
-        argv: entry?.argv ?? null,
-        time: entry?.time ?? null,
-      };
-    });
+    const snapshots = snaps.map((s) => ({
+      step: s.step,
+      path: s.path,
+      command: s.entry?.command ?? null,
+      argv: s.entry?.argv ?? null,
+      time: s.entry?.time ?? null,
+      integrity: s.integrity,
+    }));
     out({ ok: true, count: snaps.length, snapshots }, flags);
     return;
   }
@@ -5088,8 +5087,15 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
       const avail = snaps.length ? `1..${snaps.length}` : "none yet";
       die(`No snapshot at --step ${flags.step}. Available: ${avail}. Try: capcut restore ${projectPath} --list`);
     }
+    if (target.integrity === "changed" && !flags.forceWrite) {
+      die(
+        `refused [snapshot-changed]: snapshot step ${flags.step} no longer holds what capcut-cli saved before that write ` +
+          "(it changed on disk afterwards; snapshots written before 0.30.0 share their bytes with the .bak the app rewrites on save). " +
+          `Check the others with: capcut restore ${projectPath} --list, or pass --force-write to restore it as it is now.`,
+      );
+    }
     if (!isDryRun()) restoreSource(target.path);
-    out({ ok: true, restored: filePath, from: target.path, step: flags.step }, flags);
+    out({ ok: true, restored: filePath, from: target.path, step: flags.step, integrity: target.integrity }, flags);
     return;
   }
 
@@ -5097,8 +5103,19 @@ function cmdRestore(projectPath: string | undefined, flags: Flags): void {
   if (!existsSync(bakPath)) {
     die(`No backup found at ${bakPath}. Nothing to restore (a .bak is written on the first edit).`);
   }
+  const integrity = backupIntegrity(filePath);
+  if (integrity === "changed" && !flags.forceWrite) {
+    const step1 =
+      snaps[0]?.integrity === "intact"
+        ? ` Restore capcut-cli's own copy with: capcut restore ${projectPath} --step 1.`
+        : "";
+    die(
+      `refused [backup-changed]: ${bakPath} no longer holds what capcut-cli saved before its last write ` +
+        `(the app rewrites it when it saves).${step1} Pass --force-write to restore the .bak as it is now.`,
+    );
+  }
   if (!isDryRun()) restoreSource(bakPath);
-  out({ ok: true, restored: filePath, from: bakPath }, flags);
+  out({ ok: true, restored: filePath, from: bakPath, integrity }, flags);
 }
 
 // `prune` removes materials no segment references. The referenced set is the
