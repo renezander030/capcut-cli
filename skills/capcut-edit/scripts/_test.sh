@@ -260,7 +260,7 @@ rm -f "$draft" "$draft.bak"
 # text-ranges: 2 ranges on "Hello everyone" (14 chars) → 3 styles (gold "Hello", baseline " ", red "everyone")
 draft="$tmp/capcut-edit-test-$RANDOM.json"; cp "$fixture" "$draft"
 if node "$cli" text-ranges "$draft" cccccc01 --styles '[{"start":0,"end":5,"font_color":"#FFD700","font_size":22,"bold":true},{"start":6,"end":14,"font_color":"#FF0000"}]' >/dev/null 2>&1 \
-   && node -e "const d=require('$draft'); const c=JSON.parse(d.materials.texts[0].content); if(c.styles.length!==3)process.exit(1); const s0=c.styles[0], s2=c.styles[2]; const goldOk = s0.range[0]===0 && s0.range[1]===10 && s0.size===22 && s0.bold===true && Math.abs(s0.fill.content.solid.color[0]-1)<1e-6; const redOk = s2.range[0]===12 && s2.range[1]===28 && s2.fill.content.solid.color[0]===1 && s2.fill.content.solid.color[1]===0; process.exit((goldOk && redOk)?0:1)"; then
+   && node -e "const d=require('$draft'); const c=JSON.parse(d.materials.texts[0].content); if(c.styles.length!==3)process.exit(1); const s0=c.styles[0], s2=c.styles[2]; const goldOk = s0.range[0]===0 && s0.range[1]===5 && s0.size===22 && s0.bold===true && Math.abs(s0.fill.content.solid.color[0]-1)<1e-6; const redOk = s2.range[0]===6 && s2.range[1]===14 && s2.fill.content.solid.color[0]===1 && s2.fill.content.solid.color[1]===0; process.exit((goldOk && redOk)?0:1)"; then
   printf '  ok    %s\n' "capcut text-ranges (2 ranges -> 3 styles)"; pass=$((pass+1))
 else
   printf '  FAIL  %s\n' "capcut text-ranges (2 ranges -> 3 styles)"; fail=$((fail+1))

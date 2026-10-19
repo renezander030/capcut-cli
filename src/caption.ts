@@ -18,6 +18,7 @@ import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } fr
 import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
+import { resolveWhisperCommand } from "./whisper.js";
 
 export interface CaptionOptions {
   /**
@@ -587,9 +588,20 @@ export function parseWordTimings(raw: string): ParsedWordTimings {
   return { format, words, skipped };
 }
 
-function detectEngine(opts: CaptionOptions): TranscriptionResult["engine"] {
+/**
+ * The Whisper binary to run: the caller's `--whisper-cmd` wins, otherwise the
+ * first dialect actually installed on PATH, otherwise the historical default.
+ * `doctor` has always probed all three names; `caption` used to spawn only
+ * `whisper`, so on a host with whisper.cpp (`whisper-cli`) installed and no
+ * `whisper`, doctor said ok and caption died with ENOENT.
+ */
+export function whisperCommand(opts: CaptionOptions): string {
+  return opts.whisperCmd ?? resolveWhisperCommand() ?? "whisper";
+}
+
+export function detectEngine(opts: CaptionOptions): TranscriptionResult["engine"] {
   if (opts.whisperEngine && opts.whisperEngine !== "auto") return opts.whisperEngine;
-  const command = (opts.whisperCmd ?? "whisper").toLowerCase();
+  const command = whisperCommand(opts).toLowerCase();
   if (command.includes("faster-whisper")) return "faster-whisper";
   if (command.includes("whisper-cli") || /(^|[/\\])main(?:\.exe)?$/.test(command)) return "whisper-cpp";
   return "openai";
@@ -631,7 +643,7 @@ export function buildWhisperInvocation(
 }
 
 function runWhisper(audio: string, opts: CaptionOptions): TranscriptionResult {
-  const cmd = opts.whisperCmd ?? "whisper";
+  const cmd = whisperCommand(opts);
   const model = opts.whisperModel ?? "base";
   const language = opts.language ?? "auto";
   const engine = detectEngine(opts);
