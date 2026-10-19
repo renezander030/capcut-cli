@@ -105,6 +105,8 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
+> **Unreleased:** repeated cuts of the same video or audio reuse content hashes within a process, avoiding full-file reads for every segment. Changed files are checked again, and filename collisions still compare content. See [#155](https://github.com/renezander030/capcut-cli/issues/155).
+
 > **New in v0.30.0:** per-command help (`capcut <command> --help`, `capcut help <command>`); undo that survives an app save, with every restore checked against the write journal (`restore`, `restore --list` integrity); and real word timings from whisper.cpp for karaoke and word-reveal captions, also readable through `caption --words`. Full details in the [changelog](./CHANGELOG.md).
 
 > **New in v0.29.0:** captions from any aligner's word timings without Whisper (`caption --words`); reviewed batch plans bound to the draft (`batch --plan` / `--apply-plan`); a render fidelity census and output-duration check (`render --strict` / `--verify`); TTS pronunciation lexicons (`tts --lexicon`); `segment-overlap` and `segment-offscreen` lint checks; and `restore --list` naming the command behind each step. Full details in the [changelog](./CHANGELOG.md).

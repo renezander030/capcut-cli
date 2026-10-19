@@ -67,7 +67,24 @@ export function uuid(): string {
 
 // --- Asset copy (collision-safe) ---
 
+// Keep only the latest digest per absolute path, with a bound for long-lived
+// library callers. Metadata is checked on every use, including collision checks.
+const FILE_SHA1_CACHE_LIMIT = 256;
+const fileSha1Cache = new Map<string, { fingerprint: string; hash: string }>();
+
 function fileSha1(path: string): string {
+  const key = resolve(path);
+  const stat = statSync(key, { bigint: true });
+  // ctime and inode catch same-size rewrites/replacements even if mtime was
+  // restored. Nanosecond timestamps avoid discarding filesystem precision.
+  const fingerprint = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  const cached = fileSha1Cache.get(key);
+  if (cached?.fingerprint === fingerprint) {
+    // Refresh insertion order so frequently reused media survives eviction.
+    fileSha1Cache.delete(key);
+    fileSha1Cache.set(key, cached);
+    return cached.hash;
+  }
   const hash = createHash("sha1");
   const fd = openSync(path, "r");
   const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -77,7 +94,13 @@ function fileSha1(path: string): string {
       if (count === 0) break;
       hash.update(buffer.subarray(0, count));
     }
-    return hash.digest("hex");
+    const digest = hash.digest("hex");
+    fileSha1Cache.delete(key);
+    fileSha1Cache.set(key, { fingerprint, hash: digest });
+    if (fileSha1Cache.size > FILE_SHA1_CACHE_LIMIT) {
+      fileSha1Cache.delete(fileSha1Cache.keys().next().value!);
+    }
+    return digest;
   } finally {
     closeSync(fd);
   }

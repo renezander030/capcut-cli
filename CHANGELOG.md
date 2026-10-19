@@ -4,6 +4,10 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- `compile`, `add-video` and `add-audio` reuse content hashes for unchanged media within a process instead of re-reading entire source and staged files for every segment (#155). Filename collisions still compare actual content; edits and file replacements invalidate the bounded cache, including same-size changes with a restored modification time.
+
 ## [0.30.0] — 2026-10-16
 
 ### Added
