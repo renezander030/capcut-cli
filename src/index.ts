@@ -707,6 +707,7 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
              end<start or out-of-order entries are refused. Not combinable
              with --audio/--from-segment/--audio-stream/--whisper-*.
              Options:
+               --cloud              Transcribe via CapCut Cloud ASR (fast online recognition)
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
                --audio-stream <n>   Zero-based audio stream in the input
@@ -1036,6 +1037,7 @@ interface Flags {
   words?: string;
   audioStream?: number;
   fromSegment?: string;
+  cloud?: boolean;
   whisperCmd?: string;
   whisperEngine?: "auto" | "openai" | "whisper-cpp" | "faster-whisper";
   whisperModel?: string;
@@ -1257,6 +1259,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--new-track", "newTrack"],
   ["--keep-track", "keepTrack"],
   ["--keep-materials", "keepMaterials"],
+  ["--cloud", "cloud"],
 ]);
 const STRING_FLAGS = new Map<string, FlagKey<string>>([
   ["--out", "out"],
@@ -3949,6 +3952,7 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     const conflicting = [
       flags.audio !== undefined && "--audio",
       flags.fromSegment !== undefined && "--from-segment",
+      flags.cloud !== undefined && "--cloud",
       flags.audioStream !== undefined && "--audio-stream",
       flags.ffmpegCmd !== undefined && "--ffmpeg-cmd",
       flags.whisperCmd !== undefined && "--whisper-cmd",
@@ -3962,6 +3966,16 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     }
   } else if (!flags.audio && !flags.fromSegment) {
     die("Missing --audio <path>, --from-segment <id> or --words <file.json>. One is required.");
+  }
+  if (flags.cloud) {
+    const conflicting = [
+      flags.whisperCmd !== undefined && "--whisper-cmd",
+      flags.whisperEngine !== undefined && "--whisper-engine",
+      flags.whisperModel !== undefined && "--whisper-model",
+    ].filter(Boolean);
+    if (conflicting.length > 0) {
+      die(`--cloud uses CapCut Cloud ASR and is mutually exclusive with ${conflicting.join(", ")}.`);
+    }
   }
   if (flags.karaoke && flags.wordReveal) die("--karaoke and --word-reveal are mutually exclusive.");
   if (
@@ -3989,10 +4003,11 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     if (!wordsJson.trim())
       die(flags.words === "-" ? "No input on stdin for --words" : `--words file is empty: ${flags.words}`);
   }
-  const result = captionDraft(draft, {
+  const result = await captionDraft(draft, {
     wordsJson,
     wordsSource: flags.words === "-" ? "stdin" : flags.words,
     audio: flags.audio,
+    cloud: flags.cloud,
     audioStream: flags.audioStream,
     ffmpegCmd: flags.ffmpegCmd,
     fromSegment: flags.fromSegment,

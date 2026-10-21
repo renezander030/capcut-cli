@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AlignmentReport, alignScript, tokenizeScript } from "./align.js";
+import { transcribeAudioCapcutCloud } from "./capcut-cloud-asr.js";
 import {
   buildEmphasisRanges,
   DEFAULT_KEYWORD_SIZE,
@@ -31,6 +32,7 @@ export interface CaptionOptions {
   audioStream?: number; // zero-based audio stream inside the input container
   ffmpegCmd?: string; // ffmpeg binary used only when audioStream is selected
   fromSegment?: string; // segment ID of an audio segment in the draft to caption
+  cloud?: boolean; // transcribe via CapCut Cloud ASR
   whisperCmd?: string; // shell-out command; e.g. "whisper" or "whisper-cli" or "faster-whisper"
   whisperModel?: string; // model name; default "base"
   language?: string; // ISO code; default "auto"
@@ -78,7 +80,7 @@ export interface CaptionResult {
   last_cue?: { start_us: number; text: string };
   /** Absent with --words: no audio was read. */
   source_audio?: string;
-  engine: "whisper-cli" | "shell" | "openai" | "stdin-srt" | "words";
+  engine: "whisper-cli" | "shell" | "openai" | "stdin-srt" | "words" | "capcut-cloud";
   engine_name?: string;
   words?: number;
   karaoke?: boolean;
@@ -112,7 +114,7 @@ export interface CaptionResult {
  *   3. Parse SRT into caption cues
  *   4. Create captions track + real subtitle material per cue
  */
-export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult {
+export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<CaptionResult> {
   if (opts.styleRef && opts.preset) {
     throw new Error("--style-ref and --preset are mutually exclusive. Pass one style source.");
   }
@@ -130,6 +132,15 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     throw new Error("--audio-stream must be a zero-based non-negative integer.");
   }
   const fromWords = opts.wordsJson !== undefined;
+  if (opts.cloud && fromWords) {
+    throw new Error("--cloud is mutually exclusive with --words.");
+  }
+  if (
+    opts.cloud &&
+    (opts.whisperCmd !== undefined || opts.whisperEngine !== undefined || opts.whisperModel !== undefined)
+  ) {
+    throw new Error("--cloud uses CapCut Cloud ASR and is mutually exclusive with --whisper-* options.");
+  }
   if (
     fromWords &&
     (opts.audio !== undefined ||
@@ -155,6 +166,22 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
       );
     }
     transcription = { cues: [], words: external.words, engine: "words" };
+  } else if (opts.cloud) {
+    sourceAudio = resolveAudio(draft, opts);
+    const selectedAudio =
+      opts.audioStream === undefined
+        ? undefined
+        : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
+    try {
+      const cloudRes = await transcribeAudioCapcutCloud(selectedAudio?.path ?? sourceAudio);
+      transcription = {
+        cues: cloudRes.cues,
+        words: cloudRes.words,
+        engine: "capcut-cloud",
+      };
+    } finally {
+      selectedAudio?.cleanup();
+    }
   } else {
     sourceAudio = resolveAudio(draft, opts);
     const selectedAudio =
@@ -340,7 +367,7 @@ export function captionDraft(draft: Draft, opts: CaptionOptions): CaptionResult 
     first_cue: { start_us: cues[0].startUs, text: cues[0].text },
     last_cue: { start_us: cues[cues.length - 1].startUs, text: cues[cues.length - 1].text },
     source_audio: sourceAudio,
-    engine: fromWords ? "words" : opts.whisperCmd ? "shell" : "whisper-cli",
+    engine: fromWords ? "words" : opts.cloud ? "capcut-cloud" : opts.whisperCmd ? "shell" : "whisper-cli",
     engine_name: fromWords ? undefined : transcription.engine,
     caption_script: textScript,
     words: transcription.words.length,
@@ -446,7 +473,7 @@ function resolveAudio(draft: Draft, opts: CaptionOptions): string {
 interface TranscriptionResult {
   cues: CaptionCue[];
   words: CaptionWord[];
-  engine: "openai" | "whisper-cpp" | "faster-whisper" | "words";
+  engine: "openai" | "whisper-cpp" | "faster-whisper" | "words" | "capcut-cloud";
 }
 
 /**

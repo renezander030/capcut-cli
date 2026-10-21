@@ -599,6 +599,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream."),
     option("from_segment", ["--from-segment"], "id", "Audio segment input."),
+    option("cloud", ["--cloud"], "boolean", "Transcribe via CapCut Cloud ASR instead of local Whisper."),
     option("whisper_cmd", ["--whisper-cmd"], "path", "Whisper binary."),
     option("whisper_engine", ["--whisper-engine"], "enum", "Whisper CLI dialect.", {
       values: ["openai", "whisper-cpp", "faster-whisper"],

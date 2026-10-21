@@ -4,6 +4,10 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- `caption --cloud` transcribes audio via CapCut's official Cloud ASR without requiring a local Whisper installation. Audio is signed with zero-dep AWS SigV4, uploaded to ByteDance TOS, and processed with word-level timestamps. Combines seamlessly with `--karaoke`, `--word-reveal`, `--script`, and `--highlight-words`.
+
 ### Changed
 
 - `skills/capcut-edit/scripts/anim.sh` derives the effect-cache base per platform instead of hardcoding the macOS container path, which on Windows wrote a path the app cannot resolve into the animation material: `%LOCALAPPDATA%\CapCut\User Data\Cache\effect` (JianYing: `%LOCALAPPDATA%\JianyingPro\...`), the macOS container on darwin, `~/.local/share/CapCut/Cache/effect` elsewhere. `CAPCUT_EFFECT_CACHE` overrides all three.

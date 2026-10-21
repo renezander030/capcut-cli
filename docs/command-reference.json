@@ -4449,6 +4449,15 @@
           "description": "Audio segment input."
         },
         {
+          "name": "cloud",
+          "flags": [
+            "--cloud"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Transcribe via CapCut Cloud ASR instead of local Whisper."
+        },
+        {
           "name": "whisper_cmd",
           "flags": [
             "--whisper-cmd"

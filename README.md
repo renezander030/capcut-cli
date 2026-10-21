@@ -105,7 +105,7 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
-> **Unreleased:** repeated cuts of the same video or audio reuse content hashes within a process, avoiding full-file reads for every segment. Changed files are checked again, and filename collisions still compare content. See [#155](https://github.com/renezander030/capcut-cli/issues/155).
+> **Unreleased:** `caption --cloud` transcribes audio via CapCut's official Cloud ASR with word-level timestamps, with zero external dependencies and without requiring local Whisper; repeated cuts of the same video or audio reuse content hashes within a process, avoiding full-file reads for every segment. Changed files are checked again, and filename collisions still compare content. See [#155](https://github.com/renezander030/capcut-cli/issues/155).
 
 > **New in v0.30.0:** per-command help (`capcut <command> --help`, `capcut help <command>`); undo that survives an app save, with every restore checked against the write journal (`restore`, `restore --list` integrity); and real word timings from whisper.cpp for karaoke and word-reveal captions, also readable through `caption --words`. Full details in the [changelog](./CHANGELOG.md).
 
