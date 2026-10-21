@@ -14,7 +14,7 @@ English | [中文](./README.zh-CN.md)
 
 **Create and edit real CapCut / JianYing projects from the terminal — or any LLM agent.**
 
-Open the result in CapCut with every track still editable. capcut-cli works directly on the local draft store: JSON in, JSON out, with no upload, API, MCP server, or HTTP daemon.
+Open the result in CapCut with every track still editable. capcut-cli works directly on the local draft store: JSON in, JSON out, with no upload, API, MCP server, or HTTP daemon. The one opt-in exception is the experimental `caption --cloud`, which uploads the audio it transcribes to ByteDance.
 
 **Also from the maintainer:** [500 Years Frozen in Time: The Inca Children Mystery](https://www.youtube.com/watch?v=cl8SP3PjspQ), a 14:49 documentary from [Bronze Age Banter](https://www.youtube.com/@BronzeAgeBanter).
 
@@ -105,7 +105,7 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
-> **Unreleased:** repeated cuts of the same video or audio reuse content hashes within a process, avoiding full-file reads for every segment. Changed files are checked again, and filename collisions still compare content. See [#155](https://github.com/renezander030/capcut-cli/issues/155).
+> **Unreleased:** experimental, unofficial `caption --cloud` transcribes without a local Whisper install by uploading the audio to ByteDance's CapCut servers, with word-level timings ([#157](https://github.com/renezander030/capcut-cli/pull/157)); repeated cuts of the same video or audio reuse content hashes within a process, avoiding full-file reads for every segment. Changed files are checked again, and filename collisions still compare content. See [#155](https://github.com/renezander030/capcut-cli/issues/155).
 
 > **New in v0.30.0:** per-command help (`capcut <command> --help`, `capcut help <command>`); undo that survives an app save, with every restore checked against the write journal (`restore`, `restore --list` integrity); and real word timings from whisper.cpp for karaoke and word-reveal captions, also readable through `caption --words`. Full details in the [changelog](./CHANGELOG.md).
 
@@ -173,7 +173,7 @@ Separate from sponsorship: if you are building capcut-cli into a product, or you
 
 ## How it works
 
-CapCut/JianYing store each project as local JSON. capcut-cli loads that store, validates against a version-aware schema, applies your edit, and writes it back atomically (with a `.bak`). No project files are uploaded anywhere; nothing runs as a service. See [docs/version-support.md](./docs/version-support.md) for the CapCut/JianYing versions and schema flags it understands.
+CapCut/JianYing store each project as local JSON. capcut-cli loads that store, validates against a version-aware schema, applies your edit, and writes it back atomically (with a `.bak`). No project files are uploaded anywhere, and only `caption --cloud` sends audio out; nothing runs as a service. See [docs/version-support.md](./docs/version-support.md) for the CapCut/JianYing versions and schema flags it understands.
 
 ## Docs & examples
 

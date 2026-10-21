@@ -4,6 +4,10 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- `caption --cloud` (experimental, unofficial) transcribes without a local Whisper install by uploading the audio to ByteDance's CapCut servers and running the speech recognition behind CapCut's auto-captions on it, with word-level timings for `--karaoke`, `--word-reveal`, `--script` and `--highlight-words`. It calls CapCut's private endpoints as the desktop app does, not a published API, so ByteDance can change or refuse them at any time. The task covers the audio's real length, read with ffprobe (the draft's material duration for `--from-segment`), and every run names the uploaded file on stderr. Local Whisper stays the default, and nothing is uploaded without `--cloud` ([#157](https://github.com/renezander030/capcut-cli/pull/157), contributed by @datnt-97).
+
 ### Changed
 
 - `skills/capcut-edit/scripts/anim.sh` derives the effect-cache base per platform instead of hardcoding the macOS container path, which on Windows wrote a path the app cannot resolve into the animation material: `%LOCALAPPDATA%\CapCut\User Data\Cache\effect` (JianYing: `%LOCALAPPDATA%\JianyingPro\...`), the macOS container on darwin, `~/.local/share/CapCut/Cache/effect` elsewhere. `CAPCUT_EFFECT_CACHE` overrides all three.

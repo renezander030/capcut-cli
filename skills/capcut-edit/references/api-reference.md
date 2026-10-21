@@ -658,9 +658,12 @@ filter, effect, keyframe, audio-fade, text-style, text-ranges, template, and
 captions. Media items accept source timing, speed, opacity, rotation, scale,
 position, volume, and auto-probed duration. `--check`/`--plan` never write.
 
-### `capcut caption <project> ... --karaoke`
+### `capcut caption <project> ... [--cloud] [--karaoke]`
 
-Select a dialect with `--whisper-engine openai|whisper-cpp|faster-whisper`.
+`--cloud` (experimental, unofficial) uploads the audio to ByteDance's CapCut servers and
+transcribes it there, without a local Whisper install. It uses CapCut's private
+endpoints, which can change or stop working at any time, and needs ffprobe for the
+audio length. For local transcription, select a dialect with `--whisper-engine openai|whisper-cpp|faster-whisper`.
 Word-timestamp JSON is grouped with `--max-words`, `--max-chars`, and
 `--max-gap-ms`; each word interval becomes a real highlighted caption segment.
 
