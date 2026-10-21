@@ -15,6 +15,7 @@ import {
 import type { Draft, Segment, Track } from "./draft.js";
 import { findSegment } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
+import { probeMedia } from "./probe.js";
 import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } from "./script.js";
 import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
@@ -173,7 +174,12 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
         ? undefined
         : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
     try {
-      const cloudRes = await transcribeAudioCapcutCloud(selectedAudio?.path ?? sourceAudio);
+      const cloudAudio = selectedAudio?.path ?? sourceAudio;
+      const durationMs = cloudAudioDurationMs(draft, opts, cloudAudio);
+      process.stderr.write(
+        `WARNING: --cloud is experimental and unofficial: uploading ${cloudAudio} to ByteDance's CapCut servers for recognition.\n`,
+      );
+      const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
       transcription = {
         cues: cloudRes.cues,
         words: cloudRes.words,
@@ -468,6 +474,24 @@ function resolveAudio(draft: Draft, opts: CaptionOptions): string {
     return mat.path;
   }
   throw new Error("Missing --audio <path> or --from-segment <id>. Provide one.");
+}
+
+/**
+ * The cloud task is created for a fixed span, so it needs the real length of
+ * the audio: ffprobe's reading, else the draft's own material duration for an
+ * unextracted --from-segment. Fails before anything is uploaded.
+ */
+function cloudAudioDurationMs(draft: Draft, opts: CaptionOptions, audioPath: string): number {
+  const probedUs = probeMedia(audioPath)?.durationUs;
+  if (probedUs) return probedUs / 1000;
+  if (opts.fromSegment && opts.audioStream === undefined) {
+    const found = requireSegment(draft, opts.fromSegment);
+    const mat = draft.materials.audios.find((m) => m.id === found.segment.material_id);
+    if (mat?.duration && mat.duration > 0) return mat.duration / 1000;
+  }
+  throw new Error(
+    `--cloud needs the audio length, and ffprobe could not read it from ${audioPath}. Install FFmpeg (ffprobe), or transcribe locally without --cloud.`,
+  );
 }
 
 interface TranscriptionResult {

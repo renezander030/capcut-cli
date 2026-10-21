@@ -599,7 +599,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream."),
     option("from_segment", ["--from-segment"], "id", "Audio segment input."),
-    option("cloud", ["--cloud"], "boolean", "Transcribe via CapCut Cloud ASR instead of local Whisper."),
+    option(
+      "cloud",
+      ["--cloud"],
+      "boolean",
+      "Experimental and unofficial: uploads the audio to ByteDance's CapCut servers and transcribes it there instead of with local Whisper. Needs ffprobe for the audio length.",
+    ),
     option("whisper_cmd", ["--whisper-cmd"], "path", "Whisper binary."),
     option("whisper_engine", ["--whisper-engine"], "enum", "Whisper CLI dialect.", {
       values: ["openai", "whisper-cpp", "faster-whisper"],

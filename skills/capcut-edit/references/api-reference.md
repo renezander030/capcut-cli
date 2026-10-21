@@ -660,8 +660,10 @@ position, volume, and auto-probed duration. `--check`/`--plan` never write.
 
 ### `capcut caption <project> ... [--cloud] [--karaoke]`
 
-Use `--cloud` to transcribe via CapCut's official online Cloud ASR in seconds without installing Whisper locally.
-For offline transcription, select a dialect with `--whisper-engine openai|whisper-cpp|faster-whisper`.
+`--cloud` (experimental, unofficial) uploads the audio to ByteDance's CapCut servers and
+transcribes it there, without a local Whisper install. It uses CapCut's private
+endpoints, which can change or stop working at any time, and needs ffprobe for the
+audio length. For local transcription, select a dialect with `--whisper-engine openai|whisper-cpp|faster-whisper`.
 Word-timestamp JSON is grouped with `--max-words`, `--max-chars`, and
 `--max-gap-ms`; each word interval becomes a real highlighted caption segment.
 

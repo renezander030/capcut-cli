@@ -6,7 +6,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ### Added
 
-- `caption --cloud` transcribes audio via CapCut's official Cloud ASR without requiring a local Whisper installation. Audio is signed with zero-dep AWS SigV4, uploaded to ByteDance TOS, and processed with word-level timestamps. Combines seamlessly with `--karaoke`, `--word-reveal`, `--script`, and `--highlight-words`.
+- `caption --cloud` (experimental, unofficial) transcribes without a local Whisper install by uploading the audio to ByteDance's CapCut servers and running the speech recognition behind CapCut's auto-captions on it, with word-level timings for `--karaoke`, `--word-reveal`, `--script` and `--highlight-words`. It calls CapCut's private endpoints as the desktop app does, not a published API, so ByteDance can change or refuse them at any time. The task covers the audio's real length, read with ffprobe (the draft's material duration for `--from-segment`), and every run names the uploaded file on stderr. Local Whisper stays the default, and nothing is uploaded without `--cloud` ([#157](https://github.com/renezander030/capcut-cli/pull/157), contributed by @datnt-97).
 
 ### Changed
 

@@ -1,3 +1,9 @@
+/**
+ * Experimental, unofficial client for the speech recognition behind CapCut's
+ * auto-captions (`caption --cloud`). These are CapCut's private endpoints as
+ * its desktop app calls them, not a published API: ByteDance can change or
+ * refuse them at any time. The audio is uploaded to ByteDance's servers.
+ */
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { CaptionCue, CaptionWord } from "./caption.js";
@@ -156,7 +162,7 @@ export interface CloudAsrPayload {
 }
 
 export interface CloudAsrOptions {
-  durationMs?: number;
+  durationMs: number; // length of the audio; the recognition task covers 0..durationMs
   verbose?: boolean;
   onProgress?: (progress: number, status: string) => void;
 }
@@ -515,17 +521,20 @@ async function pollSttStatus(
 }
 
 /**
- * Perform end-to-end Speech-to-Text transcription via CapCut's official cloud ASR service.
- * Returns word timings with microsecond precision and sentence-level cues.
+ * Upload the audio to CapCut's cloud speech recognition and return its
+ * sentence cues and word timings (milliseconds from the service, as µs).
  */
-export async function transcribeAudioCapcutCloud(audioPath: string, opts?: CloudAsrOptions): Promise<CloudAsrResult> {
+export async function transcribeAudioCapcutCloud(audioPath: string, opts: CloudAsrOptions): Promise<CloudAsrResult> {
   if (!existsSync(audioPath)) {
     throw new Error(`Audio file not found: ${audioPath}`);
+  }
+  const durationMs = Math.round(opts.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new Error(`CapCut Cloud ASR needs the audio length in ms (got ${opts.durationMs}).`);
   }
 
   const fileBuffer = readFileSync(audioPath);
   const md5 = createHash("md5").update(fileBuffer).digest("hex");
-  const durationMs = opts?.durationMs ?? 200000;
 
   // 1. Sign
   const creds = await getUploadSignature();

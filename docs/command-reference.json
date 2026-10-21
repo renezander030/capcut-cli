@@ -4455,7 +4455,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Transcribe via CapCut Cloud ASR instead of local Whisper."
+          "description": "Experimental and unofficial: uploads the audio to ByteDance's CapCut servers and transcribes it there instead of with local Whisper. Needs ffprobe for the audio length."
         },
         {
           "name": "whisper_cmd",

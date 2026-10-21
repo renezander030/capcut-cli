@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import { crc32, signAwsV4 } from "../dist/capcut-cloud-asr.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
@@ -93,5 +93,19 @@ describe("capcut caption --cloud — live integration smoke test", () => {
     const textsRes = spawnCli(["texts", fix.path]);
     assert.equal(textsRes.status, 0);
     assert.ok(textsRes.json.length > 0, "Expected texts in the draft");
+  });
+});
+
+describe("capcut caption --cloud — audio length", () => {
+  const fix = tmpDraft();
+  after(() => fix.cleanup());
+
+  it("refuses before any upload when the audio length cannot be read", () => {
+    const notAudio = join(fix.dir, "not-audio.mp3");
+    writeFileSync(notAudio, "this is not audio");
+    const r = spawnCli(["caption", fix.path, "--audio", notAudio, "--cloud"]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /--cloud needs the audio length/);
+    assert.doesNotMatch(r.stderr, /uploading/);
   });
 });

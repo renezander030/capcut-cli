@@ -707,7 +707,9 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
              end<start or out-of-order entries are refused. Not combinable
              with --audio/--from-segment/--audio-stream/--whisper-*.
              Options:
-               --cloud              Transcribe via CapCut Cloud ASR (fast online recognition)
+               --cloud              Experimental, unofficial: upload the audio to
+                                    ByteDance's CapCut servers and transcribe it
+                                    there instead of with local Whisper (needs ffprobe)
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
                --audio-stream <n>   Zero-based audio stream in the input
