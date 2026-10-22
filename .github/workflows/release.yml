@@ -2,7 +2,8 @@ name: Release
 
 # Tag-driven release: pushing a vX.Y.Z tag publishes that version to npm with
 # provenance and creates the GitHub release with generated notes.
-# Needs the repo secret NPM_TOKEN (an npm automation token).
+# npm trusts this workflow (trusted publishing): the job proves itself with its
+# OIDC token, so no npm token is stored. npm does that exchange from 11.5.1 on.
 on:
   push:
     tags:
@@ -28,6 +29,9 @@ jobs:
       - run: npm ci
       - run: npm test
 
+      - name: npm 11 for trusted publishing
+        run: npm install -g npm@11.12.1
+
       - name: Verify tag matches package.json version
         run: |
           PKG="v$(node -p "require('./package.json').version")"
@@ -38,8 +42,6 @@ jobs:
 
       - name: Publish to npm with provenance
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
