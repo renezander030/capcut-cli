@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID as uuid } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AlignmentReport, alignScript, tokenizeScript } from "./align.js";
@@ -13,7 +13,7 @@ import {
   type TextRangeInput,
 } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
-import { findSegment } from "./draft.js";
+import { findSegment, isDryRun } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
 import { probeMedia } from "./probe.js";
 import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } from "./script.js";
@@ -163,7 +163,8 @@ export function transcriptionSourceConflict(o: TranscriptionSourceOptions): stri
   return undefined;
 }
 
-export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<CaptionResult> {
+/** The option checks every caption run makes before it reads or sends any audio; a --cloud dry run makes them too. */
+export function checkCaptionOptions(opts: CaptionOptions): void {
   if (opts.styleRef && opts.preset) {
     throw new Error("--style-ref and --preset are mutually exclusive. Pass one style source.");
   }
@@ -180,9 +181,13 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   if (opts.audioStream !== undefined && (!Number.isInteger(opts.audioStream) || opts.audioStream < 0)) {
     throw new Error("--audio-stream must be a zero-based non-negative integer.");
   }
-  const fromWords = opts.wordsJson !== undefined;
-  const conflict = transcriptionSourceConflict({ ...opts, words: fromWords });
+  const conflict = transcriptionSourceConflict({ ...opts, words: opts.wordsJson !== undefined });
   if (conflict) throw new Error(conflict);
+}
+
+export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<CaptionResult> {
+  checkCaptionOptions(opts);
+  const fromWords = opts.wordsJson !== undefined;
   let sourceAudio: string | undefined;
   let transcription: TranscriptionResult;
   let external: ParsedWordTimings | undefined;
@@ -206,9 +211,12 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     try {
       const cloudAudio = selectedAudio?.path ?? sourceAudio;
       const durationMs = cloudAudioDurationMs(draft, opts, cloudAudio);
+      if (isDryRun()) throw new Error("--cloud never uploads under --dry-run; plan the upload with planCloudUpload.");
       process.stderr.write(
         `WARNING: --cloud is experimental and unofficial: uploading ${cloudAudio} to ByteDance's CapCut servers for recognition.\n`,
       );
+      const languageWarning = cloudLanguageWarning(opts);
+      if (languageWarning) process.stderr.write(languageWarning);
       const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
       transcription = {
         cues: cloudRes.cues,
@@ -522,6 +530,33 @@ function cloudAudioDurationMs(draft: Draft, opts: CaptionOptions, audioPath: str
   throw new Error(
     `--cloud needs the audio length, and ffprobe could not read it from ${audioPath}. Install FFmpeg (ffprobe), or transcribe locally without --cloud.`,
   );
+}
+
+/**
+ * What `caption --cloud` would send, read without sending it: the file, its
+ * size and length. `--dry-run` reports this instead of uploading, the way
+ * translate sends nothing in a dry run. With --audio-stream the upload would
+ * be that stream extracted from this file. The options are checked as in a
+ * real run, so a dry run refuses what the run would refuse.
+ */
+export function planCloudUpload(
+  draft: Draft,
+  opts: CaptionOptions,
+): { path: string; bytes: number; duration_ms: number; audio_stream?: number } {
+  checkCaptionOptions(opts);
+  const path = resolveAudio(draft, opts);
+  return {
+    path,
+    bytes: statSync(path).size,
+    duration_ms: Math.round(cloudAudioDurationMs(draft, opts, path)),
+    ...(opts.audioStream !== undefined ? { audio_stream: opts.audioStream } : {}),
+  };
+}
+
+/** CapCut's recognition picks the spoken language itself; the request has no language field. */
+export function cloudLanguageWarning(opts: Pick<CaptionOptions, "cloud" | "language">): string | undefined {
+  if (!opts.cloud || opts.language === undefined) return undefined;
+  return `WARNING: --language ${opts.language} has no effect with --cloud: CapCut's recognition detects the spoken language itself.\n`;
 }
 
 interface TranscriptionResult {

@@ -4025,7 +4025,7 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     if (!wordsJson.trim())
       die(flags.words === "-" ? "No input on stdin for --words" : `--words file is empty: ${flags.words}`);
   }
-  const result = await captionDraft(draft, {
+  const captionOptions = {
     wordsJson,
     wordsSource: flags.words === "-" ? "stdin" : flags.words,
     audio: flags.audio,
@@ -4051,7 +4051,32 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     keywordColor: emphasis.color,
     keywordSize: emphasis.size,
     colorCycle: emphasis.cycle,
-  });
+  };
+  if (flags.cloud && isDryRun()) {
+    // A dry run sends nothing anywhere: report what --cloud would upload.
+    const { cloudLanguageWarning, planCloudUpload } = await import("./caption.js");
+    let plan: ReturnType<typeof planCloudUpload>;
+    try {
+      plan = planCloudUpload(draft, captionOptions);
+    } catch (e) {
+      die((e as Error).message);
+    }
+    const languageWarning = cloudLanguageWarning(captionOptions);
+    if (languageWarning && !flags.quiet) process.stderr.write(languageWarning);
+    out(
+      {
+        ok: true,
+        dry_run: true,
+        engine: "capcut-cloud",
+        uploaded: false,
+        would_upload: { ...plan, to: "CapCut Cloud ASR (ByteDance servers)" },
+        cues: 0,
+      },
+      flags,
+    );
+    return;
+  }
+  const result = await captionDraft(draft, captionOptions);
   saveDraft(filePath, draft);
   // A script that barely matches the recognised words is almost certainly the
   // wrong script for this audio: the timing would be nonsense. Warn, never

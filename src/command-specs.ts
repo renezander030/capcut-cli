@@ -611,7 +611,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       values: ["openai", "whisper-cpp", "faster-whisper"],
     }),
     option("whisper_model", ["--whisper-model"], "string", "Whisper model."),
-    option("language", ["--language"], "string", "Language code."),
+    option("language", ["--language"], "string", "Language code for Whisper (--cloud detects the language itself)."),
     option("karaoke", ["--karaoke"], "boolean", "Create word-highlight caption ranges."),
     option(
       "word_reveal",
