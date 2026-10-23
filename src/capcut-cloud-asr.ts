@@ -175,6 +175,33 @@ export interface CloudAsrResult {
   duration_ms?: number;
 }
 
+interface EditorApiReply<T> {
+  ret: string;
+  errmsg: string;
+  data?: T;
+}
+
+/** POST to CapCut's editor API; an HTTP failure names the step. */
+async function postEditorApi<T>(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  step: string,
+): Promise<EditorApiReply<T>> {
+  const res = await fetch(url, { method: "POST", headers, body });
+  if (!res.ok) {
+    throw new Error(`CapCut ${step} HTTP error: ${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as EditorApiReply<T>;
+}
+
+/** The editor API answers ret "0" (or 0) on success; any other ret is its refusal. */
+function requireRetOk(reply: EditorApiReply<unknown>, step: string): void {
+  if (reply.ret !== "0" && reply.ret !== (0 as unknown as string)) {
+    throw new Error(`CapCut ${step} failed [ret=${reply.ret}]: ${reply.errmsg || "Unknown error"}`);
+  }
+}
+
 interface UploadSignatureData {
   access_key_id: string;
   secret_access_key: string;
@@ -196,19 +223,9 @@ interface ApplyUploadResult {
 async function getUploadSignature(): Promise<UploadSignatureData> {
   const url = "https://editor-api-sg.capcutapi.com/lv/v1/upload_sign?aid=359289&device_platform=windows";
   const body = JSON.stringify({ biz: "cc_pc_text_recognize", key_version: "v5" });
-  const res = await fetch(url, {
-    method: "POST",
-    headers: DEFAULT_CAPCUT_HEADERS,
-    body,
-  });
-  if (!res.ok) {
-    throw new Error(`CapCut upload_sign HTTP error: ${res.status} ${res.statusText}`);
-  }
-  const json = (await res.json()) as { ret: string; errmsg: string; data: UploadSignatureData };
-  if (json.ret !== "0" && json.ret !== (0 as unknown as string)) {
-    throw new Error(`CapCut upload_sign failed [ret=${json.ret}]: ${json.errmsg || "Unknown error"}`);
-  }
-  return json.data;
+  const json = await postEditorApi<UploadSignatureData>(url, DEFAULT_CAPCUT_HEADERS, body, "upload_sign");
+  requireRetOk(json, "upload_sign");
+  return json.data as UploadSignatureData;
 }
 
 /** Step 2: Apply for upload node and storage location via ByteDance VOD. */
@@ -416,22 +433,13 @@ async function createSttTask(
   };
   if (cookie) headers["Cookie"] = cookie;
 
-  const res = await fetch(url, {
-    method: "POST",
+  const json = await postEditorApi<{ tasks?: Array<{ id: string; token: string }> }>(
+    url,
     headers,
     body,
-  });
-  if (!res.ok) {
-    throw new Error(`CapCut createSttTask HTTP error: ${res.status} ${res.statusText}`);
-  }
-  const json = (await res.json()) as {
-    ret: string;
-    errmsg: string;
-    data?: { tasks?: Array<{ id: string; token: string }> };
-  };
-  if (json.ret !== "0" && json.ret !== (0 as unknown as string)) {
-    throw new Error(`CapCut createSttTask failed [ret=${json.ret}]: ${json.errmsg || "Unknown error"}`);
-  }
+    "createSttTask",
+  );
+  requireRetOk(json, "createSttTask");
 
   const task = json.data?.tasks?.[0];
   if (!task) throw new Error("CapCut createSttTask returned no task details.");
@@ -461,37 +469,23 @@ async function pollSttStatus(
 
   const maxAttempts = 60; // 60 x 2s = 120s timeout
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: queryHeaders,
-      body,
-    });
-    if (!res.ok) {
-      throw new Error(`CapCut poll query HTTP error: ${res.status} ${res.statusText}`);
-    }
-    const json = (await res.json()) as {
-      ret: string;
-      errmsg: string;
-      data?: {
-        tasks?: Array<{
-          id: string;
-          status: string;
-          progress?: number;
-          payload?: string;
-          detail_info?: string;
-          err_msg?: string;
-        }>;
-      };
-    };
+    const json = await postEditorApi<{
+      tasks?: Array<{
+        id: string;
+        status: string;
+        progress?: number;
+        payload?: string;
+        detail_info?: string;
+        err_msg?: string;
+      }>;
+    }>(url, queryHeaders, body, "poll query");
 
     if (json.ret === "1014") {
       throw new Error(
         "CapCut Cloud ASR returned error 1014 (System Busy / Security Token). Try running without --cloud or use local whisper.",
       );
     }
-    if (json.ret !== "0" && json.ret !== (0 as unknown as string)) {
-      throw new Error(`CapCut poll failed [ret=${json.ret}]: ${json.errmsg || "Unknown error"}`);
-    }
+    requireRetOk(json, "poll");
 
     const task = json.data?.tasks?.[0];
     if (!task) throw new Error("CapCut poll query returned empty task list.");

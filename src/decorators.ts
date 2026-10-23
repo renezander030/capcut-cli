@@ -1008,12 +1008,12 @@ export function addImageAnim(
       categoryId = inline.category_id;
       thirdResourceId = inline.third_resource_id;
     } else {
-      const category = animType === "in" ? "image_intros" : animType === "out" ? "image_outros" : "image_combos";
-      const meta = findEnum(category, slug, namespace);
+      const slot = ANIM_SLOTS[animType];
+      const meta = findEnum(slot.image, slug, namespace);
       if (!meta?.effect_id || !meta.resource_id) {
         const hint = namespace === "jianying" ? " --jianying" : "";
         throw new Error(
-          `Unknown image ${animType} animation: ${slug}. Run 'capcut enums --image-${animType === "in" ? "intros" : animType === "out" ? "outros" : "combos"}${hint}' for the full list.`,
+          `Unknown image ${animType} animation: ${slug}. Run 'capcut enums --image-${slot.listWord}${hint}' for the full list.`,
         );
       }
       name = meta.title ?? meta.name ?? slug;
@@ -1021,7 +1021,7 @@ export function addImageAnim(
       resourceId = meta.resource_id;
       md5 = meta.md5 ?? "";
       defaultDur = meta.duration ?? meta.default_duration ?? 500000;
-      categoryId = animType === "in" ? "in_fav" : animType === "out" ? "out_fav" : "";
+      categoryId = slot.favCategory;
       thirdResourceId = "0";
     }
 
@@ -1048,6 +1048,17 @@ export function addImageAnim(
   return { segmentId: seg.id, added, material_id: container.id };
 }
 
+/**
+ * Per animation slot: the catalogue it is looked up in (image and text
+ * catalogues are separate; text has no combo slot), the word `capcut enums`
+ * lists it under, and the favourites category CapCut files a catalogue pick in.
+ */
+const ANIM_SLOTS = {
+  in: { image: "image_intros", text: "text_intros", listWord: "intros", label: "intro", favCategory: "in_fav" },
+  out: { image: "image_outros", text: "text_outros", listWord: "outros", label: "outro", favCategory: "out_fav" },
+  group: { image: "image_combos", listWord: "combos", favCategory: "" },
+} as const;
+
 export function addTextAnim(
   draft: Draft,
   segmentId: string,
@@ -1069,12 +1080,12 @@ export function addTextAnim(
   const targetDur = seg.target_timerange.duration;
 
   const addOne = (slug: string, overrideDur: number | undefined, animType: "in" | "out") => {
-    const category = animType === "in" ? "text_intros" : "text_outros";
-    const meta = findEnum(category, slug, namespace, TEXT_ANIM_ALIASES);
+    const slot = ANIM_SLOTS[animType];
+    const meta = findEnum(slot.text, slug, namespace, TEXT_ANIM_ALIASES);
     if (!meta?.effect_id || !meta.resource_id) {
       const hint = namespace === "jianying" ? " --jianying" : "";
       throw new Error(
-        `Unknown text ${animType === "in" ? "intro" : "outro"}: ${slug}. Run 'capcut enums --text-${animType === "in" ? "intros" : "outros"}${hint}' for the full list.`,
+        `Unknown text ${slot.label}: ${slug}. Run 'capcut enums --text-${slot.listWord}${hint}' for the full list.`,
       );
     }
     added.push(
@@ -1085,7 +1096,7 @@ export function addTextAnim(
         name: meta.title ?? meta.name ?? slug,
         effectId: meta.effect_id,
         resourceId: meta.resource_id,
-        categoryId: animType === "in" ? "in_fav" : "out_fav",
+        categoryId: slot.favCategory,
         panel: "",
         path: "",
         thirdResourceId: "",

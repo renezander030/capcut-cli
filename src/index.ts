@@ -3947,38 +3947,12 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
 
 async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   const { loadPresetFile } = await import("./preset.js");
-  const { captionDraft } = await import("./caption.js");
-  if (flags.words !== undefined) {
-    // --words replaces the transcription step entirely, so every flag that
-    // only steers Whisper (or the audio it would hear) is a contradiction.
-    const conflicting = [
-      flags.audio !== undefined && "--audio",
-      flags.fromSegment !== undefined && "--from-segment",
-      flags.cloud !== undefined && "--cloud",
-      flags.audioStream !== undefined && "--audio-stream",
-      flags.ffmpegCmd !== undefined && "--ffmpeg-cmd",
-      flags.whisperCmd !== undefined && "--whisper-cmd",
-      flags.whisperEngine !== undefined && "--whisper-engine",
-      flags.whisperModel !== undefined && "--whisper-model",
-    ].filter(Boolean);
-    if (conflicting.length > 0) {
-      die(
-        `--words is mutually exclusive with ${conflicting.join(", ")}: the word timings come from the file, Whisper does not run.`,
-      );
-    }
-  } else if (!flags.audio && !flags.fromSegment) {
+  const { captionDraft, transcriptionSourceConflict } = await import("./caption.js");
+  if (flags.words === undefined && !flags.audio && !flags.fromSegment) {
     die("Missing --audio <path>, --from-segment <id> or --words <file.json>. One is required.");
   }
-  if (flags.cloud) {
-    const conflicting = [
-      flags.whisperCmd !== undefined && "--whisper-cmd",
-      flags.whisperEngine !== undefined && "--whisper-engine",
-      flags.whisperModel !== undefined && "--whisper-model",
-    ].filter(Boolean);
-    if (conflicting.length > 0) {
-      die(`--cloud uses CapCut Cloud ASR and is mutually exclusive with ${conflicting.join(", ")}.`);
-    }
-  }
+  const conflict = transcriptionSourceConflict({ ...flags, words: flags.words !== undefined });
+  if (conflict) die(conflict);
   if (flags.karaoke && flags.wordReveal) die("--karaoke and --word-reveal are mutually exclusive.");
   if (
     flags.minScriptMatch !== undefined &&
@@ -5075,7 +5049,7 @@ function getCliVersion(): string {
 // rewrites `.bak` when it saves); --force-write restores it anyway.
 async function cmdRestore(projectPath: string | undefined, flags: Flags): Promise<void> {
   if (!projectPath) die("Missing project path. Usage: capcut restore <project> [--step N | --list]");
-  const { readRecoveryHistory } = await import("./history-integrity.js");
+  const { pickRestoreSource, readRecoveryHistory } = await import("./history-integrity.js");
   const filePath = findDraft(projectPath);
   const hasSynchronizedSiblings = discoverDraftStore(filePath).targets.length > 1;
   const history = readRecoveryHistory(filePath);
@@ -5109,42 +5083,20 @@ async function cmdRestore(projectPath: string | undefined, flags: Flags): Promis
     saveDraft(restored.filePath, backup.draft, { backup: false, skipVersionGuard: true });
   };
 
-  if (flags.step !== undefined) {
-    if (!Number.isInteger(flags.step) || flags.step < 1) die("--step must be a positive integer (1 = most recent).");
-    const target = snaps.find((s) => s.step === flags.step);
-    if (!target) {
-      const avail = snaps.length ? `1..${snaps.length}` : "none yet";
-      die(`No snapshot at --step ${flags.step}. Available: ${avail}. Try: capcut restore ${projectPath} --list`);
-    }
-    if (target.integrity === "changed" && !flags.forceWrite) {
-      die(
-        `refused [snapshot-changed]: snapshot step ${flags.step} no longer holds what capcut-cli saved before that write ` +
-          "(it changed on disk afterwards; snapshots written before 0.30.0 share their bytes with the .bak the app rewrites on save). " +
-          `Check the others with: capcut restore ${projectPath} --list, or pass --force-write to restore it as it is now.`,
-      );
-    }
-    if (!isDryRun()) restoreSource(target.path);
-    out({ ok: true, restored: filePath, from: target.path, step: flags.step, integrity: target.integrity }, flags);
-    return;
+  let pick: ReturnType<typeof pickRestoreSource>;
+  try {
+    pick = pickRestoreSource(history, filePath, projectPath, { step: flags.step, forceWrite: flags.forceWrite });
+  } catch (e) {
+    die((e as Error).message);
   }
-
-  const bakPath = `${filePath}.bak`;
-  if (!existsSync(bakPath)) {
-    die(`No backup found at ${bakPath}. Nothing to restore (a .bak is written on the first edit).`);
-  }
-  const integrity = history.backup();
-  if (integrity === "changed" && !flags.forceWrite) {
-    const step1 =
-      snaps[0]?.integrity === "intact"
-        ? ` Restore capcut-cli's own copy with: capcut restore ${projectPath} --step 1.`
-        : "";
-    die(
-      `refused [backup-changed]: ${bakPath} no longer holds what capcut-cli saved before its last write ` +
-        `(the app rewrites it when it saves).${step1} Pass --force-write to restore the .bak as it is now.`,
-    );
-  }
-  if (!isDryRun()) restoreSource(bakPath);
-  out({ ok: true, restored: filePath, from: bakPath, integrity }, flags);
+  if (!isDryRun()) restoreSource(pick.path);
+  const { path: from, integrity, step } = pick;
+  out(
+    step !== undefined
+      ? { ok: true, restored: filePath, from, step, integrity }
+      : { ok: true, restored: filePath, from, integrity },
+    flags,
+  );
 }
 
 // `prune` removes materials no segment references. The referenced set is the

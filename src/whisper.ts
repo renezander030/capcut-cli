@@ -31,6 +31,20 @@ export type PathProbe = (cmd: string) => string | null;
  */
 export const WHISPER_COMMANDS = ["whisper", "whisper-cli", "faster-whisper"] as const;
 
+export type WhisperDialect = "openai" | "whisper-cpp" | "faster-whisper";
+
+/**
+ * The dialect a Whisper command speaks, read from its name: faster-whisper,
+ * whisper.cpp (`whisper-cli`, or its older `main` binary), otherwise
+ * openai-whisper.
+ */
+export function whisperDialect(command: string): WhisperDialect {
+  const name = command.toLowerCase();
+  if (name.includes("faster-whisper")) return "faster-whisper";
+  if (name.includes("whisper-cli") || /(^|[/\\])main(?:\.exe)?$/.test(name)) return "whisper-cpp";
+  return "openai";
+}
+
 /** First installed Whisper dialect, as an absolute path, or null. */
 export function resolveWhisperCommand(probe: PathProbe = onPath): string | null {
   for (const cmd of WHISPER_COMMANDS) {

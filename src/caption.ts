@@ -20,7 +20,7 @@ import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } fr
 import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
-import { resolveWhisperCommand } from "./whisper.js";
+import { resolveWhisperCommand, whisperDialect } from "./whisper.js";
 
 export interface CaptionOptions {
   /**
@@ -115,6 +115,54 @@ export interface CaptionResult {
  *   3. Parse SRT into caption cues
  *   4. Create captions track + real subtitle material per cue
  */
+/** Where the words come from, as far as the source rules below need to know. */
+export interface TranscriptionSourceOptions {
+  words: boolean; // --words: timings from a file, nothing is transcribed
+  audio?: string;
+  fromSegment?: string;
+  cloud?: boolean;
+  audioStream?: number;
+  ffmpegCmd?: string;
+  whisperCmd?: string;
+  whisperEngine?: string;
+  whisperModel?: string;
+}
+
+/**
+ * The options that contradict the chosen transcription source, as the refusal
+ * text, or undefined when they agree. --words replaces transcription entirely,
+ * so every option that only steers Whisper (or the audio it would hear) is a
+ * contradiction; --cloud replaces Whisper, so the --whisper-* options are.
+ */
+export function transcriptionSourceConflict(o: TranscriptionSourceOptions): string | undefined {
+  if (o.words) {
+    const conflicting = [
+      o.audio !== undefined && "--audio",
+      o.fromSegment !== undefined && "--from-segment",
+      o.cloud !== undefined && "--cloud",
+      o.audioStream !== undefined && "--audio-stream",
+      o.ffmpegCmd !== undefined && "--ffmpeg-cmd",
+      o.whisperCmd !== undefined && "--whisper-cmd",
+      o.whisperEngine !== undefined && "--whisper-engine",
+      o.whisperModel !== undefined && "--whisper-model",
+    ].filter(Boolean);
+    if (conflicting.length > 0) {
+      return `--words is mutually exclusive with ${conflicting.join(", ")}: the word timings come from the file, Whisper does not run.`;
+    }
+  }
+  if (o.cloud) {
+    const conflicting = [
+      o.whisperCmd !== undefined && "--whisper-cmd",
+      o.whisperEngine !== undefined && "--whisper-engine",
+      o.whisperModel !== undefined && "--whisper-model",
+    ].filter(Boolean);
+    if (conflicting.length > 0) {
+      return `--cloud uses CapCut Cloud ASR and is mutually exclusive with ${conflicting.join(", ")}.`;
+    }
+  }
+  return undefined;
+}
+
 export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<CaptionResult> {
   if (opts.styleRef && opts.preset) {
     throw new Error("--style-ref and --preset are mutually exclusive. Pass one style source.");
@@ -133,26 +181,8 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     throw new Error("--audio-stream must be a zero-based non-negative integer.");
   }
   const fromWords = opts.wordsJson !== undefined;
-  if (opts.cloud && fromWords) {
-    throw new Error("--cloud is mutually exclusive with --words.");
-  }
-  if (
-    opts.cloud &&
-    (opts.whisperCmd !== undefined || opts.whisperEngine !== undefined || opts.whisperModel !== undefined)
-  ) {
-    throw new Error("--cloud uses CapCut Cloud ASR and is mutually exclusive with --whisper-* options.");
-  }
-  if (
-    fromWords &&
-    (opts.audio !== undefined ||
-      opts.fromSegment !== undefined ||
-      opts.audioStream !== undefined ||
-      opts.whisperCmd !== undefined ||
-      opts.whisperEngine !== undefined ||
-      opts.whisperModel !== undefined)
-  ) {
-    throw new Error("--words is mutually exclusive with --audio, --from-segment, --audio-stream and --whisper-*.");
-  }
+  const conflict = transcriptionSourceConflict({ ...opts, words: fromWords });
+  if (conflict) throw new Error(conflict);
   let sourceAudio: string | undefined;
   let transcription: TranscriptionResult;
   let external: ParsedWordTimings | undefined;
@@ -652,10 +682,7 @@ export function whisperCommand(opts: CaptionOptions): string {
 
 export function detectEngine(opts: CaptionOptions): TranscriptionResult["engine"] {
   if (opts.whisperEngine && opts.whisperEngine !== "auto") return opts.whisperEngine;
-  const command = whisperCommand(opts).toLowerCase();
-  if (command.includes("faster-whisper")) return "faster-whisper";
-  if (command.includes("whisper-cli") || /(^|[/\\])main(?:\.exe)?$/.test(command)) return "whisper-cpp";
-  return "openai";
+  return whisperDialect(whisperCommand(opts));
 }
 
 export function buildWhisperInvocation(
