@@ -667,6 +667,19 @@ audio length. For local transcription, select a dialect with `--whisper-engine o
 Word-timestamp JSON is grouped with `--max-words`, `--max-chars`, and
 `--max-gap-ms`; each word interval becomes a real highlighted caption segment.
 
+With `--cloud --dry-run` nothing is uploaded: the result reports `would_upload`
+(file, bytes, duration, destination) and exits. `--language` has no effect with
+`--cloud`; the service detects the spoken language and a warning says so.
+
+### `capcut loudness <project> [--target <lufs>] [--per-clip] [--apply]`
+
+Measures each audible clip with ffmpeg's EBU R128 meter over the media range the
+timeline plays and estimates the draft's loudness. `--target -14` (long-form) or
+`-11` (shorts) computes one gain for the whole mix, keeping the voice/music
+balance; `--per-clip` levels each clip to the target instead. `--max-gain-db`
+caps a boost (default 20). `--apply` writes the gain as segment volume through
+the journal, so `restore` undoes it. Skipped clips carry a `skipped` reason.
+
 ### `capcut render <project> --all-video-tracks --burn-captions`
 
 Composites overlay tracks with transform/opacity, mixes audio fades, and uses

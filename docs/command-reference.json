@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -4496,7 +4496,7 @@
           ],
           "type": "string",
           "required": false,
-          "description": "Language code."
+          "description": "Language code for Whisper (--cloud detects the language itself)."
         },
         {
           "name": "karaoke",
@@ -5570,6 +5570,7 @@
             "render",
             "detect-scenes",
             "detect-silence",
+            "loudness",
             "detect-retakes"
           ]
         }
@@ -6682,6 +6683,97 @@
       ],
       "output": {
         "type": "file",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "loudness",
+      "summary": "Measure each audible clip's loudness (EBU R128) and, with --target, set the gain that brings the export there.",
+      "usage": "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "lufs",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "db",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "target",
+          "flags": [
+            "--target"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Delivery loudness in LUFS (e.g. -14 for long-form, -11 for shorts); adds the gain that reaches it."
+        },
+        {
+          "name": "per_clip",
+          "flags": [
+            "--per-clip"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Bring every clip to the target on its own instead of one gain for the whole mix (default keeps the mix balance)."
+        },
+        {
+          "name": "max_gain_db",
+          "flags": [
+            "--max-gain-db"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Largest boost any clip may get, in dB.",
+          "default": 20
+        },
+        {
+          "name": "apply",
+          "flags": [
+            "--apply"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Write the gain as segment volume (default: report only)."
+        },
+        {
+          "name": "ffmpeg_cmd",
+          "flags": [
+            "--ffmpeg-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "FFmpeg binary (needs the ebur128 filter)."
+        },
+        {
+          "name": "active_timeline",
+          "flags": [
+            "--active-timeline"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Explicitly follow the validated Timelines/project.json pointer on an unverified app build. Invalid, deleted or conflicting selected timelines are refused; write guards remain in force."
+        }
+      ],
+      "mutates": false,
+      "prerequisites": [
+        "ffmpeg"
+      ],
+      "output": {
+        "type": "object",
         "description": "JSON by default; use -H where supported for human output."
       },
       "exit_codes": {
