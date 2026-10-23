@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID as uuid } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AlignmentReport, alignScript, tokenizeScript } from "./align.js";
@@ -13,14 +13,14 @@ import {
   type TextRangeInput,
 } from "./decorators.js";
 import type { Draft, Segment, Track } from "./draft.js";
-import { findSegment } from "./draft.js";
+import { findSegment, isDryRun } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
 import { probeMedia } from "./probe.js";
 import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } from "./script.js";
 import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
-import { resolveWhisperCommand } from "./whisper.js";
+import { resolveWhisperCommand, whisperDialect } from "./whisper.js";
 
 export interface CaptionOptions {
   /**
@@ -115,7 +115,56 @@ export interface CaptionResult {
  *   3. Parse SRT into caption cues
  *   4. Create captions track + real subtitle material per cue
  */
-export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<CaptionResult> {
+/** Where the words come from, as far as the source rules below need to know. */
+export interface TranscriptionSourceOptions {
+  words: boolean; // --words: timings from a file, nothing is transcribed
+  audio?: string;
+  fromSegment?: string;
+  cloud?: boolean;
+  audioStream?: number;
+  ffmpegCmd?: string;
+  whisperCmd?: string;
+  whisperEngine?: string;
+  whisperModel?: string;
+}
+
+/**
+ * The options that contradict the chosen transcription source, as the refusal
+ * text, or undefined when they agree. --words replaces transcription entirely,
+ * so every option that only steers Whisper (or the audio it would hear) is a
+ * contradiction; --cloud replaces Whisper, so the --whisper-* options are.
+ */
+export function transcriptionSourceConflict(o: TranscriptionSourceOptions): string | undefined {
+  if (o.words) {
+    const conflicting = [
+      o.audio !== undefined && "--audio",
+      o.fromSegment !== undefined && "--from-segment",
+      o.cloud !== undefined && "--cloud",
+      o.audioStream !== undefined && "--audio-stream",
+      o.ffmpegCmd !== undefined && "--ffmpeg-cmd",
+      o.whisperCmd !== undefined && "--whisper-cmd",
+      o.whisperEngine !== undefined && "--whisper-engine",
+      o.whisperModel !== undefined && "--whisper-model",
+    ].filter(Boolean);
+    if (conflicting.length > 0) {
+      return `--words is mutually exclusive with ${conflicting.join(", ")}: the word timings come from the file, Whisper does not run.`;
+    }
+  }
+  if (o.cloud) {
+    const conflicting = [
+      o.whisperCmd !== undefined && "--whisper-cmd",
+      o.whisperEngine !== undefined && "--whisper-engine",
+      o.whisperModel !== undefined && "--whisper-model",
+    ].filter(Boolean);
+    if (conflicting.length > 0) {
+      return `--cloud uses CapCut Cloud ASR and is mutually exclusive with ${conflicting.join(", ")}.`;
+    }
+  }
+  return undefined;
+}
+
+/** The option checks every caption run makes before it reads or sends any audio; a --cloud dry run makes them too. */
+export function checkCaptionOptions(opts: CaptionOptions): void {
   if (opts.styleRef && opts.preset) {
     throw new Error("--style-ref and --preset are mutually exclusive. Pass one style source.");
   }
@@ -132,27 +181,13 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   if (opts.audioStream !== undefined && (!Number.isInteger(opts.audioStream) || opts.audioStream < 0)) {
     throw new Error("--audio-stream must be a zero-based non-negative integer.");
   }
+  const conflict = transcriptionSourceConflict({ ...opts, words: opts.wordsJson !== undefined });
+  if (conflict) throw new Error(conflict);
+}
+
+export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<CaptionResult> {
+  checkCaptionOptions(opts);
   const fromWords = opts.wordsJson !== undefined;
-  if (opts.cloud && fromWords) {
-    throw new Error("--cloud is mutually exclusive with --words.");
-  }
-  if (
-    opts.cloud &&
-    (opts.whisperCmd !== undefined || opts.whisperEngine !== undefined || opts.whisperModel !== undefined)
-  ) {
-    throw new Error("--cloud uses CapCut Cloud ASR and is mutually exclusive with --whisper-* options.");
-  }
-  if (
-    fromWords &&
-    (opts.audio !== undefined ||
-      opts.fromSegment !== undefined ||
-      opts.audioStream !== undefined ||
-      opts.whisperCmd !== undefined ||
-      opts.whisperEngine !== undefined ||
-      opts.whisperModel !== undefined)
-  ) {
-    throw new Error("--words is mutually exclusive with --audio, --from-segment, --audio-stream and --whisper-*.");
-  }
   let sourceAudio: string | undefined;
   let transcription: TranscriptionResult;
   let external: ParsedWordTimings | undefined;
@@ -176,9 +211,12 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     try {
       const cloudAudio = selectedAudio?.path ?? sourceAudio;
       const durationMs = cloudAudioDurationMs(draft, opts, cloudAudio);
+      if (isDryRun()) throw new Error("--cloud never uploads under --dry-run; plan the upload with planCloudUpload.");
       process.stderr.write(
         `WARNING: --cloud is experimental and unofficial: uploading ${cloudAudio} to ByteDance's CapCut servers for recognition.\n`,
       );
+      const languageWarning = cloudLanguageWarning(opts);
+      if (languageWarning) process.stderr.write(languageWarning);
       const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
       transcription = {
         cues: cloudRes.cues,
@@ -494,6 +532,33 @@ function cloudAudioDurationMs(draft: Draft, opts: CaptionOptions, audioPath: str
   );
 }
 
+/**
+ * What `caption --cloud` would send, read without sending it: the file, its
+ * size and length. `--dry-run` reports this instead of uploading, the way
+ * translate sends nothing in a dry run. With --audio-stream the upload would
+ * be that stream extracted from this file. The options are checked as in a
+ * real run, so a dry run refuses what the run would refuse.
+ */
+export function planCloudUpload(
+  draft: Draft,
+  opts: CaptionOptions,
+): { path: string; bytes: number; duration_ms: number; audio_stream?: number } {
+  checkCaptionOptions(opts);
+  const path = resolveAudio(draft, opts);
+  return {
+    path,
+    bytes: statSync(path).size,
+    duration_ms: Math.round(cloudAudioDurationMs(draft, opts, path)),
+    ...(opts.audioStream !== undefined ? { audio_stream: opts.audioStream } : {}),
+  };
+}
+
+/** CapCut's recognition picks the spoken language itself; the request has no language field. */
+export function cloudLanguageWarning(opts: Pick<CaptionOptions, "cloud" | "language">): string | undefined {
+  if (!opts.cloud || opts.language === undefined) return undefined;
+  return `WARNING: --language ${opts.language} has no effect with --cloud: CapCut's recognition detects the spoken language itself.\n`;
+}
+
 interface TranscriptionResult {
   cues: CaptionCue[];
   words: CaptionWord[];
@@ -652,10 +717,7 @@ export function whisperCommand(opts: CaptionOptions): string {
 
 export function detectEngine(opts: CaptionOptions): TranscriptionResult["engine"] {
   if (opts.whisperEngine && opts.whisperEngine !== "auto") return opts.whisperEngine;
-  const command = whisperCommand(opts).toLowerCase();
-  if (command.includes("faster-whisper")) return "faster-whisper";
-  if (command.includes("whisper-cli") || /(^|[/\\])main(?:\.exe)?$/.test(command)) return "whisper-cpp";
-  return "openai";
+  return whisperDialect(whisperCommand(opts));
 }
 
 export function buildWhisperInvocation(

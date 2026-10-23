@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { detectEngine, whisperCommand } from "../dist/caption.js";
-import { resolveWhisperCommand, WHISPER_COMMANDS } from "../dist/whisper.js";
+import { resolveWhisperCommand, WHISPER_COMMANDS, whisperDialect } from "../dist/whisper.js";
 
 /**
  * `doctor` has always probed openai-whisper (`whisper`), whisper.cpp
@@ -58,4 +58,22 @@ describe("caption dialect detection follows the resolved binary", () => {
     // Host-dependent which binary is found, but never an empty string.
     assert.ok(whisperCommand({}).length > 0);
   });
+});
+
+describe("whisperDialect — the engine a Whisper command's name implies", () => {
+  for (const [command, dialect] of [
+    ["whisper", "openai"],
+    ["/opt/openai/whisper", "openai"],
+    ["/usr/local/bin/whisper-cli", "whisper-cpp"],
+    ["C:\\tools\\Whisper-CLI.EXE", "whisper-cpp"],
+    ["/src/whisper.cpp/main", "whisper-cpp"],
+    ["C:\\whisper\\main.exe", "whisper-cpp"],
+    ["/opt/maintenance/whisper", "openai"],
+    ["/opt/fw/faster-whisper", "faster-whisper"],
+  ]) {
+    it(`${command} → ${dialect}`, () => {
+      assert.equal(whisperDialect(command), dialect);
+      assert.equal(detectEngine({ whisperCmd: command }), dialect);
+    });
+  }
 });

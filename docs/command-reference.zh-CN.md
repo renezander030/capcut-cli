@@ -90,5 +90,6 @@
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | 是 | 一条命令生成第一个草稿：创建 + 添加一个素材 + lint + 打印“在 CapCut 中打开”的步骤。 |
 | `compile` | `capcut compile <spec.json> [--out <draftdir> \| --into <project>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | 是 | 从声明式 JSON spec 构建草稿；`--into` 填充应用创建的空项目，保留项目身份和注册信息。 |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | 否 | 渲染低清 ffmpeg 代理预览（裁剪+变速+音频，--burn-captions）；支持 --crf / --video-bitrate，大型滤镜图自动走脚本文件；不是 CapCut 的最终渲染。 |
+| `loudness` | `capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]` | 否 | 测量每个有声片段的响度（EBU R128）；配合 --target 计算并写入使导出达到目标响度的增益。 |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | 否 | 检测视频中的场景切换切点（ffmpeg scene 滤镜）；输出切点与片段列表，供 compile/cut 使用。 |
 | `detect-silence` | `capcut detect-silence <media> [options]` | 否 | 检测媒体文件中的静音区间（ffmpeg silencedetect）；输出静音与保留片段列表，供 compile/cut 使用。 |

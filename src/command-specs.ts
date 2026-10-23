@@ -266,6 +266,7 @@ const usages = {
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
   "detect-silence": "capcut detect-silence <media> [options]",
+  loudness: "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]",
   "detect-retakes":
     "capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] | --srt <file>",
 } as const satisfies Record<string, string>;
@@ -610,7 +611,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       values: ["openai", "whisper-cpp", "faster-whisper"],
     }),
     option("whisper_model", ["--whisper-model"], "string", "Whisper model."),
-    option("language", ["--language"], "string", "Language code."),
+    option("language", ["--language"], "string", "Language code for Whisper (--cloud detects the language itself)."),
     option("karaoke", ["--karaoke"], "boolean", "Create word-highlight caption ranges."),
     option(
       "word_reveal",
@@ -929,6 +930,23 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
   ],
+  loudness: [
+    option(
+      "target",
+      ["--target"],
+      "number",
+      "Delivery loudness in LUFS (e.g. -14 for long-form, -11 for shorts); adds the gain that reaches it.",
+    ),
+    option(
+      "per_clip",
+      ["--per-clip"],
+      "boolean",
+      "Bring every clip to the target on its own instead of one gain for the whole mix (default keeps the mix balance).",
+    ),
+    option("max_gain_db", ["--max-gain-db"], "number", "Largest boost any clip may get, in dB.", { default: 20 }),
+    option("apply", ["--apply"], "boolean", "Write the gain as segment volume (default: report only)."),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary (needs the ebur128 filter)."),
+  ],
   "detect-silence": [
     option(
       "threshold_db",
@@ -997,6 +1015,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --encoder            -> render (v0.20 proxy video encoder)
 //   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
+//   --target, --per-clip, --max-gain-db -> loudness (v0.31 EBU R128 delivery gain)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 //   --lexicon            -> tts (pronunciation rules for the spoken text)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
@@ -1020,6 +1039,9 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--active-timeline",
+  "--target",
+  "--per-clip",
+  "--max-gain-db",
   "--compact",
   "--command",
   "--add",
@@ -1211,7 +1233,7 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
   return commands.map((name) => {
     const usage = usages[name as CommandName] ?? `capcut ${name} <project>`;
     const prerequisites: string[] = [];
-    if (["render", "detect-scenes", "detect-silence"].includes(name)) prerequisites.push("ffmpeg");
+    if (["render", "detect-scenes", "detect-silence", "loudness"].includes(name)) prerequisites.push("ffmpeg");
     if (["add-video", "add-audio", "tts", "compile", "detect-scenes", "detect-silence"].includes(name)) {
       prerequisites.push("ffprobe (optional)");
     }

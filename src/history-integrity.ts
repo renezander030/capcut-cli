@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { type JournalEntry, listSnapshots, readJournal } from "./draft.js";
 import { journalDigest } from "./journal-digest.js";
 
@@ -45,4 +45,64 @@ export function readRecoveryHistory(filePath: string): {
     return { ...snapshot, entry, integrity: integrityOf(snapshot.path, entry) };
   });
   return { snapshots, backup: () => integrityOf(`${filePath}.bak`, snapshots[0]?.entry) };
+}
+
+/** The recovery file `restore` copies back: a history step, or the `.bak`. */
+export interface RestorePick {
+  path: string;
+  integrity: RecoveryIntegrity;
+  step?: number;
+}
+
+/**
+ * Which recovery file `restore` copies back: snapshot `step` (1 = the most
+ * recent write) when one is asked for, otherwise the `.bak`. A file that
+ * changed on disk since capcut-cli wrote it is refused unless `forceWrite`;
+ * each refusal names its check and the way out. `projectPath` is the project
+ * as the user named it, for the commands the messages suggest.
+ */
+export function pickRestoreSource(
+  history: ReturnType<typeof readRecoveryHistory>,
+  filePath: string,
+  projectPath: string,
+  opts: { step?: number; forceWrite?: boolean },
+): RestorePick {
+  const snaps = history.snapshots;
+  if (opts.step !== undefined) {
+    if (!Number.isInteger(opts.step) || opts.step < 1) {
+      throw new Error("--step must be a positive integer (1 = most recent).");
+    }
+    const target = snaps.find((s) => s.step === opts.step);
+    if (!target) {
+      const avail = snaps.length ? `1..${snaps.length}` : "none yet";
+      throw new Error(
+        `No snapshot at --step ${opts.step}. Available: ${avail}. Try: capcut restore ${projectPath} --list`,
+      );
+    }
+    if (target.integrity === "changed" && !opts.forceWrite) {
+      throw new Error(
+        `refused [snapshot-changed]: snapshot step ${opts.step} no longer holds what capcut-cli saved before that write ` +
+          "(it changed on disk afterwards; snapshots written before 0.30.0 share their bytes with the .bak the app rewrites on save). " +
+          `Check the others with: capcut restore ${projectPath} --list, or pass --force-write to restore it as it is now.`,
+      );
+    }
+    return { path: target.path, integrity: target.integrity, step: opts.step };
+  }
+
+  const bakPath = `${filePath}.bak`;
+  if (!existsSync(bakPath)) {
+    throw new Error(`No backup found at ${bakPath}. Nothing to restore (a .bak is written on the first edit).`);
+  }
+  const integrity = history.backup();
+  if (integrity === "changed" && !opts.forceWrite) {
+    const step1 =
+      snaps[0]?.integrity === "intact"
+        ? ` Restore capcut-cli's own copy with: capcut restore ${projectPath} --step 1.`
+        : "";
+    throw new Error(
+      `refused [backup-changed]: ${bakPath} no longer holds what capcut-cli saved before its last write ` +
+        `(the app rewrites it when it saves).${step1} Pass --force-write to restore the .bak as it is now.`,
+    );
+  }
+  return { path: bakPath, integrity };
 }

@@ -105,11 +105,10 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 ## Release notes
 
-> **Unreleased:** experimental, unofficial `caption --cloud` transcribes without a local Whisper install by uploading the audio to ByteDance's CapCut servers, with word-level timings ([#157](https://github.com/renezander030/capcut-cli/pull/157)); repeated cuts of the same video or audio reuse content hashes within a process, avoiding full-file reads for every segment. Changed files are checked again, and filename collisions still compare content. See [#155](https://github.com/renezander030/capcut-cli/issues/155).
+> **New in v0.31.0:** experimental, unofficial `caption --cloud` that transcribes without a local Whisper install by uploading the audio to ByteDance's CapCut servers ([#157](https://github.com/renezander030/capcut-cli/pull/157)), uploads nothing in a dry run, retries flaky requests and waits as long as the audio needs; loudness to a delivery target (`loudness --target -14`, applied as segment volume and undoable); faster compiles that reuse media hashes across repeated cuts; and three `lint` checks for clips that play silent after a copy, keyframes on trimmed or re-timed clips, and `UNIFORM_SCALE` zooms on JianYing 11.6+. Full details in the [changelog](./CHANGELOG.md).
 
 > **New in v0.30.0:** per-command help (`capcut <command> --help`, `capcut help <command>`); undo that survives an app save, with every restore checked against the write journal (`restore`, `restore --list` integrity); and real word timings from whisper.cpp for karaoke and word-reveal captions, also readable through `caption --words`. Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.29.0:** captions from any aligner's word timings without Whisper (`caption --words`); reviewed batch plans bound to the draft (`batch --plan` / `--apply-plan`); a render fidelity census and output-duration check (`render --strict` / `--verify`); TTS pronunciation lexicons (`tts --lexicon`); `segment-overlap` and `segment-offscreen` lint checks; and `restore --list` naming the command behind each step. Full details in the [changelog](./CHANGELOG.md).
 
 
 

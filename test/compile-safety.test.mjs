@@ -3,12 +3,24 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { compileDraft, planCompile } from "../dist/compile.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// compileDraft records the app version it saw for the write guard's tripwire;
+// keep that in a scratch state file, never the developer's own
+// ~/.config/capcut-cli/app-versions.json.
+const stateDir = fs.mkdtempSync(join(tmpdir(), "capcut-compile-safety-state-"));
+const previousState = process.env.CAPCUT_CLI_APP_VERSIONS;
+process.env.CAPCUT_CLI_APP_VERSIONS = join(stateDir, "versions.json");
+after(() => {
+  fs.rmSync(stateDir, { recursive: true, force: true });
+  if (previousState === undefined) delete process.env.CAPCUT_CLI_APP_VERSIONS;
+  else process.env.CAPCUT_CLI_APP_VERSIONS = previousState;
+});
 const templateDir = join(root, "templates", "_init");
 
 function setup(t) {

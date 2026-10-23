@@ -13,6 +13,7 @@ import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { quantizeToFrame } from "./time.js";
 import { allUserEnumIds } from "./user-enums.js";
+import { atLeast } from "./version.js";
 
 export type { CaptionScript, ScriptLimit, ScriptLimits } from "./script.js";
 // The script detection and its limit table live in script.ts (caption shares
@@ -64,6 +65,7 @@ const FIXABLE_CODES = new Set<string>([
   "text-range-doubled",
   "segment-off-frame-grid",
   "segment-overlap",
+  "sound-separated-orphan",
 ]);
 
 // Floor for any duration --fix writes: 100ms = three frames at the 30fps
@@ -972,6 +974,83 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
     }
   }
 
+  // A video clip marked has_sound_separated plays without its own sound: the
+  // app expects the sound on an audio track (an extract_music or
+  // video_original_sound material). Copied from another draft, the mark
+  // comes along without that audio, and the clip plays silent. Flagged only
+  // when no separated audio is on the timeline at all, so a draft whose
+  // sound was really split in the app is never touched; --fix clears the mark.
+  for (const material of soundSeparatedOrphans(draft)) {
+    issues.push({
+      severity: "warning",
+      code: "sound-separated-orphan",
+      message:
+        `Video ${shortId(material.id)} is marked as having its sound moved to an audio track (has_sound_separated), ` +
+        "but no separated audio is on the timeline, so the clip plays silent. --fix clears the mark and the clip plays its own sound again",
+      fixable: FIXABLE_CODES.has("sound-separated-orphan"),
+      location: { material_id: material.id },
+    });
+  }
+
+  // Keyframe clock on trimmed or speed-changed clips: capcut-cli writes
+  // keyframe times from the segment's start, but an exporter for Jianying Pro
+  // 11.6 found that editor reading visual keyframes on the source clock
+  // (source start + offset x speed), so on a clip trimmed at its head or
+  // played at another speed the motion may land at other moments. Info-only:
+  // nothing here is known to be wrong for every build; the note says where
+  // to look.
+  for (const { track, segment } of allSegments(draft)) {
+    if (track.type !== "video") continue;
+    const lists = (segment.common_keyframes ?? []) as Array<{ property_type?: string; keyframe_list?: unknown[] }>;
+    const visual = lists.filter(
+      (list) =>
+        Array.isArray(list.keyframe_list) && list.keyframe_list.length > 0 && list.property_type !== "KFTypeVolume",
+    );
+    if (visual.length === 0) continue;
+    const sourceStart = segment.source_timerange?.start ?? 0;
+    const speed = typeof segment.speed === "number" ? segment.speed : 1;
+    if (sourceStart <= 0 && speed === 1) continue;
+    const why = [
+      sourceStart > 0 ? `starts ${sourceStart}us into its media` : "",
+      speed !== 1 ? `plays at ${speed}x` : "",
+    ]
+      .filter(Boolean)
+      .join(" and ");
+    issues.push({
+      severity: "info",
+      code: "keyframe-trimmed-clock",
+      message:
+        `Segment ${shortId(segment.id)} has keyframes and ${why}. Keyframe times are written from the segment's start; ` +
+        "Jianying Pro 11.6 has been reported to read them on the media's own clock (media start + time x speed), " +
+        "so check in the app that the motion lands where you expect",
+      fixable: false,
+      location: { track: track.name, segment_id: segment.id },
+    });
+  }
+
+  // UNIFORM_SCALE is the scale keyframe CapCut writes and reads, but an
+  // exporter for Jianying Pro 11.6 found that build ignoring it and animating
+  // KFTypeScaleX with the segment's uniform_scale switched on instead. Info,
+  // on JianYing 11.6+ drafts only: capcut-cli keeps writing UNIFORM_SCALE.
+  if (draft.platform?.app_source === "lv" && atLeast(draft.platform.app_version ?? null, "11.6")) {
+    for (const { track, segment } of allSegments(draft)) {
+      const lists = (segment.common_keyframes ?? []) as Array<{ property_type?: string; keyframe_list?: unknown[] }>;
+      if (!lists.some((list) => list.property_type === "UNIFORM_SCALE" && (list.keyframe_list?.length ?? 0) > 0)) {
+        continue;
+      }
+      issues.push({
+        severity: "info",
+        code: "uniform-scale-keyframe",
+        message:
+          `Segment ${shortId(segment.id)} animates scale with UNIFORM_SCALE keyframes; JianYing ${draft.platform.app_version} ` +
+          "has been reported to ignore them (it reads KFTypeScaleX with uniform scaling on). Check the zoom in the app, " +
+          "or key scale_x and scale_y instead",
+        fixable: false,
+        location: { track: track.name, segment_id: segment.id },
+      });
+    }
+  }
+
   // Unregistered-media sidecar note (pyCapCut#13): newer builds (reported on
   // CapCut International 9.1.0, macOS) show timeline media as "file
   // inaccessible" and prompt per-clip relinking when draft_meta_info.json's
@@ -1387,6 +1466,10 @@ export function fixDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS)
     }
   }
 
+  // Pass 6: a copied has_sound_separated mark with no separated audio on the
+  // timeline (sound-separated-orphan) — clearing it gives the clip its sound back.
+  for (const material of soundSeparatedOrphans(draft)) material.has_sound_separated = false;
+
   const after = lintDraft(draft, opts);
   const remaining: LintIssue[] = [];
   const afterKeys = new Set(after.map(issueKey));
@@ -1649,6 +1732,17 @@ function canCloseMainTrackGap(draft: Draft, mainTrack: Track, gapStartUs: number
 
 function issueKey(i: LintIssue): string {
   return `${i.code}|${i.location?.segment_id ?? ""}|${i.location?.material_id ?? ""}|${i.location?.path ?? ""}`;
+}
+
+/** Video materials marked has_sound_separated, on the timeline, while no separated audio is. */
+function soundSeparatedOrphans(draft: Draft): Array<{ id: string; has_sound_separated?: unknown }> {
+  const used = new Set<string>();
+  for (const track of draft.tracks) for (const segment of track.segments) used.add(segment.material_id);
+  const separatedAudio = (draft.materials?.audios ?? []).some(
+    (audio) => (audio.type === "extract_music" || audio.type === "video_original_sound") && used.has(audio.id),
+  );
+  if (separatedAudio) return [];
+  return (draft.materials?.videos ?? []).filter((video) => video.has_sound_separated === true && used.has(video.id));
 }
 
 function allSegments(draft: Draft): Array<{ track: Track; segment: Segment }> {

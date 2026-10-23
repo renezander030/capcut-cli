@@ -1,17 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { assertTargetsUnchangedOnDisk } from "../dist/draft.js";
 import { editorProcesses, planTimelineSync } from "../dist/store.js";
@@ -427,26 +417,28 @@ describe("sync-timelines", () => {
     skip: process.platform === "win32",
   }, async () => {
     const f = driftedFixture();
-    // Fake a running editor: a copy of `sleep` named CapCut shows up in `ps -axo comm=`.
+    // Fake a running editor where only this test sees it: a stand-in `ps` on
+    // the child's PATH lists a CapCut process. A real process named CapCut
+    // would be visible to every test running at the same time, and their
+    // writes would be refused as well.
     const fakeDir = mkdtempSync(join(tmpdir(), "fake-editor-"));
-    const fakeBin = join(fakeDir, "CapCut");
-    copyFileSync("/bin/sleep", fakeBin);
-    chmodSync(fakeBin, 0o755);
-    const child = spawn(fakeBin, ["60"], { stdio: "ignore" });
+    writeFileSync(join(fakeDir, "ps"), "#!/bin/sh\necho /Applications/CapCut.app/Contents/MacOS/CapCut\n");
+    chmodSync(join(fakeDir, "ps"), 0o755);
+    const env = { PATH: `${fakeDir}${delimiter}${process.env.PATH}` };
     after(() => {
-      child.kill("SIGKILL");
       f.cleanup();
       rmSync(fakeDir, { recursive: true, force: true });
     });
 
-    // Wait until the process table shows the fake editor.
-    const deadline = Date.now() + 5_000;
-    while (editorProcesses().length === 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    const realPath = process.env.PATH;
+    process.env.PATH = env.PATH;
+    try {
+      assert.ok(editorProcesses().length > 0, "the stand-in ps should report the fake editor");
+    } finally {
+      process.env.PATH = realPath;
     }
-    assert.ok(editorProcesses().length > 0, "fake CapCut process should be detectable");
 
-    const refused = spawnCli(["sync-timelines", f.dir, "--apply"]);
+    const refused = spawnCli(["sync-timelines", f.dir, "--apply"], { env });
     assert.equal(refused.status, 1);
     assert.match(refused.stderr, /is running/);
     assert.ok(existsSync(join(f.dir, "draft_info.json")));
@@ -456,7 +448,7 @@ describe("sync-timelines", () => {
       "refusal must not write",
     );
 
-    const forced = spawnCli(["sync-timelines", f.dir, "--apply", "--force-write"]);
+    const forced = spawnCli(["sync-timelines", f.dir, "--apply", "--force-write"], { env });
     assert.equal(forced.status, 0, `stderr: ${forced.stderr}`);
     assert.equal(JSON.parse(readFileSync(join(f.dir, "draft_info.json"), "utf-8")).id, "guid-canonical");
   });
