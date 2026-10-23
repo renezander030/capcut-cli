@@ -24,6 +24,28 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  package:
+    # What npm would ship: pack the tarball, install it into an empty prefix
+    # and run the installed CLI and library (scripts/release-smoke.mjs).
+    runs-on: ubuntu-latest
+    name: packed tarball installs and runs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack and smoke-test the tarball
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/xdg
+          CAPCUT_CLI_APP_VERSIONS: ${{ runner.temp }}/xdg/app-versions.json
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
+          npm run smoke:package -- "$RUNNER_TEMP"/pack/capcut-cli-*.tgz
+
   lint:
     runs-on: ubuntu-latest
     steps:

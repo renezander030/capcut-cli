@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { compileDraft } from "../dist/compile.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// compileDraft records the app version it saw for the write guard's tripwire;
+// keep that in a scratch state file, never the developer's own
+// ~/.config/capcut-cli/app-versions.json.
+const stateDir = mkdtempSync(join(tmpdir(), "capcut-compile-fractional-state-"));
+const previousState = process.env.CAPCUT_CLI_APP_VERSIONS;
+process.env.CAPCUT_CLI_APP_VERSIONS = join(stateDir, "versions.json");
+after(() => {
+  rmSync(stateDir, { recursive: true, force: true });
+  if (previousState === undefined) delete process.env.CAPCUT_CLI_APP_VERSIONS;
+  else process.env.CAPCUT_CLI_APP_VERSIONS = previousState;
+});
 const US = 1_000_000;
 const bar = (60 / 136) * 4;
 

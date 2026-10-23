@@ -29,6 +29,15 @@ jobs:
       - run: npm ci
       - run: npm test
 
+      - name: The packed tarball installs and runs
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/xdg
+          CAPCUT_CLI_APP_VERSIONS: ${{ runner.temp }}/xdg/app-versions.json
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
+          npm run smoke:package -- "$RUNNER_TEMP"/pack/capcut-cli-*.tgz
+
       - name: npm 11 for trusted publishing
         run: npm install -g npm@11.12.1
 
