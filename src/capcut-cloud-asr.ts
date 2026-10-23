@@ -165,6 +165,71 @@ export interface CloudAsrOptions {
   durationMs: number; // length of the audio; the recognition task covers 0..durationMs
   verbose?: boolean;
   onProgress?: (progress: number, status: string) => void;
+  /** Longest wait for one request before it is abandoned (default 60 s; the upload gets more per MiB). */
+  requestTimeoutMs?: number;
+  /** Pause before the n-th retry is n times this (default 1.5 s). */
+  retryDelayMs?: number;
+  /** Pause between status polls (default 2 s). */
+  pollIntervalMs?: number;
+  /** Longest wait for the recognition to finish (default: pollBudgetMs of the audio's length). */
+  pollBudgetMs?: number;
+}
+
+/** How long to wait for the recognition: 2 minutes plus half the audio's length, at most 30 minutes. */
+export function pollBudgetMs(durationMs: number): number {
+  return Math.min(30 * 60_000, 120_000 + Math.max(0, durationMs) / 2);
+}
+
+interface Timing {
+  requestTimeoutMs: number;
+  retryDelayMs: number;
+  pollIntervalMs: number;
+  pollBudgetMs: number;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const seconds = (ms: number) => (ms >= 1000 ? Math.round(ms / 1000) : ms / 1000);
+
+/** Attempts for the calls that are safe to repeat (signing, upload-node lookup, status polls). */
+const RETRY_ATTEMPTS = 3;
+
+/**
+ * One request with a time limit. `retry` repeats a call that is safe to repeat
+ * when the network fails, it times out, or the service answers 429 or 5xx,
+ * pausing n x retryDelayMs before the n-th retry; the upload, its commit and
+ * the task creation are never repeated. Any other answer is returned as is.
+ */
+async function send(
+  url: string,
+  init: RequestInit,
+  step: string,
+  t: Timing,
+  retry: boolean,
+  timeoutMs = t.requestTimeoutMs,
+): Promise<Response> {
+  const attempts = retry ? RETRY_ATTEMPTS : 1;
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (e) {
+      if (attempt < attempts) {
+        await sleep(t.retryDelayMs * attempt);
+        continue;
+      }
+      const error = e as Error;
+      throw new Error(
+        error.name === "TimeoutError"
+          ? `CapCut ${step} request timed out after ${seconds(timeoutMs)} s${attempts > 1 ? ` (${attempts} tries)` : ""}.`
+          : `CapCut ${step} request failed: ${error.message}`,
+      );
+    }
+    if (!res.ok && (res.status === 429 || res.status >= 500) && attempt < attempts) {
+      await sleep(t.retryDelayMs * attempt);
+      continue;
+    }
+    return res;
+  }
 }
 
 export interface CloudAsrResult {
@@ -187,8 +252,10 @@ async function postEditorApi<T>(
   headers: Record<string, string>,
   body: string,
   step: string,
+  t: Timing,
+  retry: boolean,
 ): Promise<EditorApiReply<T>> {
-  const res = await fetch(url, { method: "POST", headers, body });
+  const res = await send(url, { method: "POST", headers, body }, step, t, retry);
   if (!res.ok) {
     throw new Error(`CapCut ${step} HTTP error: ${res.status} ${res.statusText}`);
   }
@@ -220,16 +287,16 @@ interface ApplyUploadResult {
 }
 
 /** Step 1: Request upload signature from CapCut Web API. */
-async function getUploadSignature(): Promise<UploadSignatureData> {
+async function getUploadSignature(t: Timing): Promise<UploadSignatureData> {
   const url = "https://editor-api-sg.capcutapi.com/lv/v1/upload_sign?aid=359289&device_platform=windows";
   const body = JSON.stringify({ biz: "cc_pc_text_recognize", key_version: "v5" });
-  const json = await postEditorApi<UploadSignatureData>(url, DEFAULT_CAPCUT_HEADERS, body, "upload_sign");
+  const json = await postEditorApi<UploadSignatureData>(url, DEFAULT_CAPCUT_HEADERS, body, "upload_sign", t, true);
   requireRetOk(json, "upload_sign");
   return json.data as UploadSignatureData;
 }
 
 /** Step 2: Apply for upload node and storage location via ByteDance VOD. */
-async function applyUpload(creds: UploadSignatureData): Promise<ApplyUploadResult> {
+async function applyUpload(creds: UploadSignatureData, t: Timing): Promise<ApplyUploadResult> {
   const path = `/top/v1?Action=ApplyUploadInner&SpaceName=${creds.space_name}&UseQuic=false&Version=2020-11-19&device_platform=win`;
   const signed = signAwsV4(
     {
@@ -243,10 +310,7 @@ async function applyUpload(creds: UploadSignatureData): Promise<ApplyUploadResul
     creds,
   );
 
-  const res = await fetch(signed.url, {
-    method: "GET",
-    headers: signed.headers,
-  });
+  const res = await send(signed.url, { method: "GET", headers: signed.headers }, "ApplyUploadInner", t, true);
   if (!res.ok) {
     throw new Error(`CapCut ApplyUploadInner HTTP error: ${res.status} ${res.statusText}`);
   }
@@ -285,21 +349,30 @@ async function applyUpload(creds: UploadSignatureData): Promise<ApplyUploadResul
 }
 
 /** Step 3: Upload binary audio content to TOS storage bucket. */
-async function uploadBinary(applyData: ApplyUploadResult, fileBuffer: Buffer): Promise<string> {
+async function uploadBinary(applyData: ApplyUploadResult, fileBuffer: Buffer, t: Timing): Promise<string> {
   const hash = crc32(fileBuffer);
   const authHeaders = { Authorization: applyData.auth };
 
   // 3.1 Transfer
   const transferUrl = `https://${applyData.host}/upload/v1/${applyData.oid}?uploadid=${applyData.uploadId}&part_number=0&phase=transfer`;
-  const transferRes = await fetch(transferUrl, {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": "application/octet-stream",
-      "X-Upload-Content-CRC32": hash,
+  // The body takes time to send: one more second per 128 KiB on top of the request limit.
+  const transferTimeoutMs = t.requestTimeoutMs + Math.ceil(fileBuffer.length / (128 * 1024)) * 1000;
+  const transferRes = await send(
+    transferUrl,
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/octet-stream",
+        "X-Upload-Content-CRC32": hash,
+      },
+      body: new Uint8Array(fileBuffer),
     },
-    body: new Uint8Array(fileBuffer),
-  });
+    "TOS transfer",
+    t,
+    false,
+    transferTimeoutMs,
+  );
   if (!transferRes.ok) {
     throw new Error(`CapCut TOS transfer error: ${transferRes.status} ${transferRes.statusText}`);
   }
@@ -307,14 +380,13 @@ async function uploadBinary(applyData: ApplyUploadResult, fileBuffer: Buffer): P
   // 3.2 Finish
   const finishUrl = `https://${applyData.host}/upload/v1/${applyData.oid}?uploadmode=part&phase=finish&uploadid=${applyData.uploadId}`;
   const finishBody = `0:${hash}`;
-  const finishRes = await fetch(finishUrl, {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": "text/plain",
-    },
-    body: finishBody,
-  });
+  const finishRes = await send(
+    finishUrl,
+    { method: "POST", headers: { ...authHeaders, "Content-Type": "text/plain" }, body: finishBody },
+    "TOS finish",
+    t,
+    false,
+  );
   if (!finishRes.ok) {
     throw new Error(`CapCut TOS finish error: ${finishRes.status} ${finishRes.statusText}`);
   }
@@ -332,6 +404,7 @@ async function commitUpload(
   applyData: ApplyUploadResult,
   storeKey: string,
   creds: UploadSignatureData,
+  t: Timing,
 ): Promise<{ cookie?: string }> {
   const body = JSON.stringify({
     Functions: [
@@ -362,11 +435,7 @@ async function commitUpload(
     creds,
   );
 
-  const res = await fetch(signed.url, {
-    method: "POST",
-    headers: signed.headers,
-    body,
-  });
+  const res = await send(signed.url, { method: "POST", headers: signed.headers, body }, "CommitUploadInner", t, false);
   if (!res.ok) {
     throw new Error(`CapCut CommitUploadInner HTTP error: ${res.status} ${res.statusText}`);
   }
@@ -387,6 +456,7 @@ async function createSttTask(
   vid: string,
   md5: string,
   duration: number,
+  t: Timing,
   cookie?: string,
 ): Promise<{ id: string; token: string }> {
   const url =
@@ -438,6 +508,8 @@ async function createSttTask(
     headers,
     body,
     "createSttTask",
+    t,
+    false,
   );
   requireRetOk(json, "createSttTask");
 
@@ -450,6 +522,7 @@ async function createSttTask(
 async function pollSttStatus(
   taskId: string,
   token: string,
+  t: Timing,
   cookie?: string,
   opts?: CloudAsrOptions,
 ): Promise<CloudAsrPayload> {
@@ -467,8 +540,8 @@ async function pollSttStatus(
   };
   if (cookie) queryHeaders["Cookie"] = cookie;
 
-  const maxAttempts = 60; // 60 x 2s = 120s timeout
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  const deadline = Date.now() + t.pollBudgetMs;
+  for (;;) {
     const json = await postEditorApi<{
       tasks?: Array<{
         id: string;
@@ -478,7 +551,7 @@ async function pollSttStatus(
         detail_info?: string;
         err_msg?: string;
       }>;
-    }>(url, queryHeaders, body, "poll query");
+    }>(url, queryHeaders, body, "poll query", t, true);
 
     if (json.ret === "1014") {
       throw new Error(
@@ -508,10 +581,13 @@ async function pollSttStatus(
       throw new Error(`CapCut Cloud ASR processing failed: ${task.err_msg || "Unknown error"}`);
     }
 
-    await new Promise((r) => setTimeout(r, 2000));
+    if (Date.now() + t.pollIntervalMs > deadline) break;
+    await sleep(t.pollIntervalMs);
   }
 
-  throw new Error("CapCut Cloud ASR timed out after 120 seconds.");
+  throw new Error(
+    `CapCut Cloud ASR timed out after ${seconds(t.pollBudgetMs)} seconds (the wait grows with the audio's length).`,
+  );
 }
 
 /**
@@ -531,22 +607,28 @@ export async function transcribeAudioCapcutCloud(audioPath: string, opts: CloudA
   const md5 = createHash("md5").update(fileBuffer).digest("hex");
 
   // 1. Sign
-  const creds = await getUploadSignature();
+  const t: Timing = {
+    requestTimeoutMs: opts.requestTimeoutMs ?? 60_000,
+    retryDelayMs: opts.retryDelayMs ?? 1500,
+    pollIntervalMs: opts.pollIntervalMs ?? 2000,
+    pollBudgetMs: opts.pollBudgetMs ?? pollBudgetMs(durationMs),
+  };
+  const creds = await getUploadSignature(t);
 
   // 2. Apply upload
-  const applyData = await applyUpload(creds);
+  const applyData = await applyUpload(creds, t);
 
   // 3. Upload binary
-  const storeKey = await uploadBinary(applyData, fileBuffer);
+  const storeKey = await uploadBinary(applyData, fileBuffer, t);
 
   // 4. Commit upload
-  const { cookie } = await commitUpload(applyData, storeKey, creds);
+  const { cookie } = await commitUpload(applyData, storeKey, creds, t);
 
   // 5. Create STT task
-  const taskInfo = await createSttTask(applyData.vid, md5, durationMs, cookie);
+  const taskInfo = await createSttTask(applyData.vid, md5, durationMs, t, cookie);
 
   // 6. Poll status
-  const payload = await pollSttStatus(taskInfo.id, taskInfo.token, cookie, opts);
+  const payload = await pollSttStatus(taskInfo.id, taskInfo.token, t, cookie, opts);
 
   const utterances = payload.utterances || [];
   const cues: CaptionCue[] = [];

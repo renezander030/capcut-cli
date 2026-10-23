@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { transcribeAudioCapcutCloud } from "../dist/capcut-cloud-asr.js";
+import { pollBudgetMs, transcribeAudioCapcutCloud } from "../dist/capcut-cloud-asr.js";
 
 // The whole upload-and-recognize exchange, offline: a stand-in fetch answers
 // each CapCut endpoint the way the service does, so the flow, its error texts
@@ -21,6 +21,9 @@ afterEach(() => {
 
 const json = (body, init = {}) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" }, ...init });
+
+// Retries and polls without the real pauses.
+const FAST = { retryDelayMs: 0, pollIntervalMs: 0 };
 
 function service(overrides = {}) {
   const calls = [];
@@ -102,7 +105,7 @@ function service(overrides = {}) {
                   ? "task_query"
                   : "unknown";
     calls.push({ step, url: u, method: init.method, headers: init.headers ?? {}, body: init.body });
-    return answers[step]();
+    return answers[step](init);
   };
   return calls;
 }
@@ -247,7 +250,7 @@ describe("caption --cloud recognition exchange (offline)", () => {
   for (const [name, overrides, message] of failures) {
     it(`stops with the service's reason: ${name}`, async () => {
       service(overrides);
-      await assert.rejects(transcribeAudioCapcutCloud(audio, { durationMs: 1000 }), { message });
+      await assert.rejects(transcribeAudioCapcutCloud(audio, { durationMs: 1000, ...FAST }), { message });
     });
   }
 
@@ -260,5 +263,79 @@ describe("caption --cloud recognition exchange (offline)", () => {
       message: "CapCut Cloud ASR needs the audio length in ms (got 0).",
     });
     assert.equal(calls.length, 0);
+  });
+});
+
+describe("caption --cloud recognition exchange — patience and retries", () => {
+  const signResult = {
+    ret: "0",
+    data: { access_key_id: "AK", secret_access_key: "SK", session_token: "ST", space_name: "sp", domain: "vod.test" },
+  };
+
+  it("repeats a safe call after a 5xx or a dropped connection, then carries on", async () => {
+    let signs = 0;
+    let queries = 0;
+    const calls = service({
+      upload_sign: () => (++signs === 1 ? json({}, { status: 503, statusText: "Busy" }) : json(signResult)),
+      task_query: () => {
+        if (++queries === 1) throw new TypeError("fetch failed");
+        return json({ ret: "0", data: { tasks: [{ id: "task1", status: "succeed", payload: "{}" }] } });
+      },
+    });
+    const res = await transcribeAudioCapcutCloud(audio, { durationMs: 1000, ...FAST });
+    assert.deepEqual(res.cues, []);
+    assert.equal(calls.filter((c) => c.step === "upload_sign").length, 2);
+  });
+
+  it("never repeats the upload, its commit or the task creation", async () => {
+    const calls = service({ task_new: () => json({}, { status: 502, statusText: "Bad Gateway" }) });
+    await assert.rejects(transcribeAudioCapcutCloud(audio, { durationMs: 1000, ...FAST }), {
+      message: "CapCut createSttTask HTTP error: 502 Bad Gateway",
+    });
+    for (const step of ["transfer", "finish", "CommitUploadInner", "task_new"]) {
+      assert.equal(calls.filter((c) => c.step === step).length, 1, step);
+    }
+  });
+
+  it("gives up on a safe call after three tries and names the step", async () => {
+    const calls = service({ upload_sign: () => json({}, { status: 500, statusText: "Down" }) });
+    await assert.rejects(transcribeAudioCapcutCloud(audio, { durationMs: 1000, ...FAST }), {
+      message: "CapCut upload_sign HTTP error: 500 Down",
+    });
+    assert.equal(calls.filter((c) => c.step === "upload_sign").length, 3);
+  });
+
+  it("abandons a request that never answers", async () => {
+    const hang = (init) =>
+      new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+    service({ upload_sign: hang });
+    // A real request holds a socket open; the stand-in holds nothing, and the
+    // abort timer alone does not keep the process running.
+    const keepAlive = setInterval(() => {}, 1000);
+    try {
+      await assert.rejects(transcribeAudioCapcutCloud(audio, { durationMs: 1000, ...FAST, requestTimeoutMs: 20 }), {
+        message: "CapCut upload_sign request timed out after 0.02 s (3 tries).",
+      });
+    } finally {
+      clearInterval(keepAlive);
+    }
+  });
+
+  it("waits for the recognition as long as the audio needs, then stops", async () => {
+    assert.equal(pollBudgetMs(0), 120_000);
+    assert.equal(pollBudgetMs(600_000), 420_000);
+    assert.equal(pollBudgetMs(10 * 3_600_000), 30 * 60_000);
+    let polls = 0;
+    service({
+      task_query: () => {
+        polls++;
+        return json({ ret: "0", data: { tasks: [{ id: "task1", status: "running", progress: 40 }] } });
+      },
+    });
+    await assert.rejects(
+      transcribeAudioCapcutCloud(audio, { durationMs: 1000, retryDelayMs: 0, pollIntervalMs: 5, pollBudgetMs: 40 }),
+      { message: "CapCut Cloud ASR timed out after 0.04 seconds (the wait grows with the audio's length)." },
+    );
+    assert.ok(polls >= 2, `polled ${polls} times`);
   });
 });
