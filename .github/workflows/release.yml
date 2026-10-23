@@ -29,6 +29,9 @@ jobs:
       - run: npm ci
       - run: npm test
 
+      - name: ffmpeg, so the smoke reads real media durations
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: The packed tarball installs and runs
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/xdg
