@@ -1910,7 +1910,6 @@ function cmdSpeed(draft: Draft, filePath: string, segId: string, multiplier: str
 async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   const { applyLoudness, measureLoudness } = await import("./loudness.js");
   if (flags.apply && flags.target === undefined) die("--apply needs --target <LUFS>: say what loudness to reach.");
-  if (flags.perClip && flags.target === undefined) die("--per-clip needs --target <LUFS>.");
   let report: ReturnType<typeof measureLoudness>;
   try {
     report = measureLoudness(draft, {
@@ -1922,9 +1921,6 @@ async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promis
     });
   } catch (e) {
     die((e as Error).message);
-  }
-  if (flags.target !== undefined && report.program_lufs === null) {
-    die("No clip could be measured (no local, audible media on audio or video tracks), so there is no gain to set.");
   }
   let changed = 0;
   if (flags.apply) {

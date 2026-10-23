@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { Draft, Segment } from "./draft.js";
+import { isLocalPath } from "./materials-register.js";
 
 export interface LoudnessOptions {
   ffmpegCmd?: string;
@@ -122,6 +123,7 @@ function audibleSegments(draft: Draft): Array<{ segment: Segment; track: string;
 /** Measure every audible clip; with a target, compute the gain each one gets. */
 export function measureLoudness(draft: Draft, opts: LoudnessOptions = {}): LoudnessReport {
   const command = opts.ffmpegCmd ?? "ffmpeg";
+  if (opts.perClip && opts.target === undefined) throw new Error("--per-clip needs --target <LUFS>.");
   const maxGainDb = opts.maxGainDb ?? DEFAULT_MAX_GAIN_DB;
   if (!Number.isFinite(maxGainDb) || maxGainDb < 0) throw new Error("--max-gain-db must be a number >= 0.");
   if (opts.target !== undefined && (!Number.isFinite(opts.target) || opts.target > 0 || opts.target < -70)) {
@@ -150,8 +152,8 @@ export function measureLoudness(draft: Draft, opts: LoudnessOptions = {}): Loudn
       clip.skipped = "muted";
       continue;
     }
-    const file = path && !isAbsolute(path) && opts.draftDir ? resolve(opts.draftDir, path) : (path ?? "");
-    if (!file || /^https?:\/\//i.test(file) || !existsSync(file)) {
+    const file = isLocalPath(path) && !isAbsolute(path) && opts.draftDir ? resolve(opts.draftDir, path) : path;
+    if (!isLocalPath(file) || !existsSync(file)) {
       clip.skipped = "media not found";
       continue;
     }
@@ -191,7 +193,12 @@ export function measureLoudness(draft: Draft, opts: LoudnessOptions = {}): Loudn
     max_gain_db: maxGainDb,
     clips,
   };
-  if (opts.target === undefined || program === null) return report;
+  if (opts.target === undefined) return report;
+  if (program === null) {
+    throw new Error(
+      "No clip could be measured (no local, audible media on audio or video tracks), so there is no gain to set.",
+    );
+  }
   const target = opts.target;
   for (const clip of measured) {
     const wanted = target - (opts.perClip ? (clip.effective_lufs as number) : program);

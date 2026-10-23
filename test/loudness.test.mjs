@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { parseEbur128 } from "../dist/loudness.js";
+import { measureLoudness, parseEbur128 } from "../dist/loudness.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
 
@@ -169,6 +169,16 @@ describe("loudness — EBU R128 per clip and the gain to a delivery target", () 
     const r = spawnCli(["loudness", fix.path, "--ffmpeg-cmd", "/nonexistent/ffmpeg"]);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /loudness needs ffmpeg/);
+  });
+
+  it("measureLoudness owns its preconditions: --per-clip needs a target, a target needs a measurable clip", () => {
+    const draft = JSON.parse(readFileSync(new URL("./draft_content.json", import.meta.url), "utf-8"));
+    assert.throws(() => measureLoudness(draft, { perClip: true, maxGainDb: -1 }), {
+      message: "--per-clip needs --target <LUFS>.",
+    });
+    for (const m of [...draft.materials.videos, ...draft.materials.audios]) m.path = "https://example.com/clip";
+    assert.equal(measureLoudness(draft).program_lufs, null, "without a target, nothing measurable is a report");
+    assert.throws(() => measureLoudness(draft, { target: -14 }), { message: /^No clip could be measured/ });
   });
 
   it("measures a real tone with the real meter", { skip: !hasFfmpeg }, (t) => {
