@@ -168,6 +168,7 @@ export const COMMANDS = [
   "quickstart",
   "compile",
   "render",
+  "loudness",
   "detect-scenes",
   "detect-silence",
   "detect-retakes",
@@ -264,6 +265,14 @@ Create:
              draft, so use --drafts (not --out) with --data.
 
 Preview:
+  loudness   <project> [--target <LUFS>] [--per-clip] [--max-gain-db <dB>] [--apply]
+             Measure every audible clip with ffmpeg's EBU R128 meter (over the
+             part of its media the timeline plays) and estimate the export's
+             integrated loudness. A draft carries no master gain, so a quiet
+             recording exports quiet. --target (e.g. -14 long-form, -11 shorts)
+             adds the gain that reaches it, one gain for the whole mix (keeps
+             the balance) or per clip with --per-clip; --apply writes it as
+             segment volume. Boosts are capped at --max-gain-db (default 20).
   render     <project> [--out <file.mp4>] [options]
              Render a low-res ffmpeg PROXY preview of the timeline so you can
              watch an edit without opening CapCut. Flattens the main video
@@ -1104,6 +1113,10 @@ interface Flags {
   videoBitrate?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
+  // loudness: delivery target, per-clip normalization, boost cap
+  target?: number;
+  perClip?: boolean;
+  maxGainDb?: number;
   // render: refuse an unfaithful proxy / fail on output duration drift
   strict?: boolean;
   verify?: boolean;
@@ -1223,6 +1236,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--ripple", "ripple"],
   ["--word-reveal", "wordReveal"],
   ["--soft-captions", "softCaptions"],
+  ["--per-clip", "perClip"],
   ["--strict", "strict"],
   ["--verify", "verify"],
   ["--invert", "invert"],
@@ -1333,6 +1347,8 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--width", "width"],
   ["--height", "height"],
   ["--volume", "volume"],
+  ["--target", "target"],
+  ["--max-gain-db", "maxGainDb"],
   ["--min-script-match", "minScriptMatch"],
   ["--window", "window"],
   ["--similarity", "similarity"],
@@ -1886,6 +1902,36 @@ function cmdSpeed(draft: Draft, filePath: string, segId: string, multiplier: str
   }
   if (save) saveDraft(filePath, draft);
   out({ ok: true, id: seg.id, old_speed: oldSpeed, new_speed: speed }, flags);
+}
+
+// `loudness` measures the draft's audible clips (EBU R128) and, with
+// --target, the gain that brings the export there; --apply writes it as
+// segment volume through the normal journaled save.
+async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promise<void> {
+  const { applyLoudness, measureLoudness } = await import("./loudness.js");
+  if (flags.apply && flags.target === undefined) die("--apply needs --target <LUFS>: say what loudness to reach.");
+  if (flags.perClip && flags.target === undefined) die("--per-clip needs --target <LUFS>.");
+  let report: ReturnType<typeof measureLoudness>;
+  try {
+    report = measureLoudness(draft, {
+      ffmpegCmd: flags.ffmpegCmd,
+      target: flags.target,
+      perClip: flags.perClip,
+      maxGainDb: flags.maxGainDb,
+      draftDir: draftProjectDir(filePath),
+    });
+  } catch (e) {
+    die((e as Error).message);
+  }
+  if (flags.target !== undefined && report.program_lufs === null) {
+    die("No clip could be measured (no local, audible media on audio or video tracks), so there is no gain to set.");
+  }
+  let changed = 0;
+  if (flags.apply) {
+    changed = applyLoudness(draft, report);
+    if (changed > 0) saveDraft(filePath, draft);
+  }
+  out({ ok: true, ...report, applied: Boolean(flags.apply) && !isDryRun(), changed }, flags);
 }
 
 function cmdVolume(draft: Draft, filePath: string, segId: string, levelStr: string, flags: Flags, save = true): void {
@@ -5347,6 +5393,8 @@ const SUMMARIES: Record<string, string> = {
   init: "Create a new empty draft from a template.",
   compile: "Build a draft from a declarative JSON spec (the inverse of describe).",
   render: "Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render.",
+  loudness:
+    "Measure each audible clip's loudness (EBU R128) and, with --target, set the gain that brings the export there.",
   "detect-scenes":
     "Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut.",
   "detect-silence":
@@ -6422,6 +6470,9 @@ async function main(): Promise<void> {
       break;
     case "render":
       await cmdRender(draft, filePath, flags);
+      break;
+    case "loudness":
+      await cmdLoudness(draft, filePath, flags);
       break;
     case "detect-retakes":
       await cmdDetectRetakes(draft, flags);
