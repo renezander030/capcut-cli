@@ -4,6 +4,12 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-10-23
+
+### Fixed
+
+- CI and the release workflow install ffmpeg before the packed-tarball smoke. The smoke checks the media duration `compile` reads through ffprobe, and the hosted Ubuntu runner has no ffprobe, so the 0.31.0 release stopped before it published. 0.31.1 carries everything listed under 0.31.0.
+
 ## [0.31.0] — 2026-10-23
 
 ### Added
