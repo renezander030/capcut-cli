@@ -160,6 +160,16 @@ CapCut / 剪映把每个项目存为本地 JSON。capcut-cli 加载这个存储�
 - [CHANGELOG.md](./CHANGELOG.md) · [Releases](https://github.com/renezander030/capcut-cli/releases) —— 更新内容
 - [draftcat](https://github.com/renezander030/draftcat) —— 姊妹项目：受治理的 AI 流水线（Go, MIT），同样单二进制、无需 API
 
+## René 的其他项目
+
+capcut-cli 是我为 AI agent 编写的一系列 CLI 之一，目标是让 agent 安全地完成真实工作。如果你也在写 agent 脚本，这些项目可能有用：
+
+- [agentic-task-system](https://github.com/renezander030/agentic-task-system) —— 为 agent 提供任务与知识上下文，对接 TickTick、Notion、GitHub、Obsidian 等（CLI + MCP），写入需审核，可撤销。
+- [skillgate](https://github.com/renezander030/skillgate) —— 在你定义的完成标准通过之前阻止提交或发布，防止 agent 在测试通过前就宣称"完成"。
+- [agent-approval-gate](https://github.com/renezander030/agent-approval-gate) —— agent 起草、人工批准后才执行，并保留审计记录。
+
+[在 GitHub 上关注 René](https://github.com/renezander030)，第一时间看到新项目。
+
 ## 商标声明
 
 CapCut™ 与剪映™ 为字节跳动有限公司（ByteDance Ltd.）的商标。本项目为非官方项目，与字节跳动无隶属或背书关系；相关商标仅用于指称性描述以说明互操作性。

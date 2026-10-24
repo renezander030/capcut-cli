@@ -184,6 +184,16 @@ CapCut/JianYing store each project as local JSON. capcut-cli loads that store, v
 - [draftcat](https://github.com/renezander030/draftcat) — sibling project: governed AI pipelines (Go, MIT), same single-binary, no-API design
 - [skillgate](https://github.com/renezander030/skillgate) — sibling project: deterministic finish-line gates (Node, MIT), for when your agent reports "done" before the tests pass
 
+## More from René
+
+capcut-cli is one of several CLIs I build so AI agents can do real work safely. If you script agents, these may help too:
+
+- [agentic-task-system](https://github.com/renezander030/agentic-task-system) gives your agent task and knowledge context over TickTick, Notion, GitHub, Obsidian and more (CLI + MCP), with reviewed writes and undo.
+- [skillgate](https://github.com/renezander030/skillgate) blocks commit or publish until your definition of done passes, for when an agent says "done" before the tests do.
+- [agent-approval-gate](https://github.com/renezander030/agent-approval-gate) lets an agent draft, a person approve, and only then dispatch, with an audit trail.
+
+[Follow René on GitHub](https://github.com/renezander030) to see the next ones.
+
 ## Trademarks
 
 CapCut™ and JianYing™ (剪映) are trademarks of ByteDance Ltd. This project is unofficial and is not affiliated with or endorsed by ByteDance; the marks are used nominatively to describe interoperability.
