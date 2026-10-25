@@ -1651,7 +1651,7 @@ function cmdTracks(draft: Draft, flags: Flags): void {
   const data = draft.tracks.map((t, i) => {
     const end = t.segments.reduce((max, s) => {
       const e = s.target_timerange.start + s.target_timerange.duration;
-      return e > max ? e : max;
+      return Math.max(e, max);
     }, 0);
     return {
       index: i,
