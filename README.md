@@ -22,6 +22,8 @@ Open the result in CapCut with every track still editable. capcut-cli works dire
 
 **▶ Captioned output example (35 seconds)**
 
+https://github.com/user-attachments/assets/ba6d4f4c-626b-4d09-bcf2-d32471c427be
+
 ## Install and open your first editable draft
 
 **Prerequisites:** Node ≥ 18 (built-ins only — no native modules). Optional tools unlock specific commands: Whisper for `caption`, FFmpeg for `render`, ffprobe for automatic media metadata, and `ANTHROPIC_API_KEY` for `translate`.
