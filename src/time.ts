@@ -47,33 +47,30 @@ export function formatDuration(us: number): string {
   return `${m}m${rem.toFixed(1)}s`;
 }
 
+/** A complete decimal time, rounded once to safe integer microseconds. */
 export function parseTimeInput(input: string): number {
-  // "+0.5s", "-1s", "1.5s", "+500ms", "1:30", "0:05.5"
-  const negative = input.startsWith("-");
-  const clean = input.replace(/^[+-]/, "");
-
-  if (clean.endsWith("ms")) {
-    const val = parseFloat(clean.replace("ms", ""));
-    return (negative ? -1 : 1) * Math.round(val * US_PER_MS);
+  // Decimal seconds (bare or s), milliseconds, M:SS and H:MM:SS. Clock
+  // fields retain their existing unrestricted ranges; only the shape is strict.
+  const scalar = /^([+-]?)(\d+(?:\.\d*)?|\.\d+)(ms|s)?$/.exec(input);
+  const clock = /^([+-]?)(\d+):(?:(\d+):)?(\d+(?:\.\d*)?|\.\d+)$/.exec(input);
+  let sign: string;
+  let magnitude: number;
+  if (scalar && scalar[0] === input) {
+    sign = scalar[1];
+    magnitude = Number(scalar[2]) * (scalar[3] === "ms" ? US_PER_MS : US_PER_SEC);
+  } else if (clock && clock[0] === input) {
+    sign = clock[1];
+    const first = Number(clock[2]);
+    const seconds =
+      clock[3] === undefined ? first * 60 + Number(clock[4]) : first * 3600 + Number(clock[3]) * 60 + Number(clock[4]);
+    magnitude = seconds * US_PER_SEC;
+  } else {
+    throw new Error(`Invalid time: ${input}`);
   }
-  if (clean.endsWith("s")) {
-    const val = parseFloat(clean.replace("s", ""));
-    return (negative ? -1 : 1) * secondsToUs(val);
-  }
-  if (clean.includes(":")) {
-    const parts = clean.split(":");
-    let totalSec = 0;
-    if (parts.length === 3) {
-      totalSec = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2]);
-    } else {
-      totalSec = parseInt(parts[0], 10) * 60 + parseFloat(parts[1]);
-    }
-    return (negative ? -1 : 1) * secondsToUs(totalSec);
-  }
-  // bare number = seconds
-  const val = parseFloat(clean);
-  if (Number.isNaN(val)) throw new Error(`Invalid time: ${input}`);
-  return (negative ? -1 : 1) * secondsToUs(val);
+  const microseconds = Math.round(magnitude);
+  if (!Number.isSafeInteger(microseconds))
+    throw new Error(`Invalid time: ${input} (microseconds exceed the safe range)`);
+  return sign === "-" ? -microseconds : microseconds;
 }
 
 function pad(n: number): string {

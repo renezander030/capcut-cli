@@ -4,6 +4,14 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-10-29
+
+### Fixed
+
+- Commands that take a time now require a complete signed decimal, seconds/milliseconds value, or clock value within the safe microsecond range. Inputs such as `1oops`, empty clock fields and non-finite values fail before a draft write instead of being partly parsed or saved as invalid timing. Existing signed decimal and clock formats retain their rounding and field ranges.
+- `translate` checks that the response contains exactly one string per input before editing or writing the translated draft. Missing, extra or non-string entries now fail with a retry message; they no longer silently leave some cues untranslated or turn objects into caption text. A rejected response leaves an existing output file unchanged.
+- `import-srt`, `import-ass`, their stdin inputs and `compile` caption files reject malformed UTF-8 with an instruction to convert the source file. Previously, decoding could silently insert replacement characters into the draft. UTF-8 BOMs and intentionally encoded replacement characters remain valid.
+
 ## [0.31.1] — 2026-10-23
 
 ### Fixed

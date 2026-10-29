@@ -68,7 +68,7 @@ export async function translateDraft(draft: Draft, opts: TranslateOptions): Prom
   const pairs: TranslateResult["pairs"] = [];
   for (let i = 0; i < collected.length; i++) {
     const original = collected[i].original;
-    const translated = translations[i] ?? original;
+    const translated = translations[i];
     const mat = texts.find((m) => m.id === collected[i].id);
     if (mat) mat.content = updateTextContent(mat.content, translated);
     pairs.push({ id: collected[i].id, original, translated });
@@ -128,11 +128,17 @@ async function callAnthropicBatch(
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/, "")
     .trim();
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(clean) as unknown;
-    if (!Array.isArray(parsed)) throw new Error(`Expected JSON array, got: ${typeof parsed}`);
-    return parsed.map((x) => (typeof x === "string" ? x : String(x)));
+    parsed = JSON.parse(clean) as unknown;
   } catch {
     throw new Error(`Failed to parse model output as JSON array. Raw: ${clean.slice(0, 300)}`);
   }
+  if (!Array.isArray(parsed) || parsed.length !== texts.length || parsed.some((item) => typeof item !== "string")) {
+    throw new Error(
+      `Translation response must contain exactly ${texts.length} strings in input order. ` +
+        "No translated draft was written; retry the translation.",
+    );
+  }
+  return parsed as string[];
 }

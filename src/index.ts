@@ -13,7 +13,7 @@ import {
   trackAppVersion,
 } from "./app-versions.js";
 import type { AssEvent, AssStyleDef } from "./ass.js";
-import { parseJsonObject, stripBom } from "./bom.js";
+import { parseJsonObject, readSubtitleText, stripBom } from "./bom.js";
 import {
   buildCommandSpecs,
   type CommandSpec,
@@ -3767,7 +3767,7 @@ async function cmdImportSrt(draft: Draft, filePath: string, positional: string[]
   const { parseSrt } = await import("./srt.js");
   const srtArg = positional[2];
   if (!srtArg) die(`Usage: capcut import-srt <project> <srt-path-or-->`);
-  const srtContent = stripBom(srtArg === "-" ? readFileSync(0, "utf-8") : readFileSync(srtArg, "utf-8"));
+  const srtContent = readSubtitleText(srtArg === "-" ? 0 : srtArg);
   const cues = parseSrt(srtContent);
   if (cues.length === 0) die(`SRT produced 0 cues`);
   await importCuesToDraft(draft, filePath, cues, flags, "srt");
@@ -3777,7 +3777,7 @@ async function cmdImportAss(draft: Draft, filePath: string, positional: string[]
   const { parseAss } = await import("./ass.js");
   const assArg = positional[2];
   if (!assArg) die(`Usage: capcut import-ass <project> <ass-path-or-->`);
-  const assContent = stripBom(assArg === "-" ? readFileSync(0, "utf-8") : readFileSync(assArg, "utf-8"));
+  const assContent = readSubtitleText(assArg === "-" ? 0 : assArg);
   const cues = parseAss(assContent).map((cue) => ({
     ...cue,
     spans: cue.spans?.map((s) => {
