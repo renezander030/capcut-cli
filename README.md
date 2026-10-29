@@ -20,7 +20,9 @@ Open the result in CapCut with every track still editable. capcut-cli works dire
 
 `raw recording` → `silence-aware cuts + styled captions` → `editable CapCut / JianYing draft`
 
-[**▶ Watch a captioned output example (35 seconds)**](./media/cleopatra-family-faces-short.mp4)
+**▶ Captioned output example (35 seconds)**
+
+https://github.com/user-attachments/assets/ba6d4f4c-626b-4d09-bcf2-d32471c427be
 
 ## Install and open your first editable draft
 

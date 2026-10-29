@@ -18,7 +18,9 @@
 
 `原始录音` → `静音感知剪辑 + 样式化字幕` → `可编辑的 CapCut / 剪映草稿`
 
-[**▶ 观看一个带字幕的成片示例（35 秒）**](./media/cleopatra-family-faces-short.mp4)
+**▶ 带字幕的成片示例（35 秒）**
+
+https://github.com/user-attachments/assets/ba6d4f4c-626b-4d09-bcf2-d32471c427be
 
 ## 安装并打开你的第一个可编辑草稿
 
