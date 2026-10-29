@@ -37,3 +37,14 @@ export function readJsonObjectFile(path: string): { raw: string | null; obj: Rec
   const raw = readTextIfPresent(path);
   return { raw, obj: raw === null ? null : parseJsonObject(raw) };
 }
+
+/** Read UTF-8 subtitles without silently replacing malformed source bytes. */
+export function readSubtitleText(path: string | number): string {
+  const bytes = readFileSync(path);
+  try {
+    return stripBom(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    const source = typeof path === "number" ? "stdin" : path;
+    throw new Error(`Subtitle input is not valid UTF-8: ${source}. Convert the file to UTF-8 before importing it.`);
+  }
+}

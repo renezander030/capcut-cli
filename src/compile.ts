@@ -14,7 +14,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { stripBom } from "./bom.js";
+import { readSubtitleText, stripBom } from "./bom.js";
 import {
   addKeyframes,
   addTransition,
@@ -1106,7 +1106,7 @@ function populateDraft(
           break;
         }
         case "captions": {
-          const cues = parseSrt(stripBom(readFileSync(resolvePath(operation.path, specDir), "utf-8")));
+          const cues = parseSrt(readSubtitleText(resolvePath(operation.path, specDir)));
           if (cues.length === 0) throw new Error("captions file contains no cues");
           const offset = Math.round((operation.timeOffset ?? 0) * US);
           for (const cue of cues) {
