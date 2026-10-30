@@ -95,6 +95,43 @@ describe("capcut text-style", () => {
     assert.ok(Array.isArray(r.json.applied));
     assert.ok(r.json.applied.length > 0);
   });
+
+  it("applies --font-size, --color, --align and --y without a preset", () => {
+    const added = spawnCli(["add-text", fix.path, "0s", "2s", "Sale"]);
+    assert.equal(added.status, 0, `stderr: ${added.stderr}`);
+    const id = added.json.segment_id;
+    const r = spawnCli([
+      "text-style",
+      fix.path,
+      id,
+      "--font-size",
+      "22",
+      "--color",
+      "#FFD60A",
+      "--align",
+      "0",
+      "--y",
+      "0.35",
+    ]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.deepEqual(r.json.applied, ["font_size", "color", "alignment", "transform"]);
+
+    const seg = spawnCli(["segment", fix.path, id]).json;
+    assert.equal(seg.clip.transform.y, 0.35);
+    assert.equal(seg._material.font_size, 22);
+    assert.equal(seg._material.text_color, "#FFD60A");
+    assert.equal(seg._material.alignment, 0);
+    const block = JSON.parse(seg._material.content).styles[0];
+    assert.equal(block.size, 22);
+    assert.deepEqual(block.fill.content.solid.color, [1, 214 / 255, 10 / 255]);
+  });
+
+  it("rejects a non-hex --color", () => {
+    const added = spawnCli(["add-text", fix.path, "3s", "1s", "x"]);
+    const r = spawnCli(["text-style", fix.path, added.json.segment_id, "--color", "yellow"]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /#RRGGBB/);
+  });
 });
 
 describe("capcut enums", () => {

@@ -462,6 +462,8 @@ function validateOperationPayload(op: Record<string, unknown>, where: string): v
   if (op.op === "text-style" && op.style && typeof op.style === "object" && !Array.isArray(op.style)) {
     const style = op.style as Record<string, unknown>;
     for (const key of [
+      "fontSize",
+      "alignment",
       "alpha",
       "fixedWidth",
       "fixedHeight",
@@ -490,7 +492,7 @@ function validateOperationPayload(op: Record<string, unknown>, where: string): v
       if (style[key] !== undefined && typeof style[key] !== "boolean")
         throw new Error(`compile: ${where}.style.${key} must be a boolean`);
     }
-    for (const key of ["shadowColor", "borderColor", "bgColor"]) {
+    for (const key of ["color", "shadowColor", "borderColor", "bgColor"]) {
       if (style[key] !== undefined) validateColor(style[key], `${where}.style.${key}`);
     }
   }
