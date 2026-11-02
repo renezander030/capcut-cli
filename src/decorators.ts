@@ -629,6 +629,9 @@ export function requireTextMaterial(
 }
 
 export interface TextStyleOptions {
+  fontSize?: number;
+  color?: string; // hex "#RRGGBB"
+  alignment?: number;
   alpha?: number;
   vertical?: boolean;
   fixedWidth?: number;
@@ -662,6 +665,43 @@ export function setTextStyle(
   const applied: string[] = [];
   const t = text as unknown as Record<string, unknown>;
 
+  if (opts.color !== undefined && !/^#[0-9a-fA-F]{6}$/.test(opts.color)) {
+    throw new Error(`--color must be #RRGGBB, got: ${opts.color}`);
+  }
+  if (opts.fontSize !== undefined || opts.color !== undefined) {
+    if (opts.fontSize !== undefined) {
+      t.font_size = opts.fontSize;
+      applied.push("font_size");
+    }
+    if (opts.color !== undefined) {
+      t.text_color = opts.color;
+      applied.push("color");
+    }
+    // CapCut renders from `content`'s style blocks, not the material fields, and
+    // these flags cover the whole text, so stamp every block.
+    let content: { styles?: Array<Record<string, unknown>> } | null = null;
+    try {
+      content = JSON.parse(text.content);
+    } catch {
+      content = null;
+    }
+    if (content?.styles) {
+      for (const block of content.styles) {
+        if (opts.fontSize !== undefined) block.size = opts.fontSize;
+        if (opts.color !== undefined) {
+          block.fill = {
+            alpha: 1,
+            content: { render_type: "solid", solid: { alpha: 1, color: hexToRgb01(opts.color) } },
+          };
+        }
+      }
+      text.content = JSON.stringify(content);
+    }
+  }
+  if (opts.alignment !== undefined) {
+    t.alignment = opts.alignment;
+    applied.push("alignment");
+  }
   if (opts.alpha !== undefined) {
     t.text_alpha = opts.alpha;
     applied.push("alpha");

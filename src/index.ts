@@ -3057,7 +3057,7 @@ async function cmdBgBlur(draft: Draft, filePath: string, positional: string[], f
 }
 
 async function cmdTextStyle(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
-  const { setTextStyle } = await import("./decorators.js");
+  const { requireTextMaterial, setTextStyle } = await import("./decorators.js");
   const { applyTextPreset, loadPresetFile } = await import("./preset.js");
   const segId = positional[2];
   if (!segId) die(`Usage: capcut text-style <project> <id> [flags]`);
@@ -3070,9 +3070,22 @@ async function cmdTextStyle(draft: Draft, filePath: string, positional: string[]
     applied.push(...presetResult.applied);
   }
   // Explicit flags run after the preset so they override its values.
-  const result = setTextStyle(draft, segId, opts);
+  const result = setTextStyle(draft, segId, {
+    ...opts,
+    fontSize: flags.fontSize,
+    color: flags.color,
+    alignment: flags.align,
+  });
   materialId = result.materialId;
   applied.push(...result.applied);
+  const { seg } = requireTextMaterial(draft, segId);
+  if ((flags.x !== undefined || flags.y !== undefined) && seg.clip) {
+    seg.clip.transform = {
+      x: flags.x ?? seg.clip.transform.x,
+      y: flags.y ?? seg.clip.transform.y,
+    };
+    applied.push("transform");
+  }
   if (applied.length === 0) die(`No styling flags provided. See 'capcut --help'.`);
   saveDraft(filePath, draft);
   out({ ok: true, id: segId, material_id: materialId, applied }, flags);

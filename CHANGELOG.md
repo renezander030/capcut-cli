@@ -4,6 +4,10 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- `text-style` applies `--font-size`, `--color`, `--align`, `--x` and `--y` without `--preset`. The flags were declared (and shared with `add-text`) but only honoured through a preset, so a plain `text-style <project> <id> --font-size 22 --color #FFD60A` exited 0 and left the text unchanged. Font size and colour are written to the material and to every style block CapCut renders from, `--x`/`--y` move the segment as `restyle` does, and `--color` must be `#RRGGBB`. `compile`'s `text-style` operation accepts and validates `fontSize`, `alignment` and `color` too.
+
 ## [0.32.0] — 2026-10-29
 
 ### Fixed
