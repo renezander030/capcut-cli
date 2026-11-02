@@ -56,7 +56,7 @@
 | `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | yes | Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles. |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | yes | Apply byte-accurate multi-style ranges to a text segment. |
 | `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id> \| --words <file.json\|->) [options]` | yes | Transcribe audio via whisper into real caption-track segments. |
-| `translate` | `capcut translate <project> --to <language> --out <path> [options]` | yes | Clone a draft into another language via the Anthropic API. |
+| `translate` | `capcut translate <project> --to <language> --out <path> [options]` | yes | Clone a draft into another language via the Anthropic API or CapCut cloud. |
 | `migrate` | `capcut migrate <project> (--from <version> --to <version> \| --like <project> \| --from-store)` | yes | Apply known schema migrations across version boundaries. |
 | `add-sfx` | `capcut add-sfx <project> <slug> <start> <duration> [options]` | yes | Add a sound effect on a dedicated track. |
 | `chroma` | `capcut chroma <project> <id> (--color <hex> \| --off) [options]` | yes | Green-screen / chroma key a video segment, or --off. |

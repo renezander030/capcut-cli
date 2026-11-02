@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.31.1",
+  "version": "0.32.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -4499,6 +4499,15 @@
           "description": "Language code for Whisper (--cloud detects the language itself)."
         },
         {
+          "name": "translate",
+          "flags": [
+            "--translate"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Translate captions to this target language (e.g. 'vi', 'es', 'de') via CapCut cloud translation with word timings preserved."
+        },
+        {
           "name": "karaoke",
           "flags": [
             "--karaoke"
@@ -4643,7 +4652,7 @@
     },
     {
       "name": "translate",
-      "summary": "Clone a draft into another language via the Anthropic API.",
+      "summary": "Clone a draft into another language via the Anthropic API or CapCut cloud.",
       "usage": "capcut translate <project> --to <language> --out <path> [options]",
       "positionals": [
         {
@@ -4679,6 +4688,15 @@
           "type": "path",
           "required": false,
           "description": "Output path."
+        },
+        {
+          "name": "cloud",
+          "flags": [
+            "--cloud"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Translate via ByteDance's CapCut cloud translation (free, zero API key required)."
         },
         {
           "name": "api_key",

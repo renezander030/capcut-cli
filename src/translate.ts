@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { translateTextsCapcutCloud } from "./capcut-cloud-translate.js";
 import type { Draft } from "./draft.js";
 import { extractText, updateTextContent } from "./draft.js";
 
@@ -9,6 +10,7 @@ export interface TranslateOptions {
   model?: string; // default "claude-haiku-5-5"
   dryRun?: boolean;
   outPath: string; // required: where to write the translated draft
+  cloud?: boolean; // translate via ByteDance CapCut cloud (free, zero API key)
 }
 
 export interface TranslateResult {
@@ -19,11 +21,12 @@ export interface TranslateResult {
   out: string;
   pairs: Array<{ id: string; original: string; translated: string }>;
   dry_run: boolean;
+  engine?: "anthropic" | "capcut-cloud";
 }
 
 /**
- * Translate every text segment in a draft via the Anthropic API. Writes the
- * translated draft to `outPath` so the original stays untouched (multi-language
+ * Translate every text segment in a draft via the Anthropic API or CapCut cloud.
+ * Writes the translated draft to `outPath` so the original stays untouched (multi-language
  * shorts factory — same source, N localized renders).
  *
  * Uses built-in `fetch` (Node ≥ 18), zero runtime deps.
@@ -45,25 +48,37 @@ export async function translateDraft(draft: Draft, opts: TranslateOptions): Prom
       out: opts.outPath,
       pairs: collected.map((c) => ({ ...c, translated: c.original })),
       dry_run: true,
+      engine: opts.cloud ? "capcut-cloud" : "anthropic",
     };
   }
 
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "Missing API key. Set ANTHROPIC_API_KEY or pass --api-key. " +
-        "Get one at https://console.anthropic.com/. (Use --dry-run to see what would be translated without calling the API.)",
+  let translations: string[];
+  const engine = opts.cloud ? "capcut-cloud" : "anthropic";
+
+  if (opts.cloud) {
+    translations = await translateTextsCapcutCloud(
+      collected.map((c) => c.original),
+      opts.to,
+      { from: opts.from },
+    );
+  } else {
+    const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        "Missing API key. Set ANTHROPIC_API_KEY or pass --api-key. " +
+          "Get one at https://console.anthropic.com/. (Or pass --cloud to translate via CapCut Cloud without an API key, or --dry-run to see what would be translated.)",
+      );
+    }
+    const model = opts.model ?? "claude-haiku-5-5";
+
+    translations = await callAnthropicBatch(
+      apiKey,
+      model,
+      collected.map((c) => c.original),
+      opts.to,
+      opts.from ?? "auto",
     );
   }
-  const model = opts.model ?? "claude-haiku-5-5";
-
-  const translations = await callAnthropicBatch(
-    apiKey,
-    model,
-    collected.map((c) => c.original),
-    opts.to,
-    opts.from ?? "auto",
-  );
 
   const pairs: TranslateResult["pairs"] = [];
   for (let i = 0; i < collected.length; i++) {
@@ -84,6 +99,7 @@ export async function translateDraft(draft: Draft, opts: TranslateOptions): Prom
     out: opts.outPath,
     pairs,
     dry_run: false,
+    engine,
   };
 }
 
