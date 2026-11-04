@@ -719,8 +719,9 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                --cloud              Experimental, unofficial: upload the audio to
                                     ByteDance's CapCut servers and transcribe it
                                     there instead of with local Whisper (needs ffprobe)
-               --translate <lang>   Translate captions to target language via CapCut
-                                    cloud translation with word timings preserved
+               --translate <lang>   Experimental, unofficial: send the caption text to
+                                    ByteDance's CapCut servers and translate it there,
+                                    word timings kept (nothing is sent under --dry-run)
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
                --audio-stream <n>   Zero-based audio stream in the input
@@ -766,7 +767,8 @@ Translate (v0.4 — multi-language draft clone):
   translate  <project> --to <lang> --out <path> [options]
              Translate every text segment via Anthropic API or CapCut cloud, write a new draft.
              Options:
-               --cloud              Translate via ByteDance CapCut servers (zero API key, free)
+               --cloud              Experimental, unofficial: send the text to ByteDance's
+                                    CapCut servers and translate it there (no API key)
                --from <lang>        Source language (default: "auto")
                --api-key <key>      Override ANTHROPIC_API_KEY env var
                --model <id>         Model (default: claude-haiku-5-5)
@@ -4070,6 +4072,7 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
   if (flags.cloud && isDryRun()) {
     // A dry run sends nothing anywhere: report what --cloud would upload.
     const { cloudLanguageWarning, planCloudUpload } = await import("./caption.js");
+    const { normalizeLanguageCode } = await import("./capcut-cloud-translate.js");
     let plan: ReturnType<typeof planCloudUpload>;
     try {
       plan = planCloudUpload(draft, captionOptions);
@@ -4085,6 +4088,15 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
         engine: "capcut-cloud",
         uploaded: false,
         would_upload: { ...plan, to: "CapCut Cloud ASR (ByteDance servers)" },
+        ...(flags.translate !== undefined
+          ? {
+              translation: {
+                language: normalizeLanguageCode(flags.translate),
+                to: "CapCut Cloud translation (ByteDance servers)",
+                sent: false,
+              },
+            }
+          : {}),
         cues: 0,
       },
       flags,

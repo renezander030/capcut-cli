@@ -616,7 +616,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "translate",
       ["--translate"],
       "string",
-      "Translate captions to this target language (e.g. 'vi', 'es', 'de') via CapCut cloud translation with word timings preserved.",
+      "Experimental and unofficial: sends the caption text to ByteDance's CapCut servers and translates it into this language (e.g. 'vi', 'es', 'de'), word timings kept. Nothing is sent under --dry-run.",
     ),
     option("karaoke", ["--karaoke"], "boolean", "Create word-highlight caption ranges."),
     option(
@@ -657,7 +657,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "cloud",
       ["--cloud"],
       "boolean",
-      "Translate via ByteDance's CapCut cloud translation (free, zero API key required).",
+      "Experimental and unofficial: sends the text to ByteDance's CapCut servers and translates it there instead of with the Anthropic API. No API key needed.",
     ),
     option("api_key", ["--api-key"], "string", "Anthropic API key."),
     option("model", ["--model"], "string", "Anthropic model."),

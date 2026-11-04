@@ -4,6 +4,14 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- `translate --cloud` and `caption --translate <lang>` (experimental, unofficial) translate with the subtitle translation behind CapCut's auto-captions, on ByteDance's servers and without an API key. `translate --cloud` writes the translated draft as the Anthropic path does; `caption --translate` translates the cues before they are written and keeps CapCut's timings for the translated words, so `--karaoke` and `--word-reveal` work in the target language. Language names such as `Vietnamese`, `deutsch` or `simplified chinese` map to CapCut's codes. Like `caption --cloud`, it calls CapCut's private endpoints as the desktop app does, so ByteDance can change or refuse them at any time. Every run says on stderr how many lines go to ByteDance, and `--dry-run` sends nothing (`caption --translate --dry-run` reports the lines under `translation`). A reply with more or fewer lines than were sent is refused instead of pairing translations with the wrong timings, and a line that comes back without a translation keeps its original text and is counted in `kept_original` ([#169](https://github.com/renezander030/capcut-cli/pull/169), contributed by @datnt-97).
+
+### Changed
+
+- The Python client's 3.9 job runs on `ubuntu-24.04`. `ubuntu-latest` moved to 26.04, for which `setup-python` has no 3.9 build, so the job failed before it ran a test; the package still supports Python 3.9.
+
 ### Fixed
 
 - `text-style` applies `--font-size`, `--color`, `--align`, `--x` and `--y` without `--preset`. The flags were declared (and shared with `add-text`) but only honoured through a preset, so a plain `text-style <project> <id> --font-size 22 --color #FFD60A` exited 0 and left the text unchanged. Font size and colour are written to the material and to every style block CapCut renders from, `--x`/`--y` move the segment as `restyle` does, and `--color` must be `#RRGGBB`. `compile`'s `text-style` operation accepts and validates `fontSize`, `alignment` and `color` too.

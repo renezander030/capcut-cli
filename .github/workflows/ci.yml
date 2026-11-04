@@ -123,7 +123,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # The package supports 3.9 (requires-python), and ubuntu-latest
+          # (26.04) has no 3.9 build for setup-python; 24.04 still does.
+          - os: ubuntu-24.04
             python: '3.9'
           - os: ubuntu-latest
             python: '3.14'

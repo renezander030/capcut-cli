@@ -5,31 +5,17 @@
  * API: ByteDance can change or refuse them at any time.
  */
 import { randomUUID } from "node:crypto";
+import { CAPCUT_EDITOR_HOST, capcutEditorHeaders } from "./capcut-cloud-headers.js";
 import type { CaptionCue, CaptionWord } from "./caption.js";
 
-/**
- * Standard HTTP headers accepted by ByteDance CapCut's sync task endpoint.
- */
-export const DEFAULT_CAPCUT_TRANSLATE_HEADERS: Record<string, string> = {
-  Host: "editor-api-sg.capcutapi.com",
-  "App-Sdk-Version": "8.5.0",
-  "Content-Type": "application/json",
-  appID: "359289",
-  appvr: "8.5.0",
-  ch: "capcutpc_web_product",
-  "device-time": "1776996536",
-  lan: "en",
-  loc: "VN",
-  pf: "4",
+/** The captured headers this client replays; the shared identity is in capcut-cloud-headers.ts. */
+export const DEFAULT_CAPCUT_TRANSLATE_HEADERS: Record<string, string> = capcutEditorHeaders({
+  appVersion: "8.5.0",
+  time: "1776996536",
   sign: "279639a654a9a0928d629f54e79fd626",
-  "sign-ver": "1",
-  tdid: "7522322460692940289",
-  "x-ss-stub": "52ac308361babf4705e2f350bd2f7506",
-  "X-SS-DP": "359289",
-  "x-tt-trace-id": "00-bd3f507b106864a86c4b8b860105ffff-bd3f507b106864a801",
-  "User-Agent": "Cronet/TTNetVersion:488a55ee 2025-07-10 QuicVersion:55af8b7a 2024-11-18",
-  "x-khronos": "1776996536",
-};
+  stub: "52ac308361babf4705e2f350bd2f7506",
+  traceId: "00-bd3f507b106864a86c4b8b860105ffff-bd3f507b106864a801",
+});
 
 /**
  * Supported language mappings: friendly names / aliases to CapCut canonical codes.
@@ -154,6 +140,8 @@ export interface CloudTranslateItem {
   text: string;
   translation_text: string;
   translation_words?: CloudTranslateWord[];
+  /** The service sent no translation for this line, so translation_text is the original text. */
+  kept_original?: boolean;
 }
 
 export interface CloudTranslateOptions {
@@ -251,7 +239,7 @@ export async function translateUtterancesCapcutCloud(
   const chunkSize = opts?.chunkSize ?? 50;
   const timeoutMs = opts?.requestTimeoutMs ?? 60_000;
   const retryDelayMs = opts?.retryDelayMs ?? 1500;
-  const url = "https://editor-api-sg.capcutapi.com/lv/v1/common_task/sync";
+  const url = `https://${CAPCUT_EDITOR_HOST}/lv/v1/common_task/sync`;
 
   const allResults: CloudTranslateItem[] = [];
 
@@ -316,6 +304,14 @@ export async function translateUtterancesCapcutCloud(
       );
     }
 
+    // Translations pair with the lines sent by position, so a reply with more
+    // or fewer lines would put text on the wrong timings: refuse it.
+    if (targetItems.length !== chunk.length) {
+      throw new Error(
+        `CapCut Cloud Translation returned ${targetItems.length} line(s) for the ${chunk.length} sent; nothing was translated. Try again, or translate without --cloud.`,
+      );
+    }
+
     for (let j = 0; j < chunk.length; j++) {
       const original = chunk[j];
       const item = targetItems[j] as
@@ -332,7 +328,7 @@ export async function translateUtterancesCapcutCloud(
           }
         | undefined;
 
-      const transText = item?.translation_text ?? original.text;
+      const translated = item?.translation_text?.trim() ? item.translation_text : undefined;
       const transWords: CloudTranslateWord[] | undefined = Array.isArray(item?.translation_words)
         ? item.translation_words
             .filter((w) => Boolean(w?.text?.trim()))
@@ -347,8 +343,9 @@ export async function translateUtterancesCapcutCloud(
         start_time: original.start_time,
         end_time: original.end_time,
         text: original.text,
-        translation_text: transText,
-        translation_words: transWords && transWords.length > 0 ? transWords : undefined,
+        translation_text: translated ?? original.text,
+        translation_words: translated && transWords && transWords.length > 0 ? transWords : undefined,
+        ...(translated ? {} : { kept_original: true }),
       });
     }
   }
@@ -357,34 +354,16 @@ export async function translateUtterancesCapcutCloud(
 }
 
 /**
- * Translate a list of text strings via CapCut Cloud Translation.
- * Preserves exact array length and ordering.
- */
-export async function translateTextsCapcutCloud(
-  texts: string[],
-  targetLang: string,
-  opts?: CloudTranslateOptions,
-): Promise<string[]> {
-  if (texts.length === 0) return [];
-  const utterances: CloudTranslateUtterance[] = texts.map((t) => ({
-    start_time: 0,
-    end_time: 0,
-    text: t,
-  }));
-  const items = await translateUtterancesCapcutCloud(utterances, targetLang, opts);
-  return items.map((item) => item.translation_text);
-}
-
-/**
  * Translate caption cues via CapCut Cloud Translation, updating cue text and
- * word-level karaoke timestamps in microseconds.
+ * word-level karaoke timestamps in microseconds. A cue the service sent no
+ * translation for keeps its text and its words, and is counted in kept_original.
  */
 export async function translateCuesCapcutCloud(
   cues: CaptionCue[],
   targetLang: string,
   opts?: CloudTranslateOptions,
-): Promise<CaptionCue[]> {
-  if (cues.length === 0) return [];
+): Promise<{ cues: CaptionCue[]; kept_original: number }> {
+  if (cues.length === 0) return { cues: [], kept_original: 0 };
 
   const utterances: CloudTranslateUtterance[] = cues.map((cue) => ({
     start_time: Math.round(cue.startUs / 1000),
@@ -394,22 +373,21 @@ export async function translateCuesCapcutCloud(
 
   const items = await translateUtterancesCapcutCloud(utterances, targetLang, opts);
 
-  return cues.map((cue, idx) => {
+  const translated = cues.map((cue, idx) => {
     const item = items[idx];
-    const transText = item?.translation_text || cue.text;
-    const transWords: CaptionWord[] | undefined = item?.translation_words
-      ? item.translation_words.map((w) => ({
-          word: w.text,
-          startUs: Math.round(w.start_time * 1000),
-          endUs: Math.round(w.end_time * 1000),
-        }))
-      : undefined;
+    if (item.kept_original) return cue;
+    const transWords: CaptionWord[] | undefined = item.translation_words?.map((w) => ({
+      word: w.text,
+      startUs: Math.round(w.start_time * 1000),
+      endUs: Math.round(w.end_time * 1000),
+    }));
 
     return {
       startUs: cue.startUs,
       endUs: cue.endUs,
-      text: transText,
+      text: item.translation_text,
       words: transWords && transWords.length > 0 ? transWords : undefined,
     };
   });
+  return { cues: translated, kept_original: items.filter((item) => item.kept_original).length };
 }
