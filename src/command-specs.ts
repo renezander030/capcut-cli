@@ -612,6 +612,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     }),
     option("whisper_model", ["--whisper-model"], "string", "Whisper model."),
     option("language", ["--language"], "string", "Language code for Whisper (--cloud detects the language itself)."),
+    option(
+      "translate",
+      ["--translate"],
+      "string",
+      "Translate captions to this target language (e.g. 'vi', 'es', 'de') via CapCut cloud translation with word timings preserved.",
+    ),
     option("karaoke", ["--karaoke"], "boolean", "Create word-highlight caption ranges."),
     option(
       "word_reveal",
@@ -647,6 +653,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("to", ["--to"], "string", "Target language."),
     option("from", ["--from"], "string", "Source language."),
     OUT,
+    option(
+      "cloud",
+      ["--cloud"],
+      "boolean",
+      "Translate via ByteDance's CapCut cloud translation (free, zero API key required).",
+    ),
     option("api_key", ["--api-key"], "string", "Anthropic API key."),
     option("model", ["--model"], "string", "Anthropic model."),
   ],

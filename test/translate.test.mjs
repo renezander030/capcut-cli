@@ -51,5 +51,19 @@ describe("capcut translate", () => {
       assert.notEqual(r.status, 0);
       assert.match(r.stderr, /Missing --out/);
     });
+
+    it("hints at --cloud when API key is missing", () => {
+      const outDir = mkdtempSync(join(tmpdir(), "capcut-translate-err-"));
+      const outPath = join(outDir, "out.json");
+      try {
+        const r = spawnCli(["translate", fix.path, "--to", "Spanish", "--out", outPath], {
+          env: { ...process.env, ANTHROPIC_API_KEY: "" },
+        });
+        assert.notEqual(r.status, 0);
+        assert.match(r.stderr, /--cloud/);
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
   });
 });

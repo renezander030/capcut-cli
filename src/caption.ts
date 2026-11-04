@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AlignmentReport, alignScript, tokenizeScript } from "./align.js";
 import { transcribeAudioCapcutCloud } from "./capcut-cloud-asr.js";
+import { normalizeLanguageCode, translateCuesCapcutCloud } from "./capcut-cloud-translate.js";
 import {
   buildEmphasisRanges,
   DEFAULT_KEYWORD_SIZE,
@@ -34,6 +35,7 @@ export interface CaptionOptions {
   ffmpegCmd?: string; // ffmpeg binary used only when audioStream is selected
   fromSegment?: string; // segment ID of an audio segment in the draft to caption
   cloud?: boolean; // transcribe via CapCut Cloud ASR
+  translate?: string; // translate captions to target language via CapCut Cloud
   whisperCmd?: string; // shell-out command; e.g. "whisper" or "whisper-cli" or "faster-whisper"
   whisperModel?: string; // model name; default "base"
   language?: string; // ISO code; default "auto"
@@ -87,6 +89,7 @@ export interface CaptionResult {
   karaoke?: boolean;
   word_reveal?: boolean;
   audio_stream?: number;
+  translated_to?: string;
   /** --words: the file the timings came from, its detected shape, and how
    * many entries had no usable timing and were left out. */
   source_words?: string;
@@ -310,6 +313,14 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     throw new Error("Whisper produced no cues. Check the audio file is not silent and the model name is valid.");
   }
 
+  if (opts.translate) {
+    const targetCode = normalizeLanguageCode(opts.translate);
+    process.stderr.write(`Translating captions to ${targetCode} via ByteDance CapCut cloud translation...\n`);
+    cues = await translateCuesCapcutCloud(cues, targetCode, {
+      from: opts.language,
+    });
+  }
+
   const trackName = opts.trackName ?? "captions";
   const styleSource = opts.styleRef ? findSegment(draft, opts.styleRef) : null;
   const baseStyle = styleSource
@@ -418,6 +429,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     karaoke: opts.karaoke ?? false,
     word_reveal: opts.wordReveal || undefined,
     audio_stream: opts.audioStream,
+    translated_to: opts.translate ? normalizeLanguageCode(opts.translate) : undefined,
     source_words: external ? (opts.wordsSource ?? "stdin") : undefined,
     words_format: external?.format,
     words_skipped: external?.skipped,

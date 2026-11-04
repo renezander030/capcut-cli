@@ -719,6 +719,8 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                --cloud              Experimental, unofficial: upload the audio to
                                     ByteDance's CapCut servers and transcribe it
                                     there instead of with local Whisper (needs ffprobe)
+               --translate <lang>   Translate captions to target language via CapCut
+                                    cloud translation with word timings preserved
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
                --audio-stream <n>   Zero-based audio stream in the input
@@ -762,8 +764,9 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
 
 Translate (v0.4 — multi-language draft clone):
   translate  <project> --to <lang> --out <path> [options]
-             Translate every text segment via Anthropic API, write a new draft.
+             Translate every text segment via Anthropic API or CapCut cloud, write a new draft.
              Options:
+               --cloud              Translate via ByteDance CapCut servers (zero API key, free)
                --from <lang>        Source language (default: "auto")
                --api-key <key>      Override ANTHROPIC_API_KEY env var
                --model <id>         Model (default: claude-haiku-5-5)
@@ -1049,6 +1052,7 @@ interface Flags {
   audioStream?: number;
   fromSegment?: string;
   cloud?: boolean;
+  translate?: string;
   whisperCmd?: string;
   whisperEngine?: "auto" | "openai" | "whisper-cpp" | "faster-whisper";
   whisperModel?: string;
@@ -1279,6 +1283,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
 ]);
 const STRING_FLAGS = new Map<string, FlagKey<string>>([
   ["--out", "out"],
+  ["--translate", "translate"],
   ["--color", "color"],
   ["--track-name", "trackName"],
   ["--template", "template"],
@@ -4039,6 +4044,7 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     wordsSource: flags.words === "-" ? "stdin" : flags.words,
     audio: flags.audio,
     cloud: flags.cloud,
+    translate: flags.translate,
     audioStream: flags.audioStream,
     ffmpegCmd: flags.ffmpegCmd,
     fromSegment: flags.fromSegment,
@@ -4111,6 +4117,7 @@ async function cmdTranslate(draft: Draft, _filePath: string, flags: Flags): Prom
     model: flags.model,
     dryRun: flags.dryRun,
     outPath: flags.out,
+    cloud: flags.cloud,
   });
   out(result, flags);
 }
@@ -5395,7 +5402,7 @@ const SUMMARIES: Record<string, string> = {
   "import-ass": "Import an ASS/SSA subtitle file as text segments, keeping inline overrides as per-range styles.",
   "text-ranges": "Apply byte-accurate multi-style ranges to a text segment.",
   caption: "Transcribe audio via whisper into real caption-track segments.",
-  translate: "Clone a draft into another language via the Anthropic API.",
+  translate: "Clone a draft into another language via the Anthropic API or CapCut cloud.",
   migrate: "Apply known schema migrations across version boundaries.",
   "add-sfx": "Add a sound effect on a dedicated track.",
   chroma: "Green-screen / chroma key a video segment, or --off.",
