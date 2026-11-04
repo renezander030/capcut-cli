@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { translateTextsCapcutCloud } from "./capcut-cloud-translate.js";
+import { translateUtterancesCapcutCloud } from "./capcut-cloud-translate.js";
 import type { Draft } from "./draft.js";
 import { extractText, updateTextContent } from "./draft.js";
 
@@ -22,6 +22,8 @@ export interface TranslateResult {
   pairs: Array<{ id: string; original: string; translated: string }>;
   dry_run: boolean;
   engine?: "anthropic" | "capcut-cloud";
+  /** --cloud: segments the service sent no translation for, written with their original text. */
+  kept_original?: number;
 }
 
 /**
@@ -53,14 +55,20 @@ export async function translateDraft(draft: Draft, opts: TranslateOptions): Prom
   }
 
   let translations: string[];
+  let keptOriginal = 0;
   const engine = opts.cloud ? "capcut-cloud" : "anthropic";
 
   if (opts.cloud) {
-    translations = await translateTextsCapcutCloud(
-      collected.map((c) => c.original),
+    process.stderr.write(
+      `WARNING: --cloud is experimental and unofficial: sending ${collected.length} text segment(s) to ByteDance's CapCut servers for translation.\n`,
+    );
+    const items = await translateUtterancesCapcutCloud(
+      collected.map((c) => ({ start_time: 0, end_time: 0, text: c.original })),
       opts.to,
       { from: opts.from },
     );
+    translations = items.map((item) => item.translation_text);
+    keptOriginal = items.filter((item) => item.kept_original).length;
   } else {
     const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -100,6 +108,7 @@ export async function translateDraft(draft: Draft, opts: TranslateOptions): Prom
     pairs,
     dry_run: false,
     engine,
+    ...(keptOriginal > 0 ? { kept_original: keptOriginal } : {}),
   };
 }
 

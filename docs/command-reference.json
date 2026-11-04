@@ -4505,7 +4505,7 @@
           ],
           "type": "string",
           "required": false,
-          "description": "Translate captions to this target language (e.g. 'vi', 'es', 'de') via CapCut cloud translation with word timings preserved."
+          "description": "Experimental and unofficial: sends the caption text to ByteDance's CapCut servers and translates it into this language (e.g. 'vi', 'es', 'de'), word timings kept. Nothing is sent under --dry-run."
         },
         {
           "name": "karaoke",
@@ -4696,7 +4696,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Translate via ByteDance's CapCut cloud translation (free, zero API key required)."
+          "description": "Experimental and unofficial: sends the text to ByteDance's CapCut servers and translates it there instead of with the Anthropic API. No API key needed."
         },
         {
           "name": "api_key",

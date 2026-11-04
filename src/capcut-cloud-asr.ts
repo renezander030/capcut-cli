@@ -6,6 +6,7 @@
  */
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { capcutEditorHeaders } from "./capcut-cloud-headers.js";
 import type { CaptionCue, CaptionWord } from "./caption.js";
 
 /** CRC32 lookup table for upload verification. */
@@ -118,26 +119,13 @@ export function signAwsV4(
   return { headers, url: urlObj.toString() };
 }
 
-export const DEFAULT_CAPCUT_HEADERS: Record<string, string> = {
-  Host: "editor-api-sg.capcutapi.com",
-  "App-Sdk-Version": "8.4.0",
-  "Content-Type": "application/json",
-  appID: "359289",
-  appvr: "8.4.0",
-  ch: "capcutpc_web_product",
-  "device-time": "1776674107",
-  lan: "en",
-  loc: "VN",
-  pf: "4",
+export const DEFAULT_CAPCUT_HEADERS: Record<string, string> = capcutEditorHeaders({
+  appVersion: "8.4.0",
+  time: "1776674107",
   sign: "4a60da398f60fefd56083e55ac9eda17",
-  "sign-ver": "1",
-  tdid: "7522322460692940289",
-  "x-ss-stub": "e8eff844fa0457999a30b4d5f6572dff",
-  "X-SS-DP": "359289",
-  "x-tt-trace-id": "00-aa077272106864a86c4b8b8601bcffff-aa077272106864a801",
-  "User-Agent": "Cronet/TTNetVersion:488a55ee 2025-07-10 QuicVersion:55af8b7a 2024-11-18",
-  "x-khronos": "1776674107",
-};
+  stub: "e8eff844fa0457999a30b4d5f6572dff",
+  traceId: "00-aa077272106864a86c4b8b8601bcffff-aa077272106864a801",
+});
 
 export interface CloudAsrWord {
   text: string;
