@@ -809,15 +809,68 @@ export function serializeDraftCandidate(
 
 export function editorProcesses(): string[] {
   try {
-    if (platform() === "win32") {
-      const result = spawnSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf-8", timeout: 3000 });
-      return matchEditorProcesses(result.stdout ?? "", "win32");
-    }
-    const result = spawnSync("ps", ["-axo", "comm="], { encoding: "utf-8", timeout: 3000 });
-    return matchEditorProcesses(result.stdout ?? "", "posix");
+    const flavor = platform() === "win32" ? "win32" : "posix";
+    const result =
+      flavor === "win32"
+        ? spawnSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf-8", timeout: 3000 })
+        : spawnSync("ps", ["-axo", "pid=,ppid=,comm="], { encoding: "utf-8", timeout: 3000 });
+    const rows = parseProcessRows(result.stdout ?? "", flavor);
+    return matchEditorRows(rows, flavor, ownProcessChain(rows, process.pid, process.ppid));
   } catch {
     return [];
   }
+}
+
+/** One process of a listing: its id, its parent's id (0 when the listing has none) and its executable text. */
+export interface ProcessRow {
+  pid: number;
+  ppid: number;
+  line: string;
+}
+
+/**
+ * Rows of `ps -axo pid=,ppid=,comm=` (posix) or `tasklist /FO CSV /NH` (win32,
+ * which lists no parent id). A line without ids is skipped.
+ */
+export function parseProcessRows(listing: string, flavor: "win32" | "posix"): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+  for (const raw of listing.split("\n")) {
+    const line = raw.trim();
+    if (flavor === "win32") {
+      const pid = Number(line.match(/^"[^"]*","(\d+)"/)?.[1]);
+      if (pid) rows.push({ pid, ppid: 0, line });
+      continue;
+    }
+    const m = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), line: m[3] });
+  }
+  return rows;
+}
+
+/**
+ * The CLI's own process and every ancestor the listing shows (#168): a Volta
+ * shim is an executable named `capcut` that starts node, so the CLI's own
+ * parent looks like the editor by name. The direct parent always counts, also
+ * where the listing carries no parent ids (win32).
+ */
+export function ownProcessChain(rows: ProcessRow[], pid: number, ppid: number): Set<number> {
+  const parent = new Map(rows.map((r) => [r.pid, r.ppid]));
+  const chain = new Set<number>([pid, ppid]);
+  let at = parent.get(ppid);
+  while (at && at > 1 && !chain.has(at)) {
+    chain.add(at);
+    at = parent.get(at);
+  }
+  return chain;
+}
+
+/** The editors among a listing's rows, leaving out the CLI's own process chain. */
+export function matchEditorRows(rows: ProcessRow[], flavor: "win32" | "posix", own: Set<number>): string[] {
+  const listing = rows
+    .filter((r) => !own.has(r.pid))
+    .map((r) => r.line)
+    .join("\n");
+  return matchEditorProcesses(listing, flavor);
 }
 
 /**
