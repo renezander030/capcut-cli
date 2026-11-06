@@ -332,6 +332,13 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Report shot-too-long (warning) for each video clip that plays longer than this many seconds. Off unless given.",
     ),
     option(
+      "min_silent_secs",
+      ["--min-silent-secs"],
+      "number",
+      "Report silent-stretch (warning) for every range of this many seconds or more where nothing audible plays. " +
+        "A clip counts as silent only when the draft says so (volume 0, muted track, photo, sound separated). Off unless given.",
+    ),
+    option(
       "pip",
       ["--pip"],
       "boolean",
@@ -1074,6 +1081,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
 //   --max-still-secs, --max-shot-secs -> lint (opt-in pacing checks)
+//   --min-silent-secs    -> lint (opt-in silent-stretch check)
 //   --recursive -> relink (v0.27 nested media search)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
@@ -1109,6 +1117,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--frame-grid",
   "--max-still-secs",
   "--max-shot-secs",
+  "--min-silent-secs",
   "--full",
   "--granularity",
   "--highlight-words",

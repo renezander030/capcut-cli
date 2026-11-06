@@ -213,6 +213,11 @@ Overview (start here):
                                    that plays longer than n seconds
                --max-shot-secs <n> Warn (shot-too-long) on a video clip
                                    that plays longer than n seconds
+               --min-silent-secs <n> Warn (silent-stretch) on every range of
+                                   n seconds or more where nothing audible
+                                   plays; a clip counts as silent only when
+                                   the draft says so (volume 0, muted
+                                   track, photo, sound separated)
                --fix               Auto-repair issues stamped fixable:true
                                    (cue-too-long, caption-overlap,
                                    caption-gap-too-small, line-too-long,
@@ -1058,6 +1063,7 @@ interface Flags {
   fix?: boolean;
   maxStillSecs?: number;
   maxShotSecs?: number;
+  minSilentSecs?: number;
   // caption
   audio?: string;
   /** caption --words: word timings from an external aligner (path or "-"). */
@@ -1400,6 +1406,7 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--max-cue-secs", "maxCueSecs"],
   ["--max-still-secs", "maxStillSecs"],
   ["--max-shot-secs", "maxShotSecs"],
+  ["--min-silent-secs", "minSilentSecs"],
   ["--min-gap-ms", "minGapMs"],
   ["--max-cps", "maxCps"],
   ["--safe-area", "safeArea"],
@@ -3942,6 +3949,7 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     frameGrid: flags.frameGrid,
     maxStillUs: thresholdUs(flags.maxStillSecs, "--max-still-secs"),
     maxShotUs: thresholdUs(flags.maxShotSecs, "--max-shot-secs"),
+    minSilentUs: thresholdUs(flags.minSilentSecs, "--min-silent-secs"),
   };
   // template-stale (#67, #111) needs the store's newest app version, which
   // costs one timeline read per sibling project — so it is looked up only for

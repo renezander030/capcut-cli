@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { bubbleCatalogue, imageAnimCatalogue } from "./decorators.js";
-import type { Draft, Segment, Track } from "./draft.js";
+import type { Draft, MaterialVideo, Segment, Track } from "./draft.js";
 import { extractStyleRanges, extractText, findMaterial, getTracksByType } from "./draft.js";
 import { type Category, listEnum, type Namespace } from "./enums.js";
 import { copyAssetDeduped, effectCatalogue, filterCatalogue, storeOutgrowsTemplate } from "./factory.js";
@@ -167,6 +167,9 @@ export interface LintOptions {
   /** Opt-in pacing: report shot-too-long for a video clip (any material but a
    * photo) that plays longer than this on the timeline, in microseconds. */
   maxShotUs?: number;
+  /** Opt-in: report silent-stretch for every range of at least this many
+   * microseconds, inside the timeline, where nothing audible plays. */
+  minSilentUs?: number;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -669,6 +672,25 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
           location: { track: track.name, segment_id: s.id, material_id: mat.id },
         });
       }
+    }
+  }
+
+  // Silent stretches, opt-in: dead air the export carries. Conservative by
+  // design, so it never cries wolf: a clip counts as silent only when the
+  // draft itself says so (see playsSound), and everything else counts as
+  // sound. Report-only: what belongs in the gap is an editing decision.
+  if (opts.minSilentUs !== undefined) {
+    const limit = opts.minSilentUs;
+    for (const [start, end] of silentStretches(draft, limit)) {
+      issues.push({
+        severity: "warning",
+        code: "silent-stretch",
+        message:
+          `Nothing audible plays from ${formatSecs(start)} to ${formatSecs(end)} (${formatSecs(end - start)}, ` +
+          `at least the ${formatSecs(limit)} --min-silent-secs limit): no audio clip above volume 0 and no ` +
+          "video clip with its own sound covers it",
+        fixable: FIXABLE_CODES.has("silent-stretch"),
+      });
     }
   }
 
@@ -1781,6 +1803,58 @@ function soundSeparatedOrphans(draft: Draft): Array<{ id: string; has_sound_sepa
   );
   if (separatedAudio) return [];
   return (draft.materials?.videos ?? []).filter((video) => video.has_sound_separated === true && used.has(video.id));
+}
+
+// Whether a segment on an audio or video track sends sound to the export.
+// Silent only on the draft's own word: volume 0 with no volume keyframes, a
+// photo, or a video whose sound was separated to an audio track (the
+// sound-separated-orphan reading: the clip itself then plays silent, and the
+// separated audio counts on its own track). A material the draft does not
+// hold, or a video file that may have no audio stream, counts as sound.
+function playsSound(track: Track, segment: Segment, videos: Map<string, MaterialVideo>): boolean {
+  const volume = typeof segment.volume === "number" ? segment.volume : 1;
+  if (volume <= 0 && !keyframedProperties(segment).has("KFTypeVolume")) return false;
+  if (track.type === "audio") return true;
+  const material = videos.get(segment.material_id);
+  if (!material) return true;
+  return material.type !== "photo" && material.has_sound_separated !== true;
+}
+
+// Ranges of at least minUs where no segment plays sound, from 0 to the end of
+// the export: draft.duration, but never past the last segment on any track (a
+// stale duration is no silence the export carries). A muted track (attribute
+// bit 1, as `tracks` reads it) contributes nothing.
+function silentStretches(draft: Draft, minUs: number): Array<[number, number]> {
+  let contentEnd = 0;
+  for (const { segment } of allSegments(draft)) {
+    contentEnd = Math.max(contentEnd, segment.target_timerange.start + segment.target_timerange.duration);
+  }
+  const declared = draft.duration;
+  const end =
+    typeof declared === "number" && Number.isFinite(declared) && declared > 0
+      ? Math.min(declared, contentEnd)
+      : contentEnd;
+  const videos = new Map((draft.materials?.videos ?? []).map((m) => [m.id, m]));
+  const sound: Array<[number, number]> = [];
+  for (const track of draft.tracks) {
+    if (track.type !== "audio" && track.type !== "video") continue;
+    if (typeof track.attribute === "number" && (track.attribute & 1) !== 0) continue;
+    for (const segment of track.segments) {
+      if (!playsSound(track, segment, videos)) continue;
+      const start = segment.target_timerange.start;
+      sound.push([start, start + segment.target_timerange.duration]);
+    }
+  }
+  sound.sort((a, b) => a[0] - b[0]);
+  const stretches: Array<[number, number]> = [];
+  let cursor = 0;
+  for (const [start, stop] of sound) {
+    if (start >= end) break;
+    if (start - cursor >= minUs) stretches.push([cursor, start]);
+    cursor = Math.max(cursor, stop);
+  }
+  if (end - cursor >= minUs) stretches.push([cursor, end]);
+  return stretches;
 }
 
 function allSegments(draft: Draft): Array<{ track: Track; segment: Segment }> {

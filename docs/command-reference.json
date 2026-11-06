@@ -252,6 +252,15 @@
           "description": "Report shot-too-long (warning) for each video clip that plays longer than this many seconds. Off unless given."
         },
         {
+          "name": "min_silent_secs",
+          "flags": [
+            "--min-silent-secs"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Report silent-stretch (warning) for every range of this many seconds or more where nothing audible plays. A clip counts as silent only when the draft says so (volume 0, muted track, photo, sound separated). Off unless given."
+        },
+        {
           "name": "pip",
           "flags": [
             "--pip"
