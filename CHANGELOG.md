@@ -15,6 +15,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ### Changed
 
+- `render --burn-captions` draws each caption in its text material's own font file instead of ffmpeg's default face. The font is the first style block's `font.path` in the material's content (what CapCut renders from), else the material's `font_path`, and it is passed to drawtext as `fontfile=` when the file exists and is a `.ttf`, `.otf` or `.ttc`; the path is escaped so commas, brackets, colons and backslashes in it stay inside the option. A caption whose font is missing, of another type or not named keeps the default face as before. The render result, `--dry-run` plans included, reports `caption_fonts: {from_draft, default}`.
 - The Python client's 3.9 job runs on `ubuntu-24.04`. `ubuntu-latest` moved to 26.04, for which `setup-python` has no 3.9 build, so the job failed before it ran a test; the package still supports Python 3.9.
 
 ### Fixed

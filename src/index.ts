@@ -295,7 +295,11 @@ Preview:
              Options:
                --scale <f>        Proxy scale of canvas dims (default 0.5)
                --fps <n>          Output fps (default draft fps)
-               --burn-captions    Draw text-track segments onto the video
+               --burn-captions    Draw text-track segments onto the video, each
+                                  in its text material's font file when the
+                                  draft names an existing .ttf/.otf/.ttc
+                                  (else ffmpeg's default face); the result's
+                                  caption_fonts counts both
                --soft-captions    Mux the text-track cues as a toggleable
                                   subtitle stream (mov_text) instead of, or
                                   as well as, burning them: the SRT is written

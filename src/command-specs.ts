@@ -943,7 +943,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "string",
       "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode.",
     ),
-    option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
+    option(
+      "burn_captions",
+      ["--burn-captions"],
+      "boolean",
+      "Burn captions (ffmpeg drawtext). Each caption uses its text material's own font file (the first style block's font.path, else font_path) when that file exists and is a .ttf, .otf or .ttc, otherwise ffmpeg's default face; the result's caption_fonts counts both.",
+    ),
     option(
       "soft_captions",
       ["--soft-captions"],

@@ -705,7 +705,10 @@ stands without. A miss exits 1 with `ok: false`, one reason line on stderr and a
 ### `capcut render <project> --all-video-tracks --burn-captions`
 
 Composites overlay tracks with transform/opacity, mixes audio fades, and uses
-draft caption colour/size/position. `doctor` reports `drawtext`, `overlay`, and
+draft caption colour/size/position. Burned captions use the text material's font
+file (style `font.path`, else `font_path`) when it exists and is .ttf/.otf/.ttc,
+otherwise ffmpeg's default face; `caption_fonts: {from_draft, default}` counts
+both. `doctor` reports `drawtext`, `overlay`, and
 `libx264`; missing optional filters produce an explicit fallback report.
 
 ### `capcut serve [--workers N] [--retries N] [--timeout MS]`

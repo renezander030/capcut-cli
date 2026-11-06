@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
@@ -167,6 +167,8 @@ export interface RenderPlan {
   softCaptions?: SoftCaptionsPlan;
   /** Long graphs are supplied through a file so Windows command-line limits cannot truncate them. */
   filterScript?: { path: string; content: string };
+  /** Present only with --burn-captions: how many burned captions use the draft's own font file, how many ffmpeg's default face. */
+  caption_fonts?: { from_draft: number; default: number };
   quality: { mode: "crf"; crf: number } | { mode: "bitrate"; bitrate: string };
   /** What the draft carries that this proxy does not reproduce (see fidelityCensus). */
   fidelity: FidelityCensus;
@@ -383,8 +385,19 @@ function audioSegments(draft: Draft): Segment[] {
   return segs.sort((a, b) => a.target_timerange.start - b.target_timerange.start);
 }
 
-function textSegments(draft: Draft): Array<{ seg: Segment; text: string; color: string; fontSize: number; y: number }> {
-  const out: Array<{ seg: Segment; text: string; color: string; fontSize: number; y: number }> = [];
+interface TextOverlay {
+  seg: Segment;
+  text: string;
+  color: string;
+  fontSize: number;
+  y: number;
+  /** The draft's font file, already escaped for drawtext's fontfile option; undefined = ffmpeg's default face. */
+  fontFile?: string;
+}
+
+function textSegments(draft: Draft): TextOverlay[] {
+  const out: TextOverlay[] = [];
+  const fonts = new Map<string, string | undefined>();
   for (const t of draft.tracks) {
     if (t.type !== "text") continue;
     for (const s of t.segments) {
@@ -392,17 +405,52 @@ function textSegments(draft: Draft): Array<{ seg: Segment; text: string; color: 
       const raw = typeof mat?.content === "string" ? extractText(mat.content) : "";
       if (raw) {
         const material = mat as unknown as Record<string, unknown>;
+        if (!fonts.has(s.material_id)) fonts.set(s.material_id, draftFontFile(material));
         out.push({
           seg: s,
           text: raw,
           color: safeColor(material.text_color),
           fontSize: Number(material.font_size ?? 15),
           y: s.clip?.transform.y ?? -0.6,
+          fontFile: fonts.get(s.material_id),
         });
       }
     }
   }
   return out.sort((a, b) => a.seg.target_timerange.start - b.seg.target_timerange.start);
+}
+
+const FONT_FILE_EXTENSIONS = new Set([".ttf", ".otf", ".ttc"]);
+
+/**
+ * The font file a text material uses, escaped for drawtext's `fontfile=`, or
+ * undefined to keep ffmpeg's default face. CapCut renders from the content's
+ * style blocks, so the first block's `font.path` is tried first, then the
+ * material's own `font_path`. Only an existing .ttf/.otf/.ttc file whose path
+ * can be written into the filter graph is used.
+ */
+function draftFontFile(material: Record<string, unknown>): string | undefined {
+  const candidates: unknown[] = [];
+  if (typeof material.content === "string") {
+    try {
+      const parsed = JSON.parse(material.content) as { styles?: Array<{ font?: { path?: unknown } }> };
+      candidates.push(parsed.styles?.[0]?.font?.path);
+    } catch {
+      /* content without style blocks: only font_path can name the font */
+    }
+  }
+  candidates.push(material.font_path);
+  for (const path of candidates) {
+    if (typeof path !== "string" || !FONT_FILE_EXTENSIONS.has(extname(path).toLowerCase())) continue;
+    const escaped = escapeFilterPath(path);
+    if (escaped === undefined) continue;
+    try {
+      if (statSync(path).isFile()) return escaped;
+    } catch {
+      /* missing or unreadable: try the next candidate */
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -671,6 +719,18 @@ function safeColor(raw: unknown): string {
   return FFMPEG_COLOR.test(color) ? color : "white";
 }
 
+// A file path cannot be sanitized the way caption text is (dropping a `:` or a
+// `\` names another file), so it is escaped instead and written inside single
+// quotes: the quotes keep the filtergraph parser off `[],;`, and drawtext's
+// option parser then reads `\\` as a backslash and `\:` as a colon, so the
+// path cannot end the option early and append options of its own. A single
+// quote cannot be written inside the quotes and a control character has no
+// place in a font path; a path with either is not used.
+function escapeFilterPath(path: string): string | undefined {
+  if (path.includes("'") || /\p{Cc}/u.test(path)) return undefined;
+  return path.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
+}
+
 // drawtext is whitespace/colon/quote sensitive; sanitize aggressively for a proxy.
 function escapeDrawtext(s: string): string {
   return s
@@ -825,14 +885,17 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
   // --- captions (optional) ---
   const texts = opts.burnCaptions ? textSegments(draft) : [];
   let textOverlays = 0;
-  for (const { seg, text, color, fontSize, y } of texts) {
+  const captionFonts = { from_draft: 0, default: 0 };
+  for (const { seg, text, color, fontSize, y, fontFile } of texts) {
     const t = escapeDrawtext(text);
     if (!t) continue;
     const start = round3(seg.target_timerange.start / US);
     const end = round3((seg.target_timerange.start + seg.target_timerange.duration) / US);
     const next = `vt${textOverlays}`;
+    if (fontFile) captionFonts.from_draft++;
+    else captionFonts.default++;
     filterParts.push(
-      `[${vOut}]drawtext=text='${t}':fontcolor=${color}:fontsize=${Math.max(12, Math.round((height / 640) * fontSize))}:` +
+      `[${vOut}]drawtext=text='${t}':${fontFile ? `fontfile='${fontFile}':` : ""}fontcolor=${color}:fontsize=${Math.max(12, Math.round((height / 640) * fontSize))}:` +
         `box=1:boxcolor=black@0.5:boxborderw=8:x=(w-text_w)/2:y=(h-text_h)/2-(${round3(y)}*h/2):` +
         `enable='between(t,${start},${end})'[${next}]`,
     );
@@ -953,6 +1016,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     skipped,
     ...(softCaptions ? { softCaptions } : {}),
     ...(filterScript ? { filterScript } : {}),
+    ...(opts.burnCaptions ? { caption_fonts: captionFonts } : {}),
     quality,
     fidelity: fidelityCensus(draft, opts, skipped),
   };
