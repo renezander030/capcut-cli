@@ -71,7 +71,7 @@
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | 是 | 替换片段的源文件（占位素材 → 成片素材），保留其时间、特效与关键帧。 |
 | `timeline` | `capcut timeline <project> [--cols <number>]` | 否 | 显示轨道/片段布局（JSON；-H 显示 ASCII 条形图）。 |
 | `projects` | `capcut projects [query] [--drafts <path>] [--names]` | 否 | 列出磁盘上的 CapCut/剪映草稿文件夹。 |
-| `diff` | `capcut diff <project-a> <project-b>` | 否 | 比较两个草稿（片段/素材/轨道的增、删、改）。 |
+| `diff` | `capcut diff <project-a> (<project-b> \| --since-write)` | 否 | 比较两个草稿（片段/素材/轨道的增、删、改）；加 --since-write 时，比较草稿与 capcut-cli 上次写入的内容。 |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | 是 | 把一个草稿追加到另一个的时间线末尾（ID 安全），写入 --out 或原地写入。 |
 | `config` | `capcut config` | 否 | 显示解析后的配置（.capcutrc + 生效的默认值）。 |
 | `describe` | `capcut describe [--compact] [--command <name>]` | 否 | 以 JSON 输出命令契约；可按命令名筛选，或输出精简的命令发现索引。 |
@@ -80,7 +80,7 @@
 | `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | 否 | 把商店资源 ID 学习进用户级素材目录：来源可以是单个草稿、整个草稿库（--sync），或手动添加（--add）。 |
 | `doctor` | `capcut doctor [--drafts <dir>]` | 否 | 环境预检（Node、whisper、API key、项目目录），并统计草稿目录中可读 / 无标记 / 已加密 / 无法读取的项目。 |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | 否 | 检查草稿的规范文件、文件间分歧与编辑器写入安全性。 |
-| `fixture` | `capcut fixture <project> --out <dir>` | 否 | 构建可分享、已脱敏的兼容性包（仅时间线 JSON），用于版本支持 issue，内含蒙版关键帧证据报告（#44）。 |
+| `fixture` | `capcut fixture <project> --out <dir> [--anonymize] [--check]` | 否 | 构建可分享、已脱敏的兼容性包（仅时间线 JSON），用于版本支持 issue，内含蒙版关键帧证据报告（#44）。 |
 | `sync-timelines` | `capcut sync-timelines <project-dir> [--apply]` | 是 | 从只读的 draft_content.json 出发，协调已漂移的时间线镜像文件（template-2.tmp、draft_info.json）（默认输出带 mtime 的计划；--apply 只重写发生漂移的镜像）。 |
 | `restore` | `capcut restore <project> [--step <number> \| --list]` | 是 | 从 .bak / 快照历史撤销写入（--step N、--list）。 |
 | `serve` | `capcut serve [--queue <path>] [options]` | 否 | 从 stdin/--queue 运行无状态的 JSONL 任务队列。 |

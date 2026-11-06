@@ -107,7 +107,7 @@ The host reads a draft and passes its JSON as tool input. The component itself h
 
 > **New in v0.33.0:** `caption` reports speech its cues leave uncaptioned and reuses a cached transcription when only the styling changes; `loudness --tolerance` and `--max-true-peak` gate a delivery with an exit code; `lint` gains opt-in pacing and silent-stretch checks; `diff --since-write` shows what CapCut changed after the CLI's last write; `fixture --anonymize` makes a shareable bundle; and `render --burn-captions` draws captions in the draft's own font. Full details in the [changelog](./CHANGELOG.md).
 
-> **New in v0.31.0:** experimental, unofficial `caption --cloud` that transcribes without a local Whisper install by uploading the audio to ByteDance's CapCut servers ([#157](https://github.com/renezander030/capcut-cli/pull/157)), uploads nothing in a dry run, retries flaky requests and waits as long as the audio needs; loudness to a delivery target (`loudness --target -14`, applied as segment volume and undoable); faster compiles that reuse media hashes across repeated cuts; and three `lint` checks for clips that play silent after a copy, keyframes on trimmed or re-timed clips, and `UNIFORM_SCALE` zooms on JianYing 11.6+. Full details in the [changelog](./CHANGELOG.md).
+> **New in v0.32.0:** time arguments reject malformed or unsafe values before writing; translation responses must contain exactly one string per input; and subtitle imports reject malformed UTF-8 instead of silently corrupting caption text. Full details in the [changelog](./CHANGELOG.md).
 
 
 
