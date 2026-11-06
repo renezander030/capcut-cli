@@ -234,6 +234,24 @@
           "description": "Skip ffprobe media checks (VFR / unreadable media)."
         },
         {
+          "name": "max_still_secs",
+          "flags": [
+            "--max-still-secs"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Report still-too-long (warning) for each still image that plays longer than this many seconds. Off unless given."
+        },
+        {
+          "name": "max_shot_secs",
+          "flags": [
+            "--max-shot-secs"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Report shot-too-long (warning) for each video clip that plays longer than this many seconds. Off unless given."
+        },
+        {
           "name": "pip",
           "flags": [
             "--pip"

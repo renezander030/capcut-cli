@@ -209,6 +209,10 @@ Overview (start here):
                --max-cue-secs <n>  Caption duration cap (default 7)
                --min-gap-ms <n>    Min gap between captions (default 0)
                --no-check-paths    Skip local-file existence checks
+               --max-still-secs <n> Warn (still-too-long) on a still image
+                                   that plays longer than n seconds
+               --max-shot-secs <n> Warn (shot-too-long) on a video clip
+                                   that plays longer than n seconds
                --fix               Auto-repair issues stamped fixable:true
                                    (cue-too-long, caption-overlap,
                                    caption-gap-too-small, line-too-long,
@@ -1052,6 +1056,8 @@ interface Flags {
   minGapMs?: number;
   noCheckPaths?: boolean;
   fix?: boolean;
+  maxStillSecs?: number;
+  maxShotSecs?: number;
   // caption
   audio?: string;
   /** caption --words: word timings from an external aligner (path or "-"). */
@@ -1392,6 +1398,8 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--bg-v-offset", "bgVOffset"],
   ["--scale", "scale"],
   ["--max-cue-secs", "maxCueSecs"],
+  ["--max-still-secs", "maxStillSecs"],
+  ["--max-shot-secs", "maxShotSecs"],
   ["--min-gap-ms", "minGapMs"],
   ["--max-cps", "maxCps"],
   ["--safe-area", "safeArea"],
@@ -3905,6 +3913,13 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     scriptLimitsExcept,
     summarize,
   } = await import("./lint.js");
+  // Opt-in thresholds in seconds; a value that is not a positive number would
+  // otherwise switch the check off without a word.
+  const thresholdUs = (seconds: number | undefined, flag: string): number | undefined => {
+    if (seconds === undefined) return undefined;
+    if (!Number.isFinite(seconds) || seconds <= 0) die(`${flag} must be a number of seconds > 0`);
+    return Math.round(seconds * 1_000_000);
+  };
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -3925,6 +3940,8 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     draftDir: draftProjectDir(filePath),
     dryRun: isDryRun(),
     frameGrid: flags.frameGrid,
+    maxStillUs: thresholdUs(flags.maxStillSecs, "--max-still-secs"),
+    maxShotUs: thresholdUs(flags.maxShotSecs, "--max-shot-secs"),
   };
   // template-stale (#67, #111) needs the store's newest app version, which
   // costs one timeline read per sibling project — so it is looked up only for

@@ -161,6 +161,12 @@ export interface LintOptions {
    * start and end are snapped together so duration is derived, never rounded
    * independently into a 1us overlap. */
   frameGrid?: boolean;
+  /** Opt-in pacing: report still-too-long for a still image (a photo
+   * material) that plays longer than this on the timeline, in microseconds. */
+  maxStillUs?: number;
+  /** Opt-in pacing: report shot-too-long for a video clip (any material but a
+   * photo) that plays longer than this on the timeline, in microseconds. */
+  maxShotUs?: number;
 }
 
 export const DEFAULT_LINT_OPTIONS: LintOptions = {
@@ -631,6 +637,38 @@ export function lintDraft(draft: Draft, opts: LintOptions = DEFAULT_LINT_OPTIONS
         issue.suggested_command = `capcut shift <project> <each-segment-at-or-after-the-gap> -${gap / 1000}ms`;
       }
       issues.push(issue);
+    }
+  }
+
+  // Pacing, opt-in: a still image held on screen, or one shot running on,
+  // longer than the limit the caller set. Judged on the timeline duration
+  // (what the viewer sits through), every video track included, by the
+  // material's kind (materials.videos marks a still as type "photo"); a
+  // segment whose material is missing is missing-material's finding.
+  // Report-only: where to cut, or what motion to add, is an editing decision.
+  if (opts.maxStillUs !== undefined || opts.maxShotUs !== undefined) {
+    const videoMaterials = new Map((draft.materials?.videos ?? []).map((m) => [m.id, m]));
+    for (const track of draft.tracks) {
+      if (track.type !== "video" && track.type !== "image") continue;
+      for (const s of track.segments) {
+        const mat = videoMaterials.get(s.material_id);
+        if (!mat) continue;
+        const still = mat.type === "photo";
+        const limit = still ? opts.maxStillUs : opts.maxShotUs;
+        const { start, duration } = s.target_timerange;
+        if (limit === undefined || !(duration > limit)) continue;
+        const code = still ? "still-too-long" : "shot-too-long";
+        issues.push({
+          severity: "warning",
+          code,
+          message:
+            `${still ? "Still image" : "Video clip"} ${shortId(s.id)} on ${track.type} track "${track.name}" ` +
+            `starts at ${formatSecs(start)} and plays ${formatSecs(duration)}, longer than the ` +
+            `${formatSecs(limit)} ${still ? "--max-still-secs" : "--max-shot-secs"} limit`,
+          fixable: FIXABLE_CODES.has(code),
+          location: { track: track.name, segment_id: s.id, material_id: mat.id },
+        });
+      }
     }
   }
 
@@ -1802,4 +1840,9 @@ function isUnderDir(p: string, dir: string): boolean {
 
 function shortId(id: string): string {
   return id.slice(0, 8);
+}
+
+// Microseconds as seconds for a message, to the millisecond: 12500000 -> "12.5s".
+function formatSecs(us: number): string {
+  return `${Number((us / 1_000_000).toFixed(3))}s`;
 }

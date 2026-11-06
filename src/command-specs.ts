@@ -320,6 +320,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
     option(
+      "max_still_secs",
+      ["--max-still-secs"],
+      "number",
+      "Report still-too-long (warning) for each still image that plays longer than this many seconds. Off unless given.",
+    ),
+    option(
+      "max_shot_secs",
+      ["--max-shot-secs"],
+      "number",
+      "Report shot-too-long (warning) for each video clip that plays longer than this many seconds. Off unless given.",
+    ),
+    option(
       "pip",
       ["--pip"],
       "boolean",
@@ -1061,6 +1073,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --apply-plan         -> batch (v0.29 reviewed batch plans)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
+//   --max-still-secs, --max-shot-secs -> lint (opt-in pacing checks)
 //   --recursive -> relink (v0.27 nested media search)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
@@ -1094,6 +1107,8 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--from",
   "--ripple",
   "--frame-grid",
+  "--max-still-secs",
+  "--max-shot-secs",
   "--full",
   "--granularity",
   "--highlight-words",
