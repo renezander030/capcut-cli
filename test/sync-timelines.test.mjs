@@ -420,9 +420,13 @@ describe("sync-timelines", () => {
     // Fake a running editor where only this test sees it: a stand-in `ps` on
     // the child's PATH lists a CapCut process. A real process named CapCut
     // would be visible to every test running at the same time, and their
-    // writes would be refused as well.
+    // writes would be refused as well. It answers `ps -axo pid=,ppid=,comm=`
+    // with an editor that is not in the CLI's own process chain (#168).
     const fakeDir = mkdtempSync(join(tmpdir(), "fake-editor-"));
-    writeFileSync(join(fakeDir, "ps"), "#!/bin/sh\necho /Applications/CapCut.app/Contents/MacOS/CapCut\n");
+    writeFileSync(
+      join(fakeDir, "ps"),
+      "#!/bin/sh\necho '  4242     1 /Applications/CapCut.app/Contents/MacOS/CapCut'\n",
+    );
     chmodSync(join(fakeDir, "ps"), 0o755);
     const env = { PATH: `${fakeDir}${delimiter}${process.env.PATH}` };
     after(() => {
