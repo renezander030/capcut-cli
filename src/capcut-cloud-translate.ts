@@ -5,7 +5,7 @@
  * API: ByteDance can change or refuse them at any time.
  */
 import { randomUUID } from "node:crypto";
-import { CAPCUT_EDITOR_HOST, capcutEditorHeaders } from "./capcut-cloud-headers.js";
+import { CAPCUT_EDITOR_HOST, capcutEditorHeaders, postEditorApi, requireRetOk } from "./capcut-cloud-headers.js";
 import type { CaptionCue, CaptionWord } from "./caption.js";
 
 /** The captured headers this client replays; the shared identity is in capcut-cloud-headers.ts. */
@@ -106,18 +106,15 @@ const LANGUAGE_ALIASES: Record<string, string> = {
 };
 
 /**
- * Normalizes user-supplied language string into CapCut's canonical language code.
+ * Normalizes user-supplied language string into CapCut's canonical language code,
+ * in any letter case. Every alias is written in lower case and every canonical
+ * code is also an alias of itself, so one lookup of the lower-cased input finds
+ * it; anything else passes through trimmed.
  */
 export function normalizeLanguageCode(lang: string): string {
   const clean = lang.trim().toLowerCase();
   if (LANGUAGE_ALIASES[clean]) {
     return LANGUAGE_ALIASES[clean];
-  }
-  // Try case-insensitive lookup
-  for (const [k, v] of Object.entries(LANGUAGE_ALIASES)) {
-    if (k.toLowerCase() === clean || v.toLowerCase() === clean) {
-      return v;
-    }
   }
   return lang.trim();
 }
@@ -151,78 +148,31 @@ export interface CloudTranslateOptions {
   chunkSize?: number;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const RETRY_ATTEMPTS = 3;
-
-/**
- * Send POST request to CapCut editor API with retry and timeout.
- */
-async function sendTranslateRequest(
-  url: string,
-  body: string,
-  timeoutMs: number,
-  retryDelayMs: number,
-): Promise<Response> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: DEFAULT_CAPCUT_TRANSLATE_HEADERS,
-        body,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-
-      if (res.ok) return res;
-
-      if ((res.status === 429 || res.status >= 500) && attempt < RETRY_ATTEMPTS) {
-        await sleep(retryDelayMs * attempt);
-        continue;
-      }
-      return res;
-    } catch (e) {
-      if (attempt < RETRY_ATTEMPTS) {
-        await sleep(retryDelayMs * attempt);
-        continue;
-      }
-      const err = e as Error;
-      throw new Error(
-        err.name === "TimeoutError"
-          ? `CapCut Cloud Translation request timed out after ${Math.round(timeoutMs / 1000)} s (${RETRY_ATTEMPTS} tries).`
-          : `CapCut Cloud Translation request failed: ${err.message}`,
-      );
-    }
-  }
+/** One translated line as the service sends it; every field may be missing. */
+interface CloudTranslatedLine {
+  text?: string;
+  start_time?: number;
+  end_time?: number;
+  translation_text?: string;
+  translation_words?: Array<{
+    text?: string;
+    start_time?: number;
+    end_time?: number;
+  }>;
 }
 
-interface CommonTaskSyncResponse {
-  ret: string | number;
-  errmsg: string;
-  data?: {
-    tasks?: Array<{
-      id?: string;
-      req_key?: string;
-      status?: string;
-      payload?:
-        | string
-        | {
-            translation?: Record<
-              string,
-              Array<{
-                text?: string;
-                start_time?: number;
-                end_time?: number;
-                translation_text?: string;
-                translation_words?: Array<{
-                  text?: string;
-                  start_time?: number;
-                  end_time?: number;
-                }>;
-              }>
-            >;
-          };
-    }>;
-  };
+/** The data of a common_task/sync answer: the payload arrives as a JSON string or an object. */
+interface CommonTaskSyncData {
+  tasks?: Array<{
+    id?: string;
+    req_key?: string;
+    status?: string;
+    payload?: string | { translation?: Record<string, CloudTranslatedLine[]> };
+  }>;
 }
+
+/** The step name a failed translation request carries ("CapCut Cloud Translation HTTP error: ..."). */
+const STEP = "Cloud Translation";
 
 /**
  * Translate a batch of utterances via ByteDance CapCut cloud translation.
@@ -237,8 +187,7 @@ export async function translateUtterancesCapcutCloud(
   const targetCode = normalizeLanguageCode(targetLang);
   const sourceCode = opts?.from && opts.from !== "auto" ? normalizeLanguageCode(opts.from) : "UNSPECIFIED";
   const chunkSize = opts?.chunkSize ?? 50;
-  const timeoutMs = opts?.requestTimeoutMs ?? 60_000;
-  const retryDelayMs = opts?.retryDelayMs ?? 1500;
+  const timing = { requestTimeoutMs: opts?.requestTimeoutMs ?? 60_000, retryDelayMs: opts?.retryDelayMs ?? 1500 };
   const url = `https://${CAPCUT_EDITOR_HOST}/lv/v1/common_task/sync`;
 
   const allResults: CloudTranslateItem[] = [];
@@ -264,22 +213,22 @@ export async function translateUtterancesCapcutCloud(
       ],
     };
 
-    const res = await sendTranslateRequest(url, JSON.stringify(bodyObj), timeoutMs, retryDelayMs);
-    if (!res.ok) {
-      throw new Error(`CapCut Cloud Translation HTTP error: ${res.status} ${res.statusText}`);
-    }
-
-    const reply = (await res.json()) as CommonTaskSyncResponse;
+    // The translation is safe to repeat: a lost answer is asked for again.
+    const reply = await postEditorApi<CommonTaskSyncData>(
+      url,
+      DEFAULT_CAPCUT_TRANSLATE_HEADERS,
+      JSON.stringify(bodyObj),
+      STEP,
+      timing,
+      true,
+    );
 
     if (String(reply.ret) === "1014") {
       throw new Error(
         "CapCut Cloud Translation returned error 1014 (System Busy / Security Token). Try again later or use Anthropic translation.",
       );
     }
-
-    if (String(reply.ret) !== "0") {
-      throw new Error(`CapCut Cloud Translation failed [ret=${reply.ret}]: ${reply.errmsg || "Unknown error"}`);
-    }
+    requireRetOk(reply, STEP);
 
     const task = reply.data?.tasks?.[0];
     if (!task) {
@@ -295,7 +244,8 @@ export async function translateUtterancesCapcutCloud(
       }
     }
 
-    const translationMap = (payload as { translation?: Record<string, unknown[]> })?.translation;
+    const translationMap = (payload as { translation?: Record<string, CloudTranslatedLine[]> } | undefined)
+      ?.translation;
     const targetItems = translationMap?.[targetCode];
 
     if (!Array.isArray(targetItems)) {
@@ -314,19 +264,7 @@ export async function translateUtterancesCapcutCloud(
 
     for (let j = 0; j < chunk.length; j++) {
       const original = chunk[j];
-      const item = targetItems[j] as
-        | {
-            text?: string;
-            start_time?: number;
-            end_time?: number;
-            translation_text?: string;
-            translation_words?: Array<{
-              text?: string;
-              start_time?: number;
-              end_time?: number;
-            }>;
-          }
-        | undefined;
+      const item: CloudTranslatedLine | undefined = targetItems[j];
 
       const translated = item?.translation_text?.trim() ? item.translation_text : undefined;
       const transWords: CloudTranslateWord[] | undefined = Array.isArray(item?.translation_words)

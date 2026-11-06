@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -86,6 +86,56 @@ describe("caption audio stream selection", () => {
       ["selected voice"],
     );
   });
+});
+
+describe("caption audio stream clean-up", { skip: isWindows }, () => {
+  // The fake ffmpeg writes the extracted stream and records where, so the test
+  // can see the temporary copy is gone once the command has finished.
+  function fakeFfmpeg(dir) {
+    const record = join(dir, "extracted-to.txt");
+    const ffmpeg = join(dir, "fake-ffmpeg");
+    writeFileSync(
+      ffmpeg,
+      `#!/bin/sh\nfor last do :; done\nprintf selected > "$last"\nprintf %s "$last" > "${record}"\n`,
+    );
+    chmodSync(ffmpeg, 0o755);
+    return { ffmpeg, extracted: () => readFileSync(record, "utf-8") };
+  }
+
+  for (const outcome of ["succeeds", "fails"]) {
+    it(`removes the extracted stream when the transcription ${outcome}`, (t) => {
+      const fix = tmpDraft();
+      const s = scratch();
+      t.after(() => fix.cleanup());
+      t.after(s.cleanup);
+      const media = join(s.dir, "multi-audio.mov");
+      const transcript = join(s.dir, "heard.srt");
+      writeFileSync(media, "container");
+      writeFileSync(transcript, "1\n00:00:00,000 --> 00:00:01,000\nselected voice\n");
+      const failingWhisper = join(s.dir, "failing-whisper");
+      writeFileSync(failingWhisper, "#!/bin/sh\necho no model >&2\nexit 3\n");
+      chmodSync(failingWhisper, 0o755);
+      const { ffmpeg, extracted } = fakeFfmpeg(s.dir);
+      const r = spawnCli(
+        [
+          "caption",
+          fix.path,
+          "--audio",
+          media,
+          "--audio-stream",
+          "0",
+          "--ffmpeg-cmd",
+          ffmpeg,
+          "--whisper-cmd",
+          outcome === "succeeds" ? FAKE_WHISPER : failingWhisper,
+        ],
+        { env: { FAKE_WHISPER_SOURCE: transcript } },
+      );
+      assert.equal(r.status, outcome === "succeeds" ? 0 : 1, `stderr: ${r.stderr}`);
+      assert.match(extracted(), /selected\.wav$/);
+      assert.equal(existsSync(dirname(extracted())), false);
+    });
+  }
 });
 
 describe("caption --word-reveal", { skip: isWindows }, () => {

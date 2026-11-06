@@ -208,13 +208,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     }
     transcription = { cues: [], words: external.words, engine: "words" };
   } else if (opts.cloud) {
-    sourceAudio = resolveAudio(draft, opts);
-    const selectedAudio =
-      opts.audioStream === undefined
-        ? undefined
-        : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
-    try {
-      const cloudAudio = selectedAudio?.path ?? sourceAudio;
+    const heard = await withCaptionAudio(draft, opts, async (cloudAudio): Promise<TranscriptionResult> => {
       const durationMs = cloudAudioDurationMs(draft, opts, cloudAudio);
       if (isDryRun()) throw new Error("--cloud never uploads under --dry-run; plan the upload with planCloudUpload.");
       process.stderr.write(
@@ -223,25 +217,18 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
       const languageWarning = cloudLanguageWarning(opts);
       if (languageWarning) process.stderr.write(languageWarning);
       const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
-      transcription = {
+      return {
         cues: cloudRes.cues,
         words: cloudRes.words,
         engine: "capcut-cloud",
       };
-    } finally {
-      selectedAudio?.cleanup();
-    }
+    });
+    sourceAudio = heard.source;
+    transcription = heard.result;
   } else {
-    sourceAudio = resolveAudio(draft, opts);
-    const selectedAudio =
-      opts.audioStream === undefined
-        ? undefined
-        : extractAudioStream(sourceAudio, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
-    try {
-      transcription = runWhisper(selectedAudio?.path ?? sourceAudio, opts);
-    } finally {
-      selectedAudio?.cleanup();
-    }
+    const heard = await withCaptionAudio(draft, opts, (audio) => runWhisper(audio, opts));
+    sourceAudio = heard.source;
+    transcription = heard.result;
   }
   const recognizedWords = transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues);
   // The transcript's script decides how words join into a cue (no space inside
@@ -455,6 +442,29 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
 
 export function buildAudioStreamInvocation(audio: string, stream: number, output: string): string[] {
   return ["-y", "-i", audio, "-map", `0:a:${stream}`, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", output];
+}
+
+/**
+ * The audio a transcription reads, for as long as `use` runs: --audio or the
+ * --from-segment's file, or with --audio-stream that stream extracted to a
+ * temporary WAV, which is removed afterwards whether `use` succeeds or throws.
+ * `source` is the file the result reports, never the temporary copy.
+ */
+async function withCaptionAudio<T>(
+  draft: Draft,
+  opts: CaptionOptions,
+  use: (audioPath: string) => T | Promise<T>,
+): Promise<{ source: string; result: T }> {
+  const source = resolveAudio(draft, opts);
+  const selected =
+    opts.audioStream === undefined
+      ? undefined
+      : extractAudioStream(source, opts.audioStream, opts.ffmpegCmd ?? "ffmpeg");
+  try {
+    return { source, result: await use(selected?.path ?? source) };
+  } finally {
+    selected?.cleanup();
+  }
 }
 
 function extractAudioStream(audio: string, stream: number, command: string): { path: string; cleanup: () => void } {

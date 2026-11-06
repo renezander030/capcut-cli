@@ -689,10 +689,7 @@ export function setTextStyle(
       for (const block of content.styles) {
         if (opts.fontSize !== undefined) block.size = opts.fontSize;
         if (opts.color !== undefined) {
-          block.fill = {
-            alpha: 1,
-            content: { render_type: "solid", solid: { alpha: 1, color: hexToRgb01(opts.color) } },
-          };
+          block.fill = solidFill(hexToRgb01(opts.color));
         }
       }
       text.content = JSON.stringify(content);
@@ -1170,9 +1167,34 @@ export interface TextRangeInput {
   underline?: boolean;
 }
 
+// --- Text colour as CapCut stores it ---
+// A style block's colour is three channels in 0..1 inside a solid fill; the CLI
+// speaks "#RRGGBB". These three are the only places that know either encoding.
+
 export function hexToRgb01(hex: string): [number, number, number] {
   const h = hex.replace("#", "");
   return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
+}
+
+/** Stored 0..1 channels back to "#RRGGBB" (upper case), each channel clamped to a byte. */
+export function rgb01ToHex(rgb: [number, number, number]): string {
+  const byte = (c: number) =>
+    Math.max(0, Math.min(255, Math.round(c * 255)))
+      .toString(16)
+      .padStart(2, "0")
+      .toUpperCase();
+  return `#${byte(rgb[0])}${byte(rgb[1])}${byte(rgb[2])}`;
+}
+
+/** The fill a style block stores for one solid colour (0..1 channels) at `alpha`. */
+export function solidFill(color: [number, number, number], alpha = 1) {
+  return { alpha: 1, content: { render_type: "solid", solid: { alpha, color } } };
+}
+
+/** The solid colour and alpha of a stored fill, when it has one. */
+export function fillSolid(fill: unknown): { color?: [number, number, number]; alpha?: number } | undefined {
+  return (fill as { content?: { solid?: { color?: [number, number, number]; alpha?: number } } } | undefined)?.content
+    ?.solid;
 }
 
 export function setTextRanges(
@@ -1192,9 +1214,7 @@ export function setTextRanges(
 
   // Baseline style inherited for fields the user didn't override.
   const base = content.styles?.[0] ?? {};
-  const baseFill = (
-    base.fill as { content?: { solid?: { color?: [number, number, number]; alpha?: number } } } | undefined
-  )?.content?.solid;
+  const baseFill = fillSolid(base.fill);
   const defaultColor: [number, number, number] = baseFill?.color ?? [1, 1, 1];
   const defaultAlpha = baseFill?.alpha ?? 1;
   const defaultSize = (base.size as number | undefined) ?? 15;
@@ -1232,13 +1252,7 @@ export function setTextRanges(
       bold: r?.bold ?? defaultBold,
       italic: r?.italic ?? defaultItalic,
       underline: r?.underline ?? defaultUnderline,
-      fill: {
-        alpha: 1,
-        content: {
-          render_type: "solid",
-          solid: { alpha, color },
-        },
-      },
+      fill: solidFill(color, alpha),
     };
   };
 

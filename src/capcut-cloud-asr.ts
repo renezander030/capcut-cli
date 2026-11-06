@@ -6,7 +6,15 @@
  */
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { capcutEditorHeaders } from "./capcut-cloud-headers.js";
+import {
+  CAPCUT_EDITOR_HOST,
+  type CapcutRequestTiming,
+  capcutEditorHeaders,
+  postEditorApi,
+  requireRetOk,
+  seconds,
+  sendCapcutRequest,
+} from "./capcut-cloud-headers.js";
 import type { CaptionCue, CaptionWord } from "./caption.js";
 
 /** CRC32 lookup table for upload verification. */
@@ -168,57 +176,14 @@ export function pollBudgetMs(durationMs: number): number {
   return Math.min(30 * 60_000, 120_000 + Math.max(0, durationMs) / 2);
 }
 
-interface Timing {
-  requestTimeoutMs: number;
-  retryDelayMs: number;
+/** Request limits plus the recognition's polling. Signing, the upload-node lookup and the
+ * status polls are safe to repeat; the upload, its commit and the task creation are sent once. */
+interface Timing extends CapcutRequestTiming {
   pollIntervalMs: number;
   pollBudgetMs: number;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const seconds = (ms: number) => (ms >= 1000 ? Math.round(ms / 1000) : ms / 1000);
-
-/** Attempts for the calls that are safe to repeat (signing, upload-node lookup, status polls). */
-const RETRY_ATTEMPTS = 3;
-
-/**
- * One request with a time limit. `retry` repeats a call that is safe to repeat
- * when the network fails, it times out, or the service answers 429 or 5xx,
- * pausing n x retryDelayMs before the n-th retry; the upload, its commit and
- * the task creation are never repeated. Any other answer is returned as is.
- */
-async function send(
-  url: string,
-  init: RequestInit,
-  step: string,
-  t: Timing,
-  retry: boolean,
-  timeoutMs = t.requestTimeoutMs,
-): Promise<Response> {
-  const attempts = retry ? RETRY_ATTEMPTS : 1;
-  for (let attempt = 1; ; attempt++) {
-    let res: Response;
-    try {
-      res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-    } catch (e) {
-      if (attempt < attempts) {
-        await sleep(t.retryDelayMs * attempt);
-        continue;
-      }
-      const error = e as Error;
-      throw new Error(
-        error.name === "TimeoutError"
-          ? `CapCut ${step} request timed out after ${seconds(timeoutMs)} s${attempts > 1 ? ` (${attempts} tries)` : ""}.`
-          : `CapCut ${step} request failed: ${error.message}`,
-      );
-    }
-    if (!res.ok && (res.status === 429 || res.status >= 500) && attempt < attempts) {
-      await sleep(t.retryDelayMs * attempt);
-      continue;
-    }
-    return res;
-  }
-}
 
 export interface CloudAsrResult {
   cues: CaptionCue[];
@@ -226,35 +191,6 @@ export interface CloudAsrResult {
   engine: "capcut-cloud";
   engine_name: string;
   duration_ms?: number;
-}
-
-interface EditorApiReply<T> {
-  ret: string;
-  errmsg: string;
-  data?: T;
-}
-
-/** POST to CapCut's editor API; an HTTP failure names the step. */
-async function postEditorApi<T>(
-  url: string,
-  headers: Record<string, string>,
-  body: string,
-  step: string,
-  t: Timing,
-  retry: boolean,
-): Promise<EditorApiReply<T>> {
-  const res = await send(url, { method: "POST", headers, body }, step, t, retry);
-  if (!res.ok) {
-    throw new Error(`CapCut ${step} HTTP error: ${res.status} ${res.statusText}`);
-  }
-  return (await res.json()) as EditorApiReply<T>;
-}
-
-/** The editor API answers ret "0" (or 0) on success; any other ret is its refusal. */
-function requireRetOk(reply: EditorApiReply<unknown>, step: string): void {
-  if (reply.ret !== "0" && reply.ret !== (0 as unknown as string)) {
-    throw new Error(`CapCut ${step} failed [ret=${reply.ret}]: ${reply.errmsg || "Unknown error"}`);
-  }
 }
 
 interface UploadSignatureData {
@@ -276,7 +212,7 @@ interface ApplyUploadResult {
 
 /** Step 1: Request upload signature from CapCut Web API. */
 async function getUploadSignature(t: Timing): Promise<UploadSignatureData> {
-  const url = "https://editor-api-sg.capcutapi.com/lv/v1/upload_sign?aid=359289&device_platform=windows";
+  const url = `https://${CAPCUT_EDITOR_HOST}/lv/v1/upload_sign?aid=359289&device_platform=windows`;
   const body = JSON.stringify({ biz: "cc_pc_text_recognize", key_version: "v5" });
   const json = await postEditorApi<UploadSignatureData>(url, DEFAULT_CAPCUT_HEADERS, body, "upload_sign", t, true);
   requireRetOk(json, "upload_sign");
@@ -298,7 +234,13 @@ async function applyUpload(creds: UploadSignatureData, t: Timing): Promise<Apply
     creds,
   );
 
-  const res = await send(signed.url, { method: "GET", headers: signed.headers }, "ApplyUploadInner", t, true);
+  const res = await sendCapcutRequest(
+    signed.url,
+    { method: "GET", headers: signed.headers },
+    "ApplyUploadInner",
+    t,
+    true,
+  );
   if (!res.ok) {
     throw new Error(`CapCut ApplyUploadInner HTTP error: ${res.status} ${res.statusText}`);
   }
@@ -345,7 +287,7 @@ async function uploadBinary(applyData: ApplyUploadResult, fileBuffer: Buffer, t:
   const transferUrl = `https://${applyData.host}/upload/v1/${applyData.oid}?uploadid=${applyData.uploadId}&part_number=0&phase=transfer`;
   // The body takes time to send: one more second per 128 KiB on top of the request limit.
   const transferTimeoutMs = t.requestTimeoutMs + Math.ceil(fileBuffer.length / (128 * 1024)) * 1000;
-  const transferRes = await send(
+  const transferRes = await sendCapcutRequest(
     transferUrl,
     {
       method: "POST",
@@ -368,7 +310,7 @@ async function uploadBinary(applyData: ApplyUploadResult, fileBuffer: Buffer, t:
   // 3.2 Finish
   const finishUrl = `https://${applyData.host}/upload/v1/${applyData.oid}?uploadmode=part&phase=finish&uploadid=${applyData.uploadId}`;
   const finishBody = `0:${hash}`;
-  const finishRes = await send(
+  const finishRes = await sendCapcutRequest(
     finishUrl,
     { method: "POST", headers: { ...authHeaders, "Content-Type": "text/plain" }, body: finishBody },
     "TOS finish",
@@ -423,7 +365,13 @@ async function commitUpload(
     creds,
   );
 
-  const res = await send(signed.url, { method: "POST", headers: signed.headers, body }, "CommitUploadInner", t, false);
+  const res = await sendCapcutRequest(
+    signed.url,
+    { method: "POST", headers: signed.headers, body },
+    "CommitUploadInner",
+    t,
+    false,
+  );
   if (!res.ok) {
     throw new Error(`CapCut CommitUploadInner HTTP error: ${res.status} ${res.statusText}`);
   }
@@ -514,7 +462,7 @@ async function pollSttStatus(
   cookie?: string,
   opts?: CloudAsrOptions,
 ): Promise<CloudAsrPayload> {
-  const url = "https://editor-api-sg.capcutapi.com/lv/v1/common_task/query?aid=359289&device_platform=windows";
+  const url = `https://${CAPCUT_EDITOR_HOST}/lv/v1/common_task/query?aid=359289&device_platform=windows`;
   const body = JSON.stringify({
     tasks: [{ id: taskId, req_key: "cc_audio_subtitle_asr", task_version: "v3", token }],
   });

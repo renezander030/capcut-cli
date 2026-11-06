@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { stripBom } from "./bom.js";
-import { hexToRgb01, requireTextMaterial, setBubble, setTextRanges, type TextRangeInput } from "./decorators.js";
+import {
+  hexToRgb01,
+  requireTextMaterial,
+  rgb01ToHex,
+  setBubble,
+  setTextRanges,
+  solidFill,
+  type TextRangeInput,
+} from "./decorators.js";
 import type { Draft, MaterialText } from "./draft.js";
 import { STYLE_FIELDS } from "./factory.js";
 import { fromStoredOffset, repairDoubledRanges, storedTextLength } from "./text-offsets.js";
@@ -23,14 +31,6 @@ export interface TextStylePreset {
   transform?: { x: number; y: number };
   bubble?: { effect_id: string; resource_id: string };
   text_ranges?: TextRangeInput[];
-}
-
-function rgb01ToHex(rgb: [number, number, number]): string {
-  const channel = (v: number) =>
-    Math.round(Math.min(1, Math.max(0, v)) * 255)
-      .toString(16)
-      .padStart(2, "0");
-  return `#${channel(rgb[0])}${channel(rgb[1])}${channel(rgb[2])}`.toUpperCase();
 }
 
 interface ContentStyleBlock {
@@ -308,10 +308,7 @@ export function applyTextPreset(
     if (typeof preset.style.italic === "boolean") base.italic = preset.style.italic;
     if (typeof preset.style.underline === "boolean") base.underline = preset.style.underline;
     if (typeof preset.style.text_color === "string") {
-      base.fill = {
-        alpha: 1,
-        content: { render_type: "solid", solid: { alpha: 1, color: hexToRgb01(preset.style.text_color) } },
-      };
+      base.fill = solidFill(hexToRgb01(preset.style.text_color));
     }
     if (typeof preset.style.font_path === "string") {
       base.font = {
@@ -370,7 +367,7 @@ export function captionStyleFromPreset(preset: TextStylePreset): Record<string, 
     bold: preset.style.bold ?? false,
     italic: preset.style.italic ?? false,
     underline: preset.style.underline ?? false,
-    fill: { alpha: 1, content: { render_type: "solid", solid: { alpha: 1, color: hexToRgb01(color) } } },
+    fill: solidFill(hexToRgb01(color)),
   };
   if (typeof preset.style.font_path === "string") {
     block.font = {
