@@ -671,6 +671,14 @@ With `--cloud --dry-run` nothing is uploaded: the result reports `would_upload`
 (file, bytes, duration, destination) and exits. `--language` has no effect with
 `--cloud`; the service detects the spoken language and a warning says so.
 
+After transcribing, the result's `coverage` block compares the cues with the
+speech ffmpeg's silencedetect finds in the transcribed audio: `speech_s`,
+`captioned_s`, `ratio`, `uncaptioned` (spans of at least `--min-uncaptioned`
+seconds, default 1.5) and `tail_uncaptioned_s` (speech after the last cue). Any
+uncaptioned span prints one `[uncaptioned-speech]` line on stderr; the exit code
+does not change. Without ffmpeg it is `{skipped: "ffmpeg not found"}`;
+`--no-coverage` skips it.
+
 ### `capcut loudness <project> [--target <lufs>] [--per-clip] [--apply]`
 
 Measures each audible clip with ffmpeg's EBU R128 meter over the media range the

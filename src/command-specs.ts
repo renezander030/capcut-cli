@@ -618,7 +618,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "number",
       "Zero-based audio stream to extract from the input container before transcription.",
     ),
-    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream."),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream and the coverage check."),
     option("from_segment", ["--from-segment"], "id", "Audio segment input."),
     option(
       "cloud",
@@ -664,6 +664,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Maximum characters per cue (karaoke) or per script line. Unset: 28 / 42; Chinese 16 / 16, Japanese 13 / 13, Korean 16 / 16.",
     ),
     option("max_gap_ms", ["--max-gap-ms"], "number", "Maximum gap inside a karaoke cue."),
+    option(
+      "min_uncaptioned",
+      ["--min-uncaptioned"],
+      "number",
+      "Shortest stretch of speech without a cue, in seconds, that the coverage check lists in coverage.uncaptioned and warns about.",
+      { default: 1.5 },
+    ),
+    option(
+      "no_coverage",
+      ["--no-coverage"],
+      "boolean",
+      'Skip the coverage check. By default, after transcribing (not with --words), ffmpeg measures the speech in the transcribed audio (silencedetect) and the result\'s `coverage` block reports speech_s, captioned_s, ratio, the uncaptioned spans and tail_uncaptioned_s (speech after the last cue); any uncaptioned span prints one `[uncaptioned-speech]` warning on stderr. Without ffmpeg the block is {skipped: "ffmpeg not found"} and the run does not fail.',
+    ),
     TRACK_NAME,
     STYLE_REF,
     PRESET,
@@ -1077,6 +1090,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --strict, --verify   -> render (v0.29 fidelity census gate + output duration check)
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
+//   --min-uncaptioned, --no-coverage -> caption (coverage check)
 //   --apply-plan         -> batch (v0.29 reviewed batch plans)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
@@ -1112,6 +1126,8 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--word-reveal",
   "--video-bitrate",
   "--min-script-match",
+  "--min-uncaptioned",
+  "--no-coverage",
   "--from",
   "--ripple",
   "--frame-grid",

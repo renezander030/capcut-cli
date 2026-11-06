@@ -7,6 +7,13 @@ import { type AlignmentReport, alignScript, tokenizeScript } from "./align.js";
 import { transcribeAudioCapcutCloud } from "./capcut-cloud-asr.js";
 import { normalizeLanguageCode, translateCuesCapcutCloud } from "./capcut-cloud-translate.js";
 import {
+  type CoverageReport,
+  captionCoverage,
+  DEFAULT_MIN_UNCAPTIONED,
+  measureSpeech,
+  type TimeSpan,
+} from "./caption-coverage.js";
+import {
   buildEmphasisRanges,
   DEFAULT_KEYWORD_SIZE,
   KARAOKE_HIGHLIGHT_COLOR,
@@ -32,7 +39,7 @@ export interface CaptionOptions {
   wordsSource?: string; // where wordsJson came from (path or "stdin"), for the result
   audio?: string; // path to audio file; if absent, derived from --from-segment
   audioStream?: number; // zero-based audio stream inside the input container
-  ffmpegCmd?: string; // ffmpeg binary used only when audioStream is selected
+  ffmpegCmd?: string; // ffmpeg binary for audioStream extraction and the coverage check
   fromSegment?: string; // segment ID of an audio segment in the draft to caption
   cloud?: boolean; // transcribe via CapCut Cloud ASR
   translate?: string; // translate captions to target language via CapCut Cloud
@@ -59,6 +66,10 @@ export interface CaptionOptions {
    * cue boundary, long lines still split at --max-chars.
    */
   scriptText?: string;
+  /** false (--no-coverage) skips measuring which speech the cues leave uncaptioned. */
+  coverage?: boolean;
+  /** Shortest uncaptioned speech span the coverage check lists, seconds (default 1.5). */
+  minUncaptioned?: number;
 }
 
 export interface CaptionWord {
@@ -101,6 +112,8 @@ export interface CaptionResult {
   color_cycle?: number;
   /** --script alignment quality (only when a script was given). */
   script?: AlignmentReport;
+  /** Speech in the transcribed audio that no cue covers (absent with --words or --no-coverage). */
+  coverage?: CoverageReport;
   /** The script the transcript is written in, which chose the word separator
    * and the --max-words / --max-chars defaults (see script.ts). */
   caption_script: CaptionScript;
@@ -186,6 +199,9 @@ export function checkCaptionOptions(opts: CaptionOptions): void {
   if (opts.audioStream !== undefined && (!Number.isInteger(opts.audioStream) || opts.audioStream < 0)) {
     throw new Error("--audio-stream must be a zero-based non-negative integer.");
   }
+  if (opts.minUncaptioned !== undefined && (!Number.isFinite(opts.minUncaptioned) || opts.minUncaptioned < 0)) {
+    throw new Error("--min-uncaptioned must be a number of seconds, 0 or more.");
+  }
   const conflict = transcriptionSourceConflict({ ...opts, words: opts.wordsJson !== undefined });
   if (conflict) throw new Error(conflict);
 }
@@ -196,6 +212,11 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   let sourceAudio: string | undefined;
   let transcription: TranscriptionResult;
   let external: ParsedWordTimings | undefined;
+  // The speech in the audio that was transcribed, measured before a temporary
+  // extracted stream is cleaned up; compared with the cues once they exist.
+  let speech: TimeSpan[] | { skipped: string } | undefined;
+  const measure = (audio: string) =>
+    opts.coverage === false ? undefined : measureSpeech(audio, opts.ffmpegCmd ?? "ffmpeg");
   if (fromWords) {
     // External aligner output stands in for the Whisper run; everything after
     // this point (script detection, grouping, --script, karaoke, reveal,
@@ -217,6 +238,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
       const languageWarning = cloudLanguageWarning(opts);
       if (languageWarning) process.stderr.write(languageWarning);
       const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
+      speech = measure(cloudAudio);
       return {
         cues: cloudRes.cues,
         words: cloudRes.words,
@@ -226,7 +248,11 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     sourceAudio = heard.source;
     transcription = heard.result;
   } else {
-    const heard = await withCaptionAudio(draft, opts, (audio) => runWhisper(audio, opts));
+    const heard = await withCaptionAudio(draft, opts, (audio) => {
+      const result = runWhisper(audio, opts);
+      speech = measure(audio);
+      return result;
+    });
     sourceAudio = heard.source;
     transcription = heard.result;
   }
@@ -301,6 +327,18 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   if (cues.length === 0) {
     throw new Error("Whisper produced no cues. Check the audio file is not silent and the model name is valid.");
   }
+  // Cue times are the audio's own clock (they are written at those positions),
+  // so they compare directly with the measured speech.
+  const coverage: CoverageReport | undefined =
+    speech === undefined
+      ? undefined
+      : "skipped" in speech
+        ? speech
+        : captionCoverage(
+            speech,
+            cues.map((cue) => ({ start: cue.startUs / 1_000_000, end: cue.endUs / 1_000_000 })),
+            opts.minUncaptioned ?? DEFAULT_MIN_UNCAPTIONED,
+          );
 
   let translation: CaptionResult["translation"];
   if (opts.translate) {
@@ -437,6 +475,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     keyword_matches: highlightWords.length > 0 ? keywordMatches : undefined,
     color_cycle: colorCycle.length > 0 ? colorCycle.length : undefined,
     script: scriptReport,
+    coverage,
   };
 }
 

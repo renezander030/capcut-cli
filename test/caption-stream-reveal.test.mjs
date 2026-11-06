@@ -75,6 +75,9 @@ describe("caption audio stream selection", () => {
         FAKE_WHISPER,
         "--track-name",
         "selected",
+        // The stand-in ffmpeg only extracts streams: it would write its last
+        // argument ("-", the null muxer's output) as a file in the cwd.
+        "--no-coverage",
       ],
       { env: { FAKE_WHISPER_SOURCE: transcript } },
     );
@@ -128,6 +131,8 @@ describe("caption audio stream clean-up", { skip: isWindows }, () => {
           ffmpeg,
           "--whisper-cmd",
           outcome === "succeeds" ? FAKE_WHISPER : failingWhisper,
+          // The fake ffmpeg only extracts; the coverage check would run it again.
+          "--no-coverage",
         ],
         { env: { FAKE_WHISPER_SOURCE: transcript } },
       );

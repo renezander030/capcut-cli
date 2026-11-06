@@ -4464,7 +4464,7 @@
           ],
           "type": "path",
           "required": false,
-          "description": "FFmpeg binary used by --audio-stream."
+          "description": "FFmpeg binary used by --audio-stream and the coverage check."
         },
         {
           "name": "from_segment",
@@ -4587,6 +4587,25 @@
           "type": "number",
           "required": false,
           "description": "Maximum gap inside a karaoke cue."
+        },
+        {
+          "name": "min_uncaptioned",
+          "flags": [
+            "--min-uncaptioned"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shortest stretch of speech without a cue, in seconds, that the coverage check lists in coverage.uncaptioned and warns about.",
+          "default": 1.5
+        },
+        {
+          "name": "no_coverage",
+          "flags": [
+            "--no-coverage"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Skip the coverage check. By default, after transcribing (not with --words), ffmpeg measures the speech in the transcribed audio (silencedetect) and the result's `coverage` block reports speech_s, captioned_s, ratio, the uncaptioned spans and tail_uncaptioned_s (speech after the last cue); any uncaptioned span prints one `[uncaptioned-speech]` warning on stderr. Without ffmpeg the block is {skipped: \"ffmpeg not found\"} and the run does not fail."
         },
         {
           "name": "track_name",

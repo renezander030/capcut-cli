@@ -739,7 +739,18 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
                --audio-stream <n>   Zero-based audio stream in the input
-               --ffmpeg-cmd <cmd>   ffmpeg used to extract --audio-stream
+               --ffmpeg-cmd <cmd>   ffmpeg used to extract --audio-stream and
+                                    to measure caption coverage
+               --min-uncaptioned <secs>
+                                    Shortest stretch of speech without a cue
+                                    the coverage check reports (default 1.5)
+               --no-coverage        Skip the coverage check. By default, after
+                                    transcribing, ffmpeg measures the speech in
+                                    the audio (silencedetect) and the result's
+                                    "coverage" block lists the speech no cue
+                                    covers; any found prints one
+                                    [uncaptioned-speech] warning on stderr.
+                                    Without ffmpeg it is skipped, never fatal.
                --language <code>    ISO code or "auto" (default)
                --track-name <s>     Caption track name (default: "captions")
                --style-ref <seg-id> Mirror styling from existing text segment
@@ -966,6 +977,9 @@ interface Flags {
   script?: string;
   wordReveal?: boolean;
   minScriptMatch?: number;
+  // caption coverage check
+  noCoverage?: boolean;
+  minUncaptioned?: number;
   // detect-retakes
   window?: number;
   similarity?: number;
@@ -1276,6 +1290,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--fix", "fix"],
   ["--karaoke", "karaoke"],
   ["--no-probe", "noProbe"],
+  ["--no-coverage", "noCoverage"],
   ["--retime", "retime"],
   ["--dry-run", "dryRun"],
   ["--fail-fast", "failFast"],
@@ -1378,6 +1393,7 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--tolerance", "tolerance"],
   ["--max-true-peak", "maxTruePeak"],
   ["--min-script-match", "minScriptMatch"],
+  ["--min-uncaptioned", "minUncaptioned"],
   ["--window", "window"],
   ["--similarity", "similarity"],
   ["--center-x", "centerX"],
@@ -4086,6 +4102,9 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
   if (flags.audioStream !== undefined && (!Number.isInteger(flags.audioStream) || flags.audioStream < 0)) {
     die("--audio-stream must be a zero-based non-negative integer.");
   }
+  if (flags.minUncaptioned !== undefined && (!Number.isFinite(flags.minUncaptioned) || flags.minUncaptioned < 0)) {
+    die("--min-uncaptioned must be a number of seconds, 0 or more.");
+  }
   const emphasis = await keywordEmphasisFromFlags(flags);
   let scriptText: string | undefined;
   if (flags.script !== undefined) {
@@ -4126,6 +4145,8 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     keywordColor: emphasis.color,
     keywordSize: emphasis.size,
     colorCycle: emphasis.cycle,
+    coverage: flags.noCoverage ? false : undefined,
+    minUncaptioned: flags.minUncaptioned,
   };
   if (flags.cloud && isDryRun()) {
     // A dry run sends nothing anywhere: report what --cloud would upload.
@@ -4171,6 +4192,13 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
       `Warning: only ${Math.round(result.script.match_ratio * 100)}% of the script's words matched ${flags.words !== undefined ? "the --words timings" : "what whisper heard"} ` +
         `(${result.script.matched}/${result.script.script_words}). Check that --script belongs to this audio.\n`,
     );
+  }
+  // Speech the cues leave uncaptioned: a transcription that stopped early or
+  // dropped quiet speech. Warn, never fail — the captions that exist are fine.
+  const coverage = result.coverage;
+  if (coverage && "uncaptioned" in coverage && coverage.uncaptioned.length > 0 && !flags.quiet) {
+    const { uncaptionedWarning } = await import("./caption-coverage.js");
+    process.stderr.write(uncaptionedWarning(coverage));
   }
   out(result, flags);
 }
