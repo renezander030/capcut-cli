@@ -81,6 +81,16 @@ describe("capcut-cloud-translate — language normalization", () => {
     assert.equal(normalizeLanguageCode("Arabic"), "ar-SA");
     assert.equal(normalizeLanguageCode("unknown-lang"), "unknown-lang");
   });
+
+  it("finds every canonical code in any letter case and passes unknown codes through trimmed", () => {
+    const canonical = ["en", "vi", "es", "fr", "de", "zh-CN", "zh-TW", "ja", "ko", "pt", "ru", "id", "th", "it"];
+    for (const code of [...canonical, "ar-SA", "tr", "nl", "pl", "ms", "hi"]) {
+      assert.equal(normalizeLanguageCode(code), code);
+      assert.equal(normalizeLanguageCode(` ${code.toUpperCase()} `), code);
+      assert.equal(normalizeLanguageCode(code.toLowerCase()), code);
+    }
+    assert.equal(normalizeLanguageCode("  Klingon "), "Klingon");
+  });
 });
 
 describe("capcut-cloud-translate — captured headers", () => {
@@ -222,6 +232,43 @@ describe("capcut-cloud-translate — exchange (offline)", () => {
     const res = await translateUtterancesCapcutCloud([{ start_time: 0, end_time: 1, text: "a" }], "vi", FAST);
     assert.equal(n, 2);
     assert.equal(res[0].translation_text, "vi:a");
+  });
+
+  it("gives up after three tries on a 5xx answer and names the HTTP error", async () => {
+    const calls = service(() => new Response("down", { status: 503, statusText: "Busy" }));
+    await assert.rejects(translateUtterancesCapcutCloud([{ start_time: 0, end_time: 1, text: "a" }], "vi", FAST), {
+      message: "CapCut Cloud Translation HTTP error: 503 Busy",
+    });
+    assert.equal(calls.length, 3);
+  });
+
+  it("sends a refused request once and names the HTTP error", async () => {
+    const calls = service(() => new Response("no", { status: 400, statusText: "Bad Request" }));
+    await assert.rejects(translateUtterancesCapcutCloud([{ start_time: 0, end_time: 1, text: "a" }], "vi", FAST), {
+      message: "CapCut Cloud Translation HTTP error: 400 Bad Request",
+    });
+    assert.equal(calls.length, 1);
+  });
+
+  it("retries a network failure, then names it", async () => {
+    let n = 0;
+    globalThis.fetch = async () => {
+      n++;
+      throw new TypeError("fetch failed");
+    };
+    await assert.rejects(translateUtterancesCapcutCloud([{ start_time: 0, end_time: 1, text: "a" }], "vi", FAST), {
+      message: "CapCut Cloud Translation request failed: fetch failed",
+    });
+    assert.equal(n, 3);
+  });
+
+  it("names a request that timed out on every try", async () => {
+    globalThis.fetch = async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    };
+    await assert.rejects(translateUtterancesCapcutCloud([{ start_time: 0, end_time: 1, text: "a" }], "vi", FAST), {
+      message: "CapCut Cloud Translation request timed out after 60 s (3 tries).",
+    });
   });
 
   it("turns translated words into µs cue words and leaves an untranslated cue exactly as it was", async () => {

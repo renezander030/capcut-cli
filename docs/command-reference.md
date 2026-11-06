@@ -68,7 +68,7 @@
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | yes | Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes. |
 | `timeline` | `capcut timeline <project> [--cols <number>]` | no | Show the track/segment layout (JSON, or -H ASCII bars). |
 | `projects` | `capcut projects [query] [--drafts <path>] [--names]` | no | List CapCut/JianYing draft folders on disk. |
-| `diff` | `capcut diff <project-a> <project-b>` | no | Compare two drafts (segments/materials/tracks added/removed/changed). |
+| `diff` | `capcut diff <project-a> (<project-b> \| --since-write)` | no | Compare two drafts (segments/materials/tracks added/removed/changed), or with --since-write a draft with what capcut-cli last wrote to it. |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | yes | Append one draft onto another's timeline (id-safe), write to --out or in place. |
 | `config` | `capcut config` | no | Show the resolved config (.capcutrc + effective defaults). |
 | `describe` | `capcut describe [--compact] [--command <name>]` | no | Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index. |
@@ -78,7 +78,7 @@
 | `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | no | Learn store resource ids into the per-user catalogue: from one draft, the whole library (--sync), or by hand (--add). |
 | `doctor` | `capcut doctor [--drafts <dir>]` | no | Environment preflight (Node, whisper, API key, project dir). |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | no | Inspect canonical draft files, divergence, and editor-write safety. |
-| `fixture` | `capcut fixture <project> --out <dir> [--check]` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44). |
+| `fixture` | `capcut fixture <project> --out <dir> [--anonymize] [--check]` | no | Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44). |
 | `sync-timelines` | `capcut sync-timelines <project-dir> [--nested] [--apply]` | yes | Reconcile drifted timeline mirrors (template-2.tmp, draft_info.json) from a read-only draft_content.json (plan with mtimes by default; --apply rewrites only the drifted mirrors). |
 | `restore` | `capcut restore <project> [--step <number> \| --list]` | yes | Undo writes from .bak / snapshot history (--step N, --list). |
 | `serve` | `capcut serve [--queue <path>] [options]` | no | Run a stateless JSONL job queue from stdin/--queue. |
@@ -88,7 +88,7 @@
 | `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto\|bundled\|<dir>] [--ratio <r> \| --width <px> --height <px>]` | yes | One-command first draft: create + add one input + lint + print the open-in-CapCut step. |
 | `compile` | `capcut compile <spec.json> [--out <draftdir> \| --into <project>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | yes | Build a draft from a declarative JSON spec (the inverse of describe). |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | no | Render a low-res ffmpeg proxy preview (trim+speed+audio, --burn-captions); not CapCut's final render. |
-| `loudness` | `capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]` | no | Measure each audible clip's loudness (EBU R128) and, with --target, set the gain that brings the export there. |
+| `loudness` | `capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply] [--tolerance <lu>] [--max-true-peak <dbtp>]` | no | Measure each audible clip's loudness (EBU R128) and, with --target, set the gain that brings the export there. |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | no | Detect scene-change cut points in a video (ffmpeg scene filter); prints cuts + segments to seed compile/cut. |
 | `detect-silence` | `capcut detect-silence <media> [options]` | no | Detect silence spans in a media file (ffmpeg silencedetect); prints silences + keep segments to seed compile/cut. |
 | `detect-retakes` | `capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] \| --srt <file>` | no | Find repeated takes in the draft's captions (or an SRT): windowed word-sequence similarity, later take kept; prints cuts + keep segments to seed compile/cut. |

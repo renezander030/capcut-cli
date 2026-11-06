@@ -240,7 +240,7 @@ const usages = {
   relink: "capcut relink <project> (--dir <path> [--recursive] | --from <prefix> --to <prefix>) [--stage]",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
-  diff: "capcut diff <project-a> <project-b>",
+  diff: "capcut diff <project-a> (<project-b> | --since-write)",
   concat: "capcut concat <project-a> <project-b> [--out <path>]",
   config: "capcut config",
   describe: "capcut describe [--compact] [--command <name>]",
@@ -251,7 +251,7 @@ const usages = {
     "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor [--drafts <dir>]",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
-  fixture: "capcut fixture <project> --out <dir> [--check]",
+  fixture: "capcut fixture <project> --out <dir> [--anonymize] [--check]",
   "sync-timelines": "capcut sync-timelines <project-dir> [--nested] [--apply]",
   restore: "capcut restore <project> [--step <number> | --list]",
   serve: "capcut serve [--queue <path>] [options]",
@@ -266,7 +266,8 @@ const usages = {
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
   "detect-silence": "capcut detect-silence <media> [options]",
-  loudness: "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]",
+  loudness:
+    "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply] [--tolerance <lu>] [--max-true-peak <dbtp>]",
   "detect-retakes":
     "capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] | --srt <file>",
 } as const satisfies Record<string, string>;
@@ -318,6 +319,25 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Check target ranges against draft.fps; --fix snaps boundaries and derives duration.",
     ),
     option("no_probe", ["--no-probe"], "boolean", "Skip ffprobe media checks (VFR / unreadable media)."),
+    option(
+      "max_still_secs",
+      ["--max-still-secs"],
+      "number",
+      "Report still-too-long (warning) for each still image that plays longer than this many seconds. Off unless given.",
+    ),
+    option(
+      "max_shot_secs",
+      ["--max-shot-secs"],
+      "number",
+      "Report shot-too-long (warning) for each video clip that plays longer than this many seconds. Off unless given.",
+    ),
+    option(
+      "min_silent_secs",
+      ["--min-silent-secs"],
+      "number",
+      "Report silent-stretch (warning) for every range of this many seconds or more where nothing audible plays. " +
+        "A clip counts as silent only when the draft says so (volume 0, muted track, photo, sound separated). Off unless given.",
+    ),
     option(
       "pip",
       ["--pip"],
@@ -598,7 +618,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "number",
       "Zero-based audio stream to extract from the input container before transcription.",
     ),
-    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream."),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary used by --audio-stream and the coverage check."),
     option("from_segment", ["--from-segment"], "id", "Audio segment input."),
     option(
       "cloud",
@@ -644,6 +664,25 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Maximum characters per cue (karaoke) or per script line. Unset: 28 / 42; Chinese 16 / 16, Japanese 13 / 13, Korean 16 / 16.",
     ),
     option("max_gap_ms", ["--max-gap-ms"], "number", "Maximum gap inside a karaoke cue."),
+    option(
+      "min_uncaptioned",
+      ["--min-uncaptioned"],
+      "number",
+      "Shortest stretch of speech without a cue, in seconds, that the coverage check lists in coverage.uncaptioned and warns about.",
+      { default: 1.5 },
+    ),
+    option(
+      "no_coverage",
+      ["--no-coverage"],
+      "boolean",
+      'Skip the coverage check. By default, after transcribing (not with --words), ffmpeg measures the speech in the transcribed audio (silencedetect) and the result\'s `coverage` block reports speech_s, captioned_s, ratio, the uncaptioned spans and tail_uncaptioned_s (speech after the last cue); any uncaptioned span prints one `[uncaptioned-speech]` warning on stderr. Without ffmpeg the block is {skipped: "ffmpeg not found"} and the run does not fail.',
+    ),
+    option(
+      "no_cache",
+      ["--no-cache"],
+      "boolean",
+      "Neither read nor write the transcript cache. By default the raw transcription (before --script, grouping, styling and --translate) is cached, keyed by the sha256 of the transcribed audio bytes, the engine, whisper command, model, language and word-timing mode, so a run that only changes those later steps does not transcribe (or, with --cloud, upload) again. The result reports transcript_cache: hit, miss or off. Cache directory: CAPCUT_CLI_CACHE_DIR, else $XDG_CACHE_HOME/capcut-cli/transcripts, else ~/.cache/capcut-cli/transcripts (%LOCALAPPDATA%\\capcut-cli\\cache\\transcripts on Windows). --dry-run reads it but never writes it.",
+    ),
     TRACK_NAME,
     STYLE_REF,
     PRESET,
@@ -778,6 +817,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("names", ["--names"], "boolean", "Read project display names."),
   ],
   concat: [OUT],
+  diff: [
+    option(
+      "since_write",
+      ["--since-write"],
+      "boolean",
+      "Compare <project-a> with what capcut-cli itself last wrote to it instead of with a second draft, to see " +
+        "what the app changed when it opened or saved a tool-written draft (a = as written, b = now). Adds " +
+        "since_write: {file, written_at, written_by, written_sha256, current_sha256, changed, top_level_changed, " +
+        "track_order_changed}; changed is false when the file is byte-identical to the write. Every write records " +
+        "its result in the draft's history directory; a draft with no recorded write exits 1.",
+    ),
+  ],
   doctor: [
     option(
       "drafts",
@@ -788,7 +839,22 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   diagnose: [option("bundle", ["--bundle"], "path", "Write a redacted JSON diagnostic bundle.")],
   fixture: [
-    option("out", ["--out"], "path", "Output directory for the sanitized bundle."),
+    option(
+      "out",
+      ["--out"],
+      "path",
+      "Output directory for the sanitized bundle: a new or empty directory outside the source project.",
+    ),
+    option(
+      "anonymize",
+      ["--anonymize"],
+      "boolean",
+      "Also replace what the draft is about: media file names become media-001.<ext> and folder names on media " +
+        "and project paths folder-001 (consistently across every mirror; standard folders such as Desktop are kept), " +
+        "the project name becomes project, and every text is replaced character by character with placeholders " +
+        "of the same length and script (CJK 字, Latin x/X, digits 0; spaces, punctuation and style ranges kept). " +
+        "The report records anonymized: true and counts what was replaced. Media files are never copied.",
+    ),
     option(
       "check",
       ["--check"],
@@ -904,7 +970,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "string",
       "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode.",
     ),
-    option("burn_captions", ["--burn-captions"], "boolean", "Burn captions."),
+    option(
+      "burn_captions",
+      ["--burn-captions"],
+      "boolean",
+      "Burn captions (ffmpeg drawtext). Each caption uses its text material's own font file (the first style block's font.path, else font_path) when that file exists and is a .ttf, .otf or .ttc, otherwise ffmpeg's default face; the result's caption_fonts counts both.",
+    ),
     option(
       "soft_captions",
       ["--soft-captions"],
@@ -957,6 +1028,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("max_gain_db", ["--max-gain-db"], "number", "Largest boost any clip may get, in dB.", { default: 20 }),
     option("apply", ["--apply"], "boolean", "Write the gain as segment volume (default: report only)."),
+    option(
+      "tolerance",
+      ["--tolerance"],
+      "number",
+      "Delivery gate (needs --target): exit 1 when the judged loudness sits more than this many LU from the target. " +
+        "With --apply the mix after this run's gain is judged, without it the mix as it stands.",
+    ),
+    option(
+      "max_true_peak",
+      ["--max-true-peak"],
+      "number",
+      "Delivery gate: exit 1 when the loudest clip's true peak, at the judged volume, is above this level in dBTP.",
+    ),
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary (needs the ebur128 filter)."),
   ],
   "detect-silence": [
@@ -1028,6 +1112,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --target, --per-clip, --max-gain-db -> loudness (v0.31 EBU R128 delivery gain)
+//   --tolerance, --max-true-peak -> loudness (delivery gate on the judged mix)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 //   --lexicon            -> tts (pronunciation rules for the spoken text)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
@@ -1043,10 +1128,16 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --strict, --verify   -> render (v0.29 fidelity census gate + output duration check)
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
+//   --min-uncaptioned, --no-coverage -> caption (coverage check)
+//   --no-cache           -> caption (transcript cache)
 //   --apply-plan         -> batch (v0.29 reviewed batch plans)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
+//   --max-still-secs, --max-shot-secs -> lint (opt-in pacing checks)
+//   --min-silent-secs    -> lint (opt-in silent-stretch check)
 //   --recursive -> relink (v0.27 nested media search)
+//   --anonymize -> fixture (neutral media, folder, project and text placeholders)
+//   --since-write -> diff (compare with the CLI's last recorded write)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -1054,9 +1145,12 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--target",
   "--per-clip",
   "--max-gain-db",
+  "--tolerance",
+  "--max-true-peak",
   "--compact",
   "--command",
   "--add",
+  "--anonymize",
   "--audio-stream",
   "--apply",
   "--apply-plan",
@@ -1074,9 +1168,15 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--word-reveal",
   "--video-bitrate",
   "--min-script-match",
+  "--min-uncaptioned",
+  "--no-cache",
+  "--no-coverage",
   "--from",
   "--ripple",
   "--frame-grid",
+  "--max-still-secs",
+  "--max-shot-secs",
+  "--min-silent-secs",
   "--full",
   "--granularity",
   "--highlight-words",
@@ -1107,6 +1207,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--reset",
   "--script",
   "--similarity",
+  "--since-write",
   "--soft-captions",
   "--strict",
   "--sync",

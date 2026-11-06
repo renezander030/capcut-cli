@@ -234,6 +234,33 @@
           "description": "Skip ffprobe media checks (VFR / unreadable media)."
         },
         {
+          "name": "max_still_secs",
+          "flags": [
+            "--max-still-secs"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Report still-too-long (warning) for each still image that plays longer than this many seconds. Off unless given."
+        },
+        {
+          "name": "max_shot_secs",
+          "flags": [
+            "--max-shot-secs"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Report shot-too-long (warning) for each video clip that plays longer than this many seconds. Off unless given."
+        },
+        {
+          "name": "min_silent_secs",
+          "flags": [
+            "--min-silent-secs"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Report silent-stretch (warning) for every range of this many seconds or more where nothing audible plays. A clip counts as silent only when the draft says so (volume 0, muted track, photo, sound separated). Off unless given."
+        },
+        {
           "name": "pip",
           "flags": [
             "--pip"
@@ -4437,7 +4464,7 @@
           ],
           "type": "path",
           "required": false,
-          "description": "FFmpeg binary used by --audio-stream."
+          "description": "FFmpeg binary used by --audio-stream and the coverage check."
         },
         {
           "name": "from_segment",
@@ -4560,6 +4587,34 @@
           "type": "number",
           "required": false,
           "description": "Maximum gap inside a karaoke cue."
+        },
+        {
+          "name": "min_uncaptioned",
+          "flags": [
+            "--min-uncaptioned"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Shortest stretch of speech without a cue, in seconds, that the coverage check lists in coverage.uncaptioned and warns about.",
+          "default": 1.5
+        },
+        {
+          "name": "no_coverage",
+          "flags": [
+            "--no-coverage"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Skip the coverage check. By default, after transcribing (not with --words), ffmpeg measures the speech in the transcribed audio (silencedetect) and the result's `coverage` block reports speech_s, captioned_s, ratio, the uncaptioned spans and tail_uncaptioned_s (speech after the last cue); any uncaptioned span prints one `[uncaptioned-speech]` warning on stderr. Without ffmpeg the block is {skipped: \"ffmpeg not found\"} and the run does not fail."
+        },
+        {
+          "name": "no_cache",
+          "flags": [
+            "--no-cache"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Neither read nor write the transcript cache. By default the raw transcription (before --script, grouping, styling and --translate) is cached, keyed by the sha256 of the transcribed audio bytes, the engine, whisper command, model, language and word-timing mode, so a run that only changes those later steps does not transcribe (or, with --cloud, upload) again. The result reports transcript_cache: hit, miss or off. Cache directory: CAPCUT_CLI_CACHE_DIR, else $XDG_CACHE_HOME/capcut-cli/transcripts, else ~/.cache/capcut-cli/transcripts (%LOCALAPPDATA%\\capcut-cli\\cache\\transcripts on Windows). --dry-run reads it but never writes it."
         },
         {
           "name": "track_name",
@@ -5387,8 +5442,8 @@
     },
     {
       "name": "diff",
-      "summary": "Compare two drafts (segments/materials/tracks added/removed/changed).",
-      "usage": "capcut diff <project-a> <project-b>",
+      "summary": "Compare two drafts (segments/materials/tracks added/removed/changed), or with --since-write a draft with what capcut-cli last wrote to it.",
+      "usage": "capcut diff <project-a> (<project-b> | --since-write)",
       "positionals": [
         {
           "name": "project-a",
@@ -5401,7 +5456,17 @@
           "required": true
         }
       ],
-      "options": [],
+      "options": [
+        {
+          "name": "since_write",
+          "flags": [
+            "--since-write"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Compare <project-a> with what capcut-cli itself last wrote to it instead of with a second draft, to see what the app changed when it opened or saved a tool-written draft (a = as written, b = now). Adds since_write: {file, written_at, written_by, written_sha256, current_sha256, changed, top_level_changed, track_order_changed}; changed is false when the file is byte-identical to the write. Every write records its result in the draft's history directory; a draft with no recorded write exits 1."
+        }
+      ],
       "mutates": false,
       "prerequisites": [],
       "output": {
@@ -5898,7 +5963,7 @@
     {
       "name": "fixture",
       "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
-      "usage": "capcut fixture <project> --out <dir> [--check]",
+      "usage": "capcut fixture <project> --out <dir> [--anonymize] [--check]",
       "positionals": [
         {
           "name": "project",
@@ -5914,7 +5979,16 @@
           ],
           "type": "path",
           "required": false,
-          "description": "Output directory for the sanitized bundle."
+          "description": "Output directory for the sanitized bundle: a new or empty directory outside the source project."
+        },
+        {
+          "name": "anonymize",
+          "flags": [
+            "--anonymize"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Also replace what the draft is about: media file names become media-001.<ext> and folder names on media and project paths folder-001 (consistently across every mirror; standard folders such as Desktop are kept), the project name becomes project, and every text is replaced character by character with placeholders of the same length and script (CJK 字, Latin x/X, digits 0; spaces, punctuation and style ranges kept). The report records anonymized: true and counts what was replaced. Media files are never copied."
         },
         {
           "name": "check",
@@ -6629,7 +6703,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Burn captions."
+          "description": "Burn captions (ffmpeg drawtext). Each caption uses its text material's own font file (the first style block's font.path, else font_path) when that file exists and is a .ttf, .otf or .ttc, otherwise ffmpeg's default face; the result's caption_fonts counts both."
         },
         {
           "name": "soft_captions",
@@ -6711,7 +6785,7 @@
     {
       "name": "loudness",
       "summary": "Measure each audible clip's loudness (EBU R128) and, with --target, set the gain that brings the export there.",
-      "usage": "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]",
+      "usage": "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply] [--tolerance <lu>] [--max-true-peak <dbtp>]",
       "positionals": [
         {
           "name": "project",
@@ -6725,6 +6799,16 @@
         },
         {
           "name": "db",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "lu",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "dbtp",
           "type": "string",
           "required": false
         }
@@ -6766,6 +6850,24 @@
           "type": "boolean",
           "required": false,
           "description": "Write the gain as segment volume (default: report only)."
+        },
+        {
+          "name": "tolerance",
+          "flags": [
+            "--tolerance"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Delivery gate (needs --target): exit 1 when the judged loudness sits more than this many LU from the target. With --apply the mix after this run's gain is judged, without it the mix as it stands."
+        },
+        {
+          "name": "max_true_peak",
+          "flags": [
+            "--max-true-peak"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Delivery gate: exit 1 when the loudest clip's true peak, at the judged volume, is above this level in dBTP."
         },
         {
           "name": "ffmpeg_cmd",

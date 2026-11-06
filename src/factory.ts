@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { readJsonObjectFile, readTextIfPresent, stripBom } from "./bom.js";
-import { hexToRgb01, uuidHex } from "./decorators.js";
+import { hexToRgb01, solidFill, uuidHex } from "./decorators.js";
 import { detectEncryption } from "./decrypt.js";
 import type { Draft, Segment, Timerange, Track } from "./draft.js";
 import { findMaterialGlobal, findSegment, loadedDraftProjectDir, makeTrack, writeAtomic } from "./draft.js";
@@ -1795,13 +1795,7 @@ function buildTextContent(text: string, fontSize: number, color: [number, number
         bold: false,
         italic: false,
         underline: false,
-        fill: {
-          alpha: 1,
-          content: {
-            render_type: "solid",
-            solid: { alpha: 1, color },
-          },
-        },
+        fill: solidFill(color),
       },
     ],
     text,

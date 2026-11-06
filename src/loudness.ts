@@ -6,6 +6,8 @@
  * measured with ffmpeg's EBU R128 meter over the part of its media the
  * timeline plays; the gain is written as segment volume, which the app applies
  * on export (its master bus is limited, so a boost cannot hard-clip it).
+ * With a tolerance or a true-peak ceiling the report is also a delivery gate
+ * (`judgeLoudness`) that a script can stop an export on.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -23,6 +25,10 @@ export interface LoudnessOptions {
   maxGainDb?: number;
   /** Folder relative media paths resolve against. */
   draftDir?: string;
+  /** How far the judged loudness may sit from the target, in LU (needs target). */
+  tolerance?: number;
+  /** Ceiling for the judged true peak, in dBTP. */
+  maxTruePeak?: number;
 }
 
 export interface ClipLoudness {
@@ -51,6 +57,21 @@ export interface LoudnessReport {
   target?: number;
   max_gain_db: number;
   clips: ClipLoudness[];
+}
+
+/** The delivery check: did the judged mix land within the tolerance of the
+ * target, and does its loudest clip stay under the true-peak ceiling. */
+export interface LoudnessGate {
+  target?: number;
+  tolerance?: number;
+  /** The loudness judged: the mix after this run's gain when it is applied,
+   * the mix as it stands otherwise. */
+  estimate_lufs: number | null;
+  within?: boolean;
+  max_true_peak?: number;
+  /** Highest clip true peak at the volume judged, in dBTP. */
+  estimate_true_peak?: number | null;
+  true_peak_ok?: boolean;
 }
 
 /** Below this the meter reads silence (ffmpeg reports -70 LUFS). */
@@ -129,6 +150,15 @@ export function measureLoudness(draft: Draft, opts: LoudnessOptions = {}): Loudn
   if (opts.target !== undefined && (!Number.isFinite(opts.target) || opts.target > 0 || opts.target < -70)) {
     throw new Error("--target must be a loudness in LUFS between -70 and 0 (for example -14).");
   }
+  if (opts.tolerance !== undefined) {
+    if (opts.target === undefined) throw new Error("--tolerance needs --target <LUFS>: say what loudness to hold.");
+    if (!Number.isFinite(opts.tolerance) || opts.tolerance < 0) {
+      throw new Error("--tolerance must be a number of LU >= 0 (for example 1).");
+    }
+  }
+  if (opts.maxTruePeak !== undefined && !Number.isFinite(opts.maxTruePeak)) {
+    throw new Error("--max-true-peak must be a true-peak level in dBTP (for example -1).");
+  }
   const clips: ClipLoudness[] = [];
   for (const { segment, track, path, why } of audibleSegments(draft)) {
     const volume = typeof segment.volume === "number" ? segment.volume : 1;
@@ -172,19 +202,8 @@ export function measureLoudness(draft: Draft, opts: LoudnessOptions = {}): Loudn
     clip.effective_lufs = round(lufs + 20 * Math.log10(volume), 2);
   }
 
-  const measured = clips.filter((clip) => clip.effective_lufs !== null && clip.duration_us > 0);
-  const totalUs = measured.reduce((sum, clip) => sum + clip.duration_us, 0);
-  const program =
-    totalUs > 0
-      ? round(
-          10 *
-            Math.log10(
-              measured.reduce((sum, clip) => sum + clip.duration_us * 10 ** ((clip.effective_lufs as number) / 10), 0) /
-                totalUs,
-            ),
-          2,
-        )
-      : null;
+  const measured = measuredClips(clips);
+  const program = programLufs(measured, (clip) => clip.effective_lufs as number);
 
   const report: LoudnessReport = {
     mode: opts.perClip ? "per-clip" : "uniform",
@@ -208,6 +227,78 @@ export function measureLoudness(draft: Draft, opts: LoudnessOptions = {}): Loudn
     if (wanted > maxGainDb) clip.clamped = true;
   }
   return report;
+}
+
+/** Clips with a loudness reading and a length on the timeline. */
+function measuredClips(clips: ClipLoudness[]): ClipLoudness[] {
+  return clips.filter((clip) => clip.effective_lufs !== null && clip.duration_us > 0);
+}
+
+/** Duration-weighted energy mean of the clips' loudness, or null with nothing to weigh. */
+function programLufs(measured: ClipLoudness[], lufsOf: (clip: ClipLoudness) => number): number | null {
+  const totalUs = measured.reduce((sum, clip) => sum + clip.duration_us, 0);
+  if (totalUs <= 0) return null;
+  const energy = measured.reduce((sum, clip) => sum + clip.duration_us * 10 ** (lufsOf(clip) / 10), 0);
+  return round(10 * Math.log10(energy / totalUs), 2);
+}
+
+/**
+ * Judge the report against a delivery tolerance and a true-peak ceiling; null
+ * when neither was asked for. `afterGain` judges the mix with this run's gain
+ * (the volumes `applyLoudness` writes, --max-gain-db cap included); without
+ * it, the mix as it stands. `failure` is a one-line reason, null on a pass.
+ */
+export function judgeLoudness(
+  report: LoudnessReport,
+  opts: { tolerance?: number; maxTruePeak?: number; afterGain?: boolean },
+): { gate: LoudnessGate; failure: string | null } | null {
+  if (opts.tolerance === undefined && opts.maxTruePeak === undefined) return null;
+  const afterGain = Boolean(opts.afterGain) && report.target !== undefined;
+  const volumeOf = (clip: ClipLoudness): number =>
+    afterGain && clip.new_volume !== undefined ? clip.new_volume : clip.volume;
+  const mix = afterGain ? "the mix after this run's gain" : "the mix as it stands";
+  const estimate = programLufs(measuredClips(report.clips), (clip) =>
+    round((clip.measured_lufs as number) + 20 * Math.log10(volumeOf(clip)), 2),
+  );
+  const target = report.target;
+  if (opts.tolerance !== undefined && target === undefined) {
+    throw new Error("--tolerance needs --target <LUFS>: say what loudness to hold.");
+  }
+  const gate: LoudnessGate =
+    opts.tolerance !== undefined
+      ? { target, tolerance: opts.tolerance, estimate_lufs: estimate }
+      : { estimate_lufs: estimate };
+  const failures: string[] = [];
+
+  if (opts.tolerance !== undefined && target !== undefined) {
+    const within = estimate !== null && Math.abs(estimate - target) <= opts.tolerance + 1e-9;
+    gate.within = within;
+    if (estimate === null) failures.push("no clip could be measured, so the loudness cannot be judged");
+    else if (!within) {
+      const capped = afterGain && report.clips.some((clip) => clip.clamped);
+      failures.push(
+        `${mix} is estimated at ${estimate} LUFS, ${round(Math.abs(estimate - target), 2)} LU ` +
+          `${estimate < target ? "below" : "above"} the ${target} LUFS target (tolerance ${opts.tolerance} LU)` +
+          (capped ? `; --max-gain-db ${report.max_gain_db} capped the boost` : ""),
+      );
+    }
+  }
+
+  if (opts.maxTruePeak !== undefined) {
+    const peaks = report.clips
+      .filter((clip) => clip.true_peak_dbfs !== null && volumeOf(clip) > 0)
+      .map((clip) => (clip.true_peak_dbfs as number) + 20 * Math.log10(volumeOf(clip)));
+    const peak = peaks.length > 0 ? round(Math.max(...peaks), 2) : null;
+    const ok = peak !== null && peak <= opts.maxTruePeak + 1e-9;
+    gate.max_true_peak = opts.maxTruePeak;
+    gate.estimate_true_peak = peak;
+    gate.true_peak_ok = ok;
+    if (peak === null) failures.push("no clip could be measured, so the true peak cannot be judged");
+    else if (!ok) {
+      failures.push(`the loudest clip in ${mix} peaks at ${peak} dBTP, above the ${opts.maxTruePeak} dBTP ceiling`);
+    }
+  }
+  return { gate, failure: failures.length > 0 ? failures.join("; ") : null };
 }
 
 /** Write each measured clip's new volume into the draft; returns how many changed. */

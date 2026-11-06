@@ -82,7 +82,7 @@ Claude Code 也可以把它作为插件加载：
 
 ## 发布说明
 
-> **v0.32.0 更新：** 时间参数会在写入前拒绝格式错误或超出安全范围的值；翻译结果必须为每条输入提供一个字符串；字幕导入拒绝无效的 UTF-8，避免静默破坏字幕文本。完整说明见[更新日志](./CHANGELOG.md)。
+> **v0.33.0 更新：** `caption` 会报告字幕未覆盖的语音，并在只改样式时复用缓存的转写结果；`loudness --tolerance` 和 `--max-true-peak` 以退出码把关交付响度；`lint` 新增可选的节奏与静音段检查；`diff --since-write` 显示 CapCut 在 CLI 上次写入后改动了什么；`fixture --anonymize` 生成可分享的匿名包；`render --burn-captions` 使用草稿自身的字体绘制字幕。完整说明见[更新日志](./CHANGELOG.md)。
 
 > **v0.31.0 新增：** 实验性、非官方的 `caption --cloud`：无需本地 Whisper，将音频上传到字节跳动的 CapCut 服务器转写（[#157](https://github.com/renezander030/capcut-cli/pull/157)），dry run 中不上传任何内容，请求失败会自动重试，等待时间随音频长度增加；按发布平台的响度目标调整音量（`loudness --target -14`，写入片段音量，可撤销）；同一素材的重复剪辑复用内容哈希，编译更快；新增三项 `lint` 检查：复制后无声的片段、裁剪或变速片段上的关键帧，以及剪映 11.6 及以上版本中的 `UNIFORM_SCALE` 缩放。完整说明见[更新日志](./CHANGELOG.md)。
 

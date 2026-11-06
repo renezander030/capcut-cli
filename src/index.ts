@@ -38,6 +38,7 @@ import type { Draft, MaterialText, Segment, Timerange, Track } from "./draft.js"
 import {
   assertTargetsUnchangedOnDisk,
   commitDraftTargets,
+  contentDigest,
   extractCodeUnitStyleRanges,
   extractText,
   findDraft,
@@ -49,6 +50,8 @@ import {
   isDryRun,
   loadDraft,
   loadedDraftStore,
+  readLastWrite,
+  recordLastWrite,
   saveDraft,
   setDryRun,
   setForceWrite,
@@ -77,6 +80,7 @@ import {
   parseCandidate,
   planTimelineSync,
   setActiveTimelineSelection,
+  timelineFromText,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import type { UserEnumEntry } from "./user-enums.js";
@@ -209,6 +213,15 @@ Overview (start here):
                --max-cue-secs <n>  Caption duration cap (default 7)
                --min-gap-ms <n>    Min gap between captions (default 0)
                --no-check-paths    Skip local-file existence checks
+               --max-still-secs <n> Warn (still-too-long) on a still image
+                                   that plays longer than n seconds
+               --max-shot-secs <n> Warn (shot-too-long) on a video clip
+                                   that plays longer than n seconds
+               --min-silent-secs <n> Warn (silent-stretch) on every range of
+                                   n seconds or more where nothing audible
+                                   plays; a clip counts as silent only when
+                                   the draft says so (volume 0, muted
+                                   track, photo, sound separated)
                --fix               Auto-repair issues stamped fixable:true
                                    (cue-too-long, caption-overlap,
                                    caption-gap-too-small, line-too-long,
@@ -266,6 +279,7 @@ Create:
 
 Preview:
   loudness   <project> [--target <LUFS>] [--per-clip] [--max-gain-db <dB>] [--apply]
+             [--tolerance <LU>] [--max-true-peak <dBTP>]
              Measure every audible clip with ffmpeg's EBU R128 meter (over the
              part of its media the timeline plays) and estimate the export's
              integrated loudness. A draft carries no master gain, so a quiet
@@ -273,6 +287,10 @@ Preview:
              adds the gain that reaches it, one gain for the whole mix (keeps
              the balance) or per clip with --per-clip; --apply writes it as
              segment volume. Boosts are capped at --max-gain-db (default 20).
+             Delivery gate: --tolerance (needs --target) and --max-true-peak
+             judge the mix after this run's gain with --apply, the mix as it
+             stands without; a miss exits 1 with the reason on stderr, and
+             the result's "gate" object says which check failed.
   render     <project> [--out <file.mp4>] [options]
              Render a low-res ffmpeg PROXY preview of the timeline so you can
              watch an edit without opening CapCut. Flattens the main video
@@ -281,7 +299,11 @@ Preview:
              Options:
                --scale <f>        Proxy scale of canvas dims (default 0.5)
                --fps <n>          Output fps (default draft fps)
-               --burn-captions    Draw text-track segments onto the video
+               --burn-captions    Draw text-track segments onto the video, each
+                                  in its text material's font file when the
+                                  draft names an existing .ttf/.otf/.ttc
+                                  (else ffmpeg's default face); the result's
+                                  caption_fonts counts both
                --soft-captions    Mux the text-track cues as a toggleable
                                   subtitle stream (mov_text) instead of, or
                                   as well as, burning them: the SRT is written
@@ -517,13 +539,16 @@ Maintenance & inspection:
   timeline   <project> [--cols N]               Show track/segment layout (JSON, or -H ASCII bars)
   projects   [query] [--drafts <dir>] [--names] List CapCut/JianYing draft folders on disk
   diff       <projectA> <projectB>             Compare two drafts (added/removed/changed)
+             --since-write: compare <projectA> with what capcut-cli last wrote
+             to it, to see what the app changed after opening or saving it.
   concat     <projectA> <draftB> [--out <p>]   Append draftB onto projectA's timeline (id-safe)
   config                                       Show resolved .capcutrc + effective defaults
   describe [--compact] [--command <name>]        Emit command contracts or a compact discovery index
   diagnose   <project> [--bundle <report.json>] Inspect canonical draft files and divergence
   fixture    <project> --out <dir>              Build a shareable, redacted compatibility bundle
              (timeline JSON only, no media; home paths + emails redacted) to
-             attach to a version-support issue like #35.
+             attach to a version-support issue like #35. --anonymize also
+             replaces media names, folder names, the project name and texts.
   sync-timelines <project-dir> [--apply]        Reconcile timeline mirrors (template-2.tmp,
              draft_info.json) that drifted from draft_content.json, so a CLI
              edit is honored by CapCut >= 8.7 (issue #35). Prints the plan
@@ -725,7 +750,32 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                --whisper-cmd <cmd>  Path to whisper binary (default: "whisper")
                --whisper-model <m>  Model name (default: "base")
                --audio-stream <n>   Zero-based audio stream in the input
-               --ffmpeg-cmd <cmd>   ffmpeg used to extract --audio-stream
+               --ffmpeg-cmd <cmd>   ffmpeg used to extract --audio-stream and
+                                    to measure caption coverage
+               --min-uncaptioned <secs>
+                                    Shortest stretch of speech without a cue
+                                    the coverage check reports (default 1.5)
+               --no-coverage        Skip the coverage check. By default, after
+                                    transcribing, ffmpeg measures the speech in
+                                    the audio (silencedetect) and the result's
+                                    "coverage" block lists the speech no cue
+                                    covers; any found prints one
+                                    [uncaptioned-speech] warning on stderr.
+                                    Without ffmpeg it is skipped, never fatal.
+               --no-cache           Transcribe again even when the transcript
+                                    cache holds this audio. By default the raw
+                                    transcription is cached (keyed by the audio
+                                    bytes, engine, whisper command, model,
+                                    language and word-timing mode), so a run
+                                    that only changes styling, grouping,
+                                    --script or --translate does not transcribe
+                                    (or, with --cloud, upload) again; the result
+                                    says transcript_cache hit|miss|off. Cache
+                                    dir: CAPCUT_CLI_CACHE_DIR, else
+                                    $XDG_CACHE_HOME/capcut-cli/transcripts, else
+                                    ~/.cache/capcut-cli/transcripts
+                                    (%LOCALAPPDATA%\\capcut-cli\\cache\\transcripts
+                                    on Windows). --dry-run never writes it.
                --language <code>    ISO code or "auto" (default)
                --track-name <s>     Caption track name (default: "captions")
                --style-ref <seg-id> Mirror styling from existing text segment
@@ -952,6 +1002,10 @@ interface Flags {
   script?: string;
   wordReveal?: boolean;
   minScriptMatch?: number;
+  // caption coverage check + transcript cache
+  noCoverage?: boolean;
+  minUncaptioned?: number;
+  noCache?: boolean;
   // detect-retakes
   window?: number;
   similarity?: number;
@@ -1047,6 +1101,9 @@ interface Flags {
   minGapMs?: number;
   noCheckPaths?: boolean;
   fix?: boolean;
+  maxStillSecs?: number;
+  maxShotSecs?: number;
+  minSilentSecs?: number;
   // caption
   audio?: string;
   /** caption --words: word timings from an external aligner (path or "-"). */
@@ -1119,10 +1176,12 @@ interface Flags {
   videoBitrate?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
-  // loudness: delivery target, per-clip normalization, boost cap
+  // loudness: delivery target, per-clip normalization, boost cap, delivery gate
   target?: number;
   perClip?: boolean;
   maxGainDb?: number;
+  tolerance?: number;
+  maxTruePeak?: number;
   // render: refuse an unfaithful proxy / fail on output duration drift
   strict?: boolean;
   verify?: boolean;
@@ -1134,6 +1193,10 @@ interface Flags {
   bundle?: string;
   continueOnError?: boolean;
   check?: boolean;
+  // fixture --anonymize
+  anonymize?: boolean;
+  // diff --since-write
+  sinceWrite?: boolean;
   plan?: boolean;
   apply?: boolean;
   // batch --plan <file> / --apply-plan <file>
@@ -1257,6 +1320,8 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--fix", "fix"],
   ["--karaoke", "karaoke"],
   ["--no-probe", "noProbe"],
+  ["--no-coverage", "noCoverage"],
+  ["--no-cache", "noCache"],
   ["--retime", "retime"],
   ["--dry-run", "dryRun"],
   ["--fail-fast", "failFast"],
@@ -1268,6 +1333,8 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--force-write", "forceWrite"],
   ["--continue-on-error", "continueOnError"],
   ["--check", "check"],
+  ["--anonymize", "anonymize"],
+  ["--since-write", "sinceWrite"],
   ["--apply", "apply"],
   ["--nested", "nested"],
   ["--pip", "pip"],
@@ -1356,7 +1423,10 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--volume", "volume"],
   ["--target", "target"],
   ["--max-gain-db", "maxGainDb"],
+  ["--tolerance", "tolerance"],
+  ["--max-true-peak", "maxTruePeak"],
   ["--min-script-match", "minScriptMatch"],
+  ["--min-uncaptioned", "minUncaptioned"],
   ["--window", "window"],
   ["--similarity", "similarity"],
   ["--center-x", "centerX"],
@@ -1383,6 +1453,9 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--bg-v-offset", "bgVOffset"],
   ["--scale", "scale"],
   ["--max-cue-secs", "maxCueSecs"],
+  ["--max-still-secs", "maxStillSecs"],
+  ["--max-shot-secs", "maxShotSecs"],
+  ["--min-silent-secs", "minSilentSecs"],
   ["--min-gap-ms", "minGapMs"],
   ["--max-cps", "maxCps"],
   ["--safe-area", "safeArea"],
@@ -1913,9 +1986,12 @@ function cmdSpeed(draft: Draft, filePath: string, segId: string, multiplier: str
 
 // `loudness` measures the draft's audible clips (EBU R128) and, with
 // --target, the gain that brings the export there; --apply writes it as
-// segment volume through the normal journaled save.
+// segment volume through the normal journaled save. --tolerance and
+// --max-true-peak make it a delivery gate: the result carries `gate`, and a
+// miss exits 1 with one line on stderr (with --apply the gain is still
+// written, as lint --fix writes its repairs before reporting what remains).
 async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { applyLoudness, measureLoudness } = await import("./loudness.js");
+  const { applyLoudness, judgeLoudness, measureLoudness } = await import("./loudness.js");
   if (flags.apply && flags.target === undefined) die("--apply needs --target <LUFS>: say what loudness to reach.");
   let report: ReturnType<typeof measureLoudness>;
   try {
@@ -1925,6 +2001,8 @@ async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promis
       perClip: flags.perClip,
       maxGainDb: flags.maxGainDb,
       draftDir: draftProjectDir(filePath),
+      tolerance: flags.tolerance,
+      maxTruePeak: flags.maxTruePeak,
     });
   } catch (e) {
     die((e as Error).message);
@@ -1934,7 +2012,26 @@ async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promis
     changed = applyLoudness(draft, report);
     if (changed > 0) saveDraft(filePath, draft);
   }
-  out({ ok: true, ...report, applied: Boolean(flags.apply) && !isDryRun(), changed }, flags);
+  const judged = judgeLoudness(report, {
+    tolerance: flags.tolerance,
+    maxTruePeak: flags.maxTruePeak,
+    afterGain: Boolean(flags.apply),
+  });
+  const failure = judged?.failure ?? null;
+  out(
+    {
+      ok: failure === null,
+      ...report,
+      ...(judged ? { gate: judged.gate } : {}),
+      applied: Boolean(flags.apply) && !isDryRun(),
+      changed,
+    },
+    flags,
+  );
+  if (failure !== null) {
+    process.stderr.write(`loudness gate failed: ${failure}\n`);
+    process.exitCode = 1;
+  }
 }
 
 function cmdVolume(draft: Draft, filePath: string, segId: string, levelStr: string, flags: Flags, save = true): void {
@@ -3872,6 +3969,13 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     scriptLimitsExcept,
     summarize,
   } = await import("./lint.js");
+  // Opt-in thresholds in seconds; a value that is not a positive number would
+  // otherwise switch the check off without a word.
+  const thresholdUs = (seconds: number | undefined, flag: string): number | undefined => {
+    if (seconds === undefined) return undefined;
+    if (!Number.isFinite(seconds) || seconds <= 0) die(`${flag} must be a number of seconds > 0`);
+    return Math.round(seconds * 1_000_000);
+  };
   const opts: LintOptions = {
     maxCharsPerLine: flags.maxChars ?? DEFAULT_LINT_OPTIONS.maxCharsPerLine,
     maxCueDurationUs:
@@ -3892,6 +3996,9 @@ async function cmdLint(draft: Draft, filePath: string, flags: Flags): Promise<{ 
     draftDir: draftProjectDir(filePath),
     dryRun: isDryRun(),
     frameGrid: flags.frameGrid,
+    maxStillUs: thresholdUs(flags.maxStillSecs, "--max-still-secs"),
+    maxShotUs: thresholdUs(flags.maxShotSecs, "--max-shot-secs"),
+    minSilentUs: thresholdUs(flags.minSilentSecs, "--min-silent-secs"),
   };
   // template-stale (#67, #111) needs the store's newest app version, which
   // costs one timeline read per sibling project — so it is looked up only for
@@ -4028,6 +4135,9 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
   if (flags.audioStream !== undefined && (!Number.isInteger(flags.audioStream) || flags.audioStream < 0)) {
     die("--audio-stream must be a zero-based non-negative integer.");
   }
+  if (flags.minUncaptioned !== undefined && (!Number.isFinite(flags.minUncaptioned) || flags.minUncaptioned < 0)) {
+    die("--min-uncaptioned must be a number of seconds, 0 or more.");
+  }
   const emphasis = await keywordEmphasisFromFlags(flags);
   let scriptText: string | undefined;
   if (flags.script !== undefined) {
@@ -4068,6 +4178,9 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     keywordColor: emphasis.color,
     keywordSize: emphasis.size,
     colorCycle: emphasis.cycle,
+    coverage: flags.noCoverage ? false : undefined,
+    minUncaptioned: flags.minUncaptioned,
+    cache: flags.noCache ? false : undefined,
   };
   if (flags.cloud && isDryRun()) {
     // A dry run sends nothing anywhere: report what --cloud would upload.
@@ -4113,6 +4226,13 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
       `Warning: only ${Math.round(result.script.match_ratio * 100)}% of the script's words matched ${flags.words !== undefined ? "the --words timings" : "what whisper heard"} ` +
         `(${result.script.matched}/${result.script.script_words}). Check that --script belongs to this audio.\n`,
     );
+  }
+  // Speech the cues leave uncaptioned: a transcription that stopped early or
+  // dropped quiet speech. Warn, never fail — the captions that exist are fine.
+  const coverage = result.coverage;
+  if (coverage && "uncaptioned" in coverage && coverage.uncaptioned.length > 0 && !flags.quiet) {
+    const { uncaptionedWarning } = await import("./caption-coverage.js");
+    process.stderr.write(uncaptionedWarning(coverage));
   }
   out(result, flags);
 }
@@ -5172,6 +5292,9 @@ async function cmdRestore(projectPath: string | undefined, flags: Flags): Promis
   const restoreSource = (source: string): void => {
     if (!hasSynchronizedSiblings) {
       copyFileSync(source, filePath);
+      // A restore is the CLI's own write; `diff --since-write` compares with it
+      // (a multi-file restore records through saveDraft).
+      recordLastWrite(filePath, readFileSync(filePath, "utf-8"));
       return;
     }
     const restored = loadDraft(filePath);
@@ -5434,7 +5557,7 @@ const SUMMARIES: Record<string, string> = {
   relink: "Repair broken media paths (--dir or --from/--to).",
   timeline: "Show the track/segment layout (JSON, or -H ASCII bars).",
   projects: "List CapCut/JianYing draft folders on disk.",
-  diff: "Compare two drafts (segments/materials/tracks added/removed/changed).",
+  diff: "Compare two drafts (segments/materials/tracks added/removed/changed), or with --since-write a draft with what capcut-cli last wrote to it.",
   concat: "Append one draft onto another's timeline (id-safe), write to --out or in place.",
   config: "Show the resolved config (.capcutrc + effective defaults).",
   describe: "Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index.",
@@ -5619,15 +5742,9 @@ function indexMaterialContent(draft: Draft): Map<string, string> {
   return m;
 }
 
-// `diff` reports what changed between two drafts: segments added/removed/changed
-// and materials added/removed. Read-only.
-function cmdDiff(positional: string[], flags: Flags): void {
-  const aPath = positional[1];
-  const bPath = positional[2];
-  if (!aPath || !bPath) die("Usage: capcut diff <projectA> <projectB>");
-  const a = readDraft(aPath).draft;
-  const b = readDraft(bPath).draft;
-
+// What changed from draft `a` to draft `b`: segments added/removed/changed and
+// materials added/removed/changed, the shape `diff` prints.
+function diffDrafts(a: Draft, b: Draft) {
   const aSeg = indexSegments(a);
   const bSeg = indexSegments(b);
   const segAdded: string[] = [];
@@ -5661,16 +5778,87 @@ function cmdDiff(positional: string[], flags: Flags): void {
   const changed =
     segAdded.length + segRemoved.length + segChanged.length + matAdded.length + matRemoved.length + matChanged.length >
     0;
+  return {
+    changed,
+    tracks: { a: a.tracks.length, b: b.tracks.length },
+    segments: { added: segAdded, removed: segRemoved, changed: segChanged },
+    materials: { added: matAdded, removed: matRemoved, changed: matChanged },
+  };
+}
+
+// `diff` reports what changed between two drafts: segments added/removed/changed
+// and materials added/removed. Read-only.
+function cmdDiff(positional: string[], flags: Flags): void {
+  if (flags.sinceWrite) {
+    cmdDiffSinceWrite(positional, flags);
+    return;
+  }
+  const aPath = positional[1];
+  const bPath = positional[2];
+  if (!aPath || !bPath) die("Usage: capcut diff <projectA> <projectB>  |  capcut diff <project> --since-write");
+  const a = readDraft(aPath).draft;
+  const b = readDraft(bPath).draft;
+  out({ ok: true, ...diffDrafts(a, b) }, flags);
+}
+
+// `diff <project> --since-write`: the draft on disk against what capcut-cli
+// itself last wrote to it (the record every write keeps in the history
+// directory), so the changes the app made when it opened or saved a
+// tool-written draft show up as `a` = written, `b` = now. Read-only.
+function cmdDiffSinceWrite(positional: string[], flags: Flags): void {
+  const project = positional[1];
+  if (!project || positional[2]) die("Usage: capcut diff <project> --since-write");
+  const filePath = findDraft(project);
+  const record = readLastWrite(filePath);
+  if (!record) {
+    die(
+      `No record of a capcut-cli write to ${filePath}. --since-write compares the draft with what this CLI last ` +
+        "wrote to it, which every edit command records from this version on; this draft has not been written since.",
+    );
+  }
+  const raw = readFileSync(filePath, "utf-8");
+  const written = timelineFromText(record.content);
+  const current = timelineFromText(stripBom(raw));
+  if (!written) die(`The recorded write to ${filePath} does not contain a readable timeline.`);
+  if (!current) die(`${filePath} does not contain a readable timeline.`);
+
+  const currentSha = contentDigest(raw);
+  const changed = currentSha !== record.sha256;
+  // The segment/material diff leaves out the rest of the document, which is
+  // where an app re-save usually shows: list the top-level fields that differ
+  // and whether the tracks were reordered.
+  const keys = [...new Set([...Object.keys(written), ...Object.keys(current)])].sort();
+  const topLevelChanged = keys.filter((key) => JSON.stringify(written[key]) !== JSON.stringify(current[key]));
+  const writtenIds = written.tracks.map((track) => track.id);
+  const currentIds = current.tracks.map((track) => track.id);
+  const shared = (ids: string[], other: string[]) => ids.filter((id) => other.includes(id));
+  const trackOrderChanged =
+    JSON.stringify(shared(writtenIds, currentIds)) !== JSON.stringify(shared(currentIds, writtenIds));
+
   out(
     {
       ok: true,
-      changed,
-      tracks: { a: a.tracks.length, b: b.tracks.length },
-      segments: { added: segAdded, removed: segRemoved, changed: segChanged },
-      materials: { added: matAdded, removed: matRemoved, changed: matChanged },
+      ...diffDrafts(written, current),
+      since_write: {
+        file: path.basename(filePath),
+        written_at: record.written_at,
+        written_by: record.command,
+        written_sha256: record.sha256,
+        current_sha256: currentSha,
+        changed,
+        top_level_changed: topLevelChanged,
+        track_order_changed: trackOrderChanged,
+      },
     },
     flags,
   );
+  if (!flags.quiet) {
+    process.stderr.write(
+      changed
+        ? `${path.basename(filePath)} changed since capcut-cli wrote it at ${record.written_at}.\n`
+        : `No changes: ${path.basename(filePath)} is exactly what capcut-cli wrote at ${record.written_at}.\n`,
+    );
+  }
 }
 
 // `concat` appends draftB onto draftA's timeline. B's segments are time-shifted
@@ -6286,10 +6474,12 @@ async function main(): Promise<void> {
       process.exit(check.ok ? 0 : 1);
     }
     if (!projectPath) {
-      die("Usage: capcut fixture <project> --out <dir> [--check]  |  capcut fixture <bundle-dir> --check");
+      die(
+        "Usage: capcut fixture <project> --out <dir> [--anonymize] [--check]  |  capcut fixture <bundle-dir> --check",
+      );
     }
-    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--check]");
-    const report = sanitizeDraftBundle(projectPath, flags.out);
+    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--anonymize] [--check]");
+    const report = sanitizeDraftBundle(projectPath, flags.out, { anonymize: flags.anonymize === true });
     // Scan the real output path from the flag: report.out_dir is itself
     // redacted (a home-dir project reports /home/USER/…), so it is display
     // data, not a filesystem path.
@@ -6298,6 +6488,13 @@ async function main(): Promise<void> {
     if (!flags.quiet) {
       const total = Object.values(report.redaction_kinds).reduce((a, b) => a + b, 0);
       process.stderr.write(`Sanitized bundle: ${report.out_dir} (${report.files.length} files, ${total} redactions)\n`);
+      if (report.anonymization) {
+        const a = report.anonymization;
+        process.stderr.write(
+          `Anonymized: media files ${a.media_files}, folder names ${a.folders}, texts ${a.text_fields} ` +
+            `(${a.characters} characters).\n`,
+        );
+      }
       process.stderr.write(
         check.ok
           ? "Review the files, then attach the folder to the relevant issue.\n"

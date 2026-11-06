@@ -9,6 +9,7 @@
 // UTF-16 code units of the FINAL text (after tag removal, \N -> newline).
 // Every other override ({\an8}, \pos, \k, ...) is stripped as before.
 
+import { fillSolid, rgb01ToHex } from "./decorators.js";
 import { repairDoubledRanges } from "./text-offsets.js";
 
 /** Segment-level defaults a Dialogue's Style line carries into the import. */
@@ -599,15 +600,6 @@ interface NormalizedBlock {
   alpha: number;
 }
 
-function rgb01ToHex(rgb: [number, number, number]): string {
-  const byte = (c: number) =>
-    Math.max(0, Math.min(255, Math.round(c * 255)))
-      .toString(16)
-      .padStart(2, "0")
-      .toUpperCase();
-  return `#${byte(rgb[0])}${byte(rgb[1])}${byte(rgb[2])}`;
-}
-
 function normalizeBlocks(content: string): { text: string; blocks: NormalizedBlock[] } {
   let parsed: { text?: string; styles?: Array<Record<string, unknown>> };
   try {
@@ -625,8 +617,7 @@ function normalizeBlocks(content: string): { text: string; blocks: NormalizedBlo
   const blocks: NormalizedBlock[] = [];
   for (let i = 0; i < styles.length; i++) {
     const s = styles[i];
-    const solid = (s.fill as { content?: { solid?: { color?: [number, number, number]; alpha?: number } } } | undefined)
-      ?.content?.solid;
+    const solid = fillSolid(s.fill);
     const start = Math.max(0, Math.min(repaired[i][0], text.length));
     const end = Math.max(0, Math.min(repaired[i][1], text.length));
     if (end <= start) continue;

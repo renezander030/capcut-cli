@@ -34,7 +34,9 @@ capcut <command> <project> [args] [flags]
 Every write conflict-checks the loaded files, prepares same-directory temporary
 files, fsyncs, and renames atomically. Every readable timeline target is
 synchronized and receives a `.bak` plus rolling `.capcut-cli-history/`
-snapshots. Use `capcut restore <project> [--step N | --list]`.
+snapshots. Use `capcut restore <project> [--step N | --list]`. The same
+directory keeps `<file>.last-write`, the content of the most recent write, so
+`capcut diff <project> --since-write` can show what the app changed since.
 
 ### ID prefix rule
 
@@ -671,6 +673,22 @@ With `--cloud --dry-run` nothing is uploaded: the result reports `would_upload`
 (file, bytes, duration, destination) and exits. `--language` has no effect with
 `--cloud`; the service detects the spoken language and a warning says so.
 
+After transcribing, the result's `coverage` block compares the cues with the
+speech ffmpeg's silencedetect finds in the transcribed audio: `speech_s`,
+`captioned_s`, `ratio`, `uncaptioned` (spans of at least `--min-uncaptioned`
+seconds, default 1.5) and `tail_uncaptioned_s` (speech after the last cue). Any
+uncaptioned span prints one `[uncaptioned-speech]` line on stderr; the exit code
+does not change. Without ffmpeg it is `{skipped: "ffmpeg not found"}`;
+`--no-coverage` skips it.
+
+The raw transcription is cached by the transcribed audio's sha256 plus engine,
+Whisper command, model, language and word-timing mode, so re-running `caption`
+with other styling, grouping, `--script` or `--translate` reuses it without
+transcribing or uploading again (`transcript_cache: "hit"`). The cache lives in
+`CAPCUT_CLI_CACHE_DIR`, else `$XDG_CACHE_HOME/capcut-cli/transcripts`, else
+`~/.cache/capcut-cli/transcripts`; `--no-cache` bypasses it and `--dry-run`
+never writes it.
+
 ### `capcut loudness <project> [--target <lufs>] [--per-clip] [--apply]`
 
 Measures each audible clip with ffmpeg's EBU R128 meter over the media range the
@@ -680,10 +698,19 @@ balance; `--per-clip` levels each clip to the target instead. `--max-gain-db`
 caps a boost (default 20). `--apply` writes the gain as segment volume through
 the journal, so `restore` undoes it. Skipped clips carry a `skipped` reason.
 
+Delivery gate: `--tolerance <LU>` (needs `--target`) and `--max-true-peak <dBTP>`
+judge the mix after this run's gain with `--apply` (cap included), the mix as it
+stands without. A miss exits 1 with `ok: false`, one reason line on stderr and a
+`gate` object (`target`, `tolerance`, `estimate_lufs`, `within`, `max_true_peak`,
+`estimate_true_peak`, `true_peak_ok`). Without either flag nothing changes.
+
 ### `capcut render <project> --all-video-tracks --burn-captions`
 
 Composites overlay tracks with transform/opacity, mixes audio fades, and uses
-draft caption colour/size/position. `doctor` reports `drawtext`, `overlay`, and
+draft caption colour/size/position. Burned captions use the text material's font
+file (style `font.path`, else `font_path`) when it exists and is .ttf/.otf/.ttc,
+otherwise ffmpeg's default face; `caption_fonts: {from_draft, default}` counts
+both. `doctor` reports `drawtext`, `overlay`, and
 `libx264`; missing optional filters produce an explicit fallback report.
 
 ### `capcut serve [--workers N] [--retries N] [--timeout MS]`

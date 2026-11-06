@@ -339,6 +339,74 @@ function trimJournal(filePath: string, kept: Set<number>): void {
   }
 }
 
+// The state the most recent write left: `<draftbase>.last-write` in the
+// history directory, one per draft file, replaced on every write. Snapshots
+// and `.bak` keep the content BEFORE each write and the journal only hashes,
+// so this is the one copy of what the CLI itself wrote, which `diff
+// --since-write` compares the file on disk with to show what the app changed
+// afterwards. It is not a snapshot: restore never reads it, `restore --list`
+// never lists it, and the history cap does not count it.
+export interface LastWrite {
+  written_at: string;
+  sha256: string;
+  command: string | null;
+  content: string;
+}
+
+function lastWritePath(filePath: string): string {
+  return join(historyDir(filePath), `${basename(filePath)}.last-write`);
+}
+
+/** The digest a record carries (the journal's rule), for comparing a file with it. */
+export function contentDigest(content: string): string {
+  return journalDigest(content);
+}
+
+/** Record `content` as what the CLI just wrote to `filePath` (temp + rename). */
+export function recordLastWrite(filePath: string, content: string): void {
+  const record: LastWrite = {
+    written_at: new Date().toISOString(),
+    sha256: journalDigest(content),
+    command: writeContext.command,
+    content,
+  };
+  try {
+    mkdirSync(historyDir(filePath), { recursive: true });
+    writeAtomic(lastWritePath(filePath), `${JSON.stringify(record)}\n`);
+  } catch {
+    // Best effort, like the journal: the draft write already happened. A
+    // record of an older write must not outlive this one, though, or the
+    // comparison would show this write as a change made by the app.
+    try {
+      rmSync(lastWritePath(filePath), { force: true });
+    } catch {
+      // Nothing more to do; `diff --since-write` then reports no record.
+    }
+  }
+}
+
+/** The last recorded write to `filePath`, or null when there is none (or it is unreadable). */
+export function readLastWrite(filePath: string): LastWrite | null {
+  try {
+    const record = JSON.parse(readFileSync(lastWritePath(filePath), "utf-8")) as Partial<LastWrite>;
+    if (
+      typeof record?.content !== "string" ||
+      typeof record.sha256 !== "string" ||
+      typeof record.written_at !== "string"
+    ) {
+      return null;
+    }
+    return {
+      written_at: record.written_at,
+      sha256: record.sha256,
+      command: typeof record.command === "string" ? record.command : null,
+      content: record.content,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Snapshots newest-first, step 1 = most recent write (equivalent to `.bak`).
 export function listSnapshots(filePath: string): Array<{ step: number; index: number; path: string }> {
   const dir = historyDir(filePath);
@@ -473,6 +541,12 @@ export function commitDraftTargets(
       if (existsSync(item.temp)) unlinkSync(item.temp);
     }
     throw error;
+  }
+  // Every timeline file this commit wrote, recorded as written. Sidecars are
+  // not timelines and have nothing for `diff --since-write` to compare.
+  const timelinePaths = new Set(targets.map((target) => target.path));
+  for (const item of committed) {
+    if (timelinePaths.has(item.target.path)) recordLastWrite(item.target.path, item.content);
   }
   // Target path -> the content committed there, so a caller holding a store
   // for these targets can roll it forward without re-reading the project.

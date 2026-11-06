@@ -3,7 +3,9 @@
 // the transcript named by FAKE_WHISPER_SOURCE into --output_dir under the
 // requested --output_format (json → transcript.json, srt → transcript.srt).
 // Lets caption's pipeline run end-to-end in tests without a model or audio.
-import { copyFileSync } from "node:fs";
+// With FAKE_WHISPER_CALLS set, every run appends one line to that file, so a
+// test can count how often the engine was invoked.
+import { appendFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
@@ -21,4 +23,5 @@ if (!outDir || !source) {
   process.stderr.write("fake-whisper: need --output_dir and FAKE_WHISPER_SOURCE\n");
   process.exit(2);
 }
+if (process.env.FAKE_WHISPER_CALLS) appendFileSync(process.env.FAKE_WHISPER_CALLS, `${args.join(" ")}\n`);
 copyFileSync(source, join(outDir, `transcript.${format}`));
