@@ -2,12 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.33.1] — 2026-11-06
 
 ### Fixed
 
 - The `fixture --anonymize` test accepts either path separator in the report's `source_dir`, so the Windows platform smoke passes; the anonymized path itself was already correct on Windows.
-- The Chinese command reference lists `diff --since-write` and `fixture --anonymize` / `--check`, the README keeps the v0.32.0 note beside the v0.33.0 one, and `docs/command-reference.json` reports version 0.33.0 (it was regenerated before the version bump).
+- The Chinese command reference lists `diff --since-write` and `fixture --anonymize` / `--check`, the README keeps the v0.32.0 note beside the v0.33.0 one, and `docs/command-reference.json` reports the package version (0.33.0 shipped it regenerated before its version bump).
 
 ## [0.33.0] — 2026-11-06
 
