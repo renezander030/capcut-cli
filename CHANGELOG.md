@@ -21,6 +21,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 ### Fixed
 
 - `text-style` applies `--font-size`, `--color`, `--align`, `--x` and `--y` without `--preset`. The flags were declared (and shared with `add-text`) but only honoured through a preset, so a plain `text-style <project> <id> --font-size 22 --color #FFD60A` exited 0 and left the text unchanged. Font size and colour are written to the material and to every style block CapCut renders from, `--x`/`--y` move the segment as `restyle` does, and `--color` must be `#RRGGBB`. `compile`'s `text-style` operation accepts and validates `fontSize`, `alignment` and `color` too.
+- `fixture --out` requires a new or empty directory outside the source project. It refuses occupied destinations and output symlinks instead of modifying original drafts, overwriting unrelated files, or leaving private media in a bundle reported as media-free. Bundles are built in a temporary sibling directory and published only after generation and redaction inspection finish; a generation failure leaves a new destination absent or an existing empty destination empty. Existing redaction findings remain available for manual review.
 
 ## [0.32.0] — 2026-10-29
 

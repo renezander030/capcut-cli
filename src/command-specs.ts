@@ -827,7 +827,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   diagnose: [option("bundle", ["--bundle"], "path", "Write a redacted JSON diagnostic bundle.")],
   fixture: [
-    option("out", ["--out"], "path", "Output directory for the sanitized bundle."),
+    option(
+      "out",
+      ["--out"],
+      "path",
+      "Output directory for the sanitized bundle: a new or empty directory outside the source project.",
+    ),
     option(
       "check",
       ["--check"],

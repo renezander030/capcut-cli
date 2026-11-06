@@ -5969,7 +5969,7 @@
           ],
           "type": "path",
           "required": false,
-          "description": "Output directory for the sanitized bundle."
+          "description": "Output directory for the sanitized bundle: a new or empty directory outside the source project."
         },
         {
           "name": "check",

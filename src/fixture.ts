@@ -9,8 +9,21 @@
 // CapCut 8.7 desktop) can only happen on Windows.
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { stripBom } from "./bom.js";
 import { keyframePropertyTypes } from "./decorators.js";
 import type { Draft } from "./draft.js";
@@ -380,9 +393,65 @@ needs a manual open-in-CapCut check on the real machine.
  */
 export function sanitizeDraftBundle(input: string, outDir: string): SanitizeReport {
   const store = discoverDraftStore(input); // throws if no readable draft
-  const out = resolve(outDir);
-  mkdirSync(out, { recursive: true });
+  const displayOut = resolve(outDir);
+  emptyBundleDestination(displayOut);
+  const destination = resolveBundleDestination(displayOut);
+  const fromSource = relative(realpathSync(store.projectDir), destination);
+  if (!fromSource || (!isAbsolute(fromSource) && fromSource !== ".." && !fromSource.startsWith(`..${sep}`))) {
+    throw new Error("Fixture --out must be outside the source project; choose a separate directory.");
+  }
+  const parent = dirname(destination);
+  mkdirSync(parent, { recursive: true });
+  const original = emptyBundleDestination(destination);
+  const stage = mkdtempSync(join(parent, ".capcut-fixture-"));
+  let removedEmptyDestination = false;
+  try {
+    const report = writeDraftBundle(input, store, stage, displayOut);
+    const current = emptyBundleDestination(destination);
+    if (original?.dev !== current?.dev || original?.ino !== current?.ino) {
+      throw new Error("Fixture output changed while building the bundle; choose a new --out directory.");
+    }
+    // Windows cannot rename a directory over an existing empty directory.
+    // rmdir refuses a newly occupied destination instead of deleting its files.
+    if (current) {
+      rmdirSync(destination);
+      removedEmptyDestination = true;
+    }
+    renameSync(stage, destination);
+    return report;
+  } catch (error) {
+    if (removedEmptyDestination && !lstatSync(destination, { throwIfNoEntry: false })) {
+      mkdirSync(destination);
+    }
+    throw error;
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
 
+// Resolve existing ancestors before creating directories, including aliases
+// into the source project. Missing output parents remain valid.
+function resolveBundleDestination(out: string): string {
+  if (lstatSync(out, { throwIfNoEntry: false })) return realpathSync(out);
+  return join(resolveBundleDestination(dirname(out)), basename(out));
+}
+
+function emptyBundleDestination(out: string): ReturnType<typeof lstatSync> | undefined {
+  const stat = lstatSync(out, { throwIfNoEntry: false });
+  if (stat && (!stat.isDirectory() || readdirSync(out).length > 0)) {
+    throw new Error(
+      "Fixture --out must be a new or empty directory; existing files and source projects are never overwritten.",
+    );
+  }
+  return stat;
+}
+
+function writeDraftBundle(
+  input: string,
+  store: ReturnType<typeof discoverDraftStore>,
+  out: string,
+  displayOut: string,
+): SanitizeReport {
   const tally: Record<string, number> = {};
   const files: SanitizeFileResult[] = [];
   const bundledTexts: Array<{ file: string; text: string }> = [];
@@ -439,7 +508,7 @@ export function sanitizeDraftBundle(input: string, outDir: string): SanitizeRepo
   // redactor too (#59). Written raw, they reintroduce the username that every
   // bundled timeline file just had scrubbed.
   const { text: safeSourceDir } = redact(store.projectDir, tally);
-  const { text: safeOutDir } = redact(out, tally);
+  const { text: safeOutDir } = redact(displayOut, tally);
 
   const sanitize: Omit<SanitizeReport, "redaction_check"> = {
     ok: true,

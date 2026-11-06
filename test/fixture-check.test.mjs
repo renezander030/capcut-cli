@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 
 function project() {
-  const dir = mkdtempSync(join(tmpdir(), "capcut-fixture-check-"));
+  const root = mkdtempSync(join(tmpdir(), "capcut-fixture-check-"));
+  const dir = join(root, "project");
+  mkdirSync(dir);
   const draft = {
     id: "guid-fixture",
     name: "fixture-draft",
@@ -18,14 +20,14 @@ function project() {
     materials: { videos: [], audios: [], texts: [], speeds: [] },
   };
   writeFileSync(join(dir, "draft_content.json"), JSON.stringify(draft, null, 2));
-  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, out: join(root, "bundle"), cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 describe("fixture --check (redaction verification)", () => {
   it("redacts JSON-escaped Windows paths and embedded JSON without --check (#134)", () => {
     const p = project();
     after(p.cleanup);
-    const out = join(p.dir, "bundle");
+    const out = p.out;
     const privatePath = "C:\\Users\\Francesco Rossi\\AppData\\Local\\CapCut";
     writeFileSync(join(p.dir, "draft_meta_info.json"), JSON.stringify({ draft_root_path: privatePath }));
     const path = join(p.dir, "draft_content.json");
@@ -43,24 +45,32 @@ describe("fixture --check (redaction verification)", () => {
     assert.equal(JSON.parse(bundled.embedded).path, "C:\\Users\\USER\\AppData\\Local\\CapCut");
   });
 
-  it("fails bundle creation automatically when a recognizable username survives", () => {
+  it("fails bundle creation automatically when a device identifier survives", () => {
     const p = project();
     after(p.cleanup);
-    const out = join(p.dir, "bundle");
-    // Existing files in a reused output directory are part of the bundle too.
-    assert.equal(spawnCli(["fixture", p.dir, "--out", out]).status, 0);
-    writeFileSync(join(out, "unrecognized.json"), JSON.stringify({ a: "/home/USER/ok", b: "C:\\Users\\É\\secret" }));
+    const out = p.out;
+    // An escaped value the redactor leaves must still fail its automatic check.
+    const source = join(p.dir, "draft_content.json");
+    const draft = JSON.parse(readFileSync(source, "utf-8"));
+    draft.device_id = "synthetic\\device";
+    const original = JSON.stringify(draft);
+    writeFileSync(source, original);
     const r = spawnCli(["fixture", p.dir, "--out", out]);
     assert.equal(r.status, 1, r.stderr);
     assert.equal(r.json.ok, false);
     assert.equal(JSON.parse(readFileSync(join(out, "SANITIZE_REPORT.json"), "utf-8")).ok, false);
-    assert.ok(r.json.redaction_check.findings.some((finding) => finding.file === "unrecognized.json"));
-    assert.doesNotMatch(r.stderr, /É/);
+    assert.ok(
+      r.json.redaction_check.findings.some(
+        (finding) => finding.file === "draft_content.json" && finding.kind === "device-key",
+      ),
+    );
+    assert.doesNotMatch(r.stderr, /synthetic/);
+    assert.equal(readFileSync(source, "utf-8"), original);
   });
   it("builds a bundle and passes the check when nothing private survives", () => {
     const p = project();
     after(p.cleanup);
-    const out = join(p.dir, "bundle");
+    const out = p.out;
 
     const r = spawnCli(["fixture", p.dir, "--out", out, "--check"]);
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
@@ -72,7 +82,7 @@ describe("fixture --check (redaction verification)", () => {
   it("verify-only mode fails an existing bundle that leaks a home path, naming file and line", () => {
     const p = project();
     after(p.cleanup);
-    const out = join(p.dir, "bundle");
+    const out = p.out;
     assert.equal(spawnCli(["fixture", p.dir, "--out", out]).status, 0);
     writeFileSync(join(out, "leak.json"), JSON.stringify({ note: "/Users/hansmustermann/secret.mov" }));
 
@@ -90,7 +100,7 @@ describe("fixture --check (redaction verification)", () => {
   it("flags real emails and unredacted device keys, allows the redactor's placeholder", () => {
     const p = project();
     after(p.cleanup);
-    const out = join(p.dir, "bundle");
+    const out = p.out;
     assert.equal(spawnCli(["fixture", p.dir, "--out", out]).status, 0);
     writeFileSync(
       join(out, "extra.json"),
@@ -109,7 +119,7 @@ describe("fixture --check (redaction verification)", () => {
   it("allows the redactor's own USER home-path placeholder but flags a real account name", () => {
     const p = project();
     after(p.cleanup);
-    const out = join(p.dir, "bundle");
+    const out = p.out;
     assert.equal(spawnCli(["fixture", p.dir, "--out", out]).status, 0);
     // What a correctly redacted report looks like when the project lives under
     // a home directory (and what every Windows/macOS temp dir produces).

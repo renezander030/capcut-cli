@@ -115,6 +115,6 @@ macOS：
 2. 运行 `capcut diagnose <project> --bundle support.json`。
 3. 运行 `capcut version <project>`。
 4. 提交 issue，附上应用版本、操作系统、具体命令、JSON 报错信息，以及 `support.json`。
-5. 如果可以，附上一份脱敏后的项目文件夹。运行 `capcut fixture <project> --out <dir>` 可以自动生成一份：它只拷贝时间线 JSON（不含媒体文件），会脱敏用户主目录路径和邮箱地址，并附带一份 README 和一份 diagnose 报告。分享前请先自行检查这些文件。
+5. 如果可以，附上一份脱敏后的项目文件夹。运行 `capcut fixture <project> --out <dir>`，将输出指定为源项目之外的新目录或空目录：它只拷贝时间线 JSON（不含媒体文件），会脱敏用户主目录路径和邮箱地址，并附带一份 README 和一份 diagnose 报告。非空输出目录和输出符号链接会被拒绝；生成失败不会留下不完整的文件包。分享前请先自行检查这些文件。
 
 只有在脱敏后的 fixture 与回归测试都被提交之后，一个版本才会被标注为 **fixture-tested**。

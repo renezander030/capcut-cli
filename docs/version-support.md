@@ -118,6 +118,6 @@ macOS:
 2. Run `capcut diagnose <project> --bundle support.json`.
 3. Run `capcut version <project>`.
 4. Open an issue with app version, OS, exact command, JSON error, and `support.json`.
-5. If possible, attach a sanitized project folder. Run `capcut fixture <project> --out <dir>` to build one automatically: it copies only the timeline JSON (no media), redacts user home paths and emails, and writes a README plus a diagnose report. Review the files before sharing.
+5. If possible, attach a sanitized project folder. Run `capcut fixture <project> --out <dir>` with a new or empty directory outside the source project to build one automatically: it copies only the timeline JSON (no media), redacts user home paths and emails, and writes a README plus a diagnose report. Occupied destinations and output symlinks are refused; generation failures leave no partial bundle. Review the files before sharing.
 
 A version moves to **fixture-tested** only after the sanitized fixture and regression test are committed.
