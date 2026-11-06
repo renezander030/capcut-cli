@@ -266,7 +266,8 @@ const usages = {
   render: "capcut render <project> [--out <preview.mp4>] [options]",
   "detect-scenes": "capcut detect-scenes <video> [options]",
   "detect-silence": "capcut detect-silence <media> [options]",
-  loudness: "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply]",
+  loudness:
+    "capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply] [--tolerance <lu>] [--max-true-peak <dbtp>]",
   "detect-retakes":
     "capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] | --srt <file>",
 } as const satisfies Record<string, string>;
@@ -957,6 +958,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("max_gain_db", ["--max-gain-db"], "number", "Largest boost any clip may get, in dB.", { default: 20 }),
     option("apply", ["--apply"], "boolean", "Write the gain as segment volume (default: report only)."),
+    option(
+      "tolerance",
+      ["--tolerance"],
+      "number",
+      "Delivery gate (needs --target): exit 1 when the judged loudness sits more than this many LU from the target. " +
+        "With --apply the mix after this run's gain is judged, without it the mix as it stands.",
+    ),
+    option(
+      "max_true_peak",
+      ["--max-true-peak"],
+      "number",
+      "Delivery gate: exit 1 when the loudest clip's true peak, at the judged volume, is above this level in dBTP.",
+    ),
     option("ffmpeg_cmd", ["--ffmpeg-cmd"], "path", "FFmpeg binary (needs the ebur128 filter)."),
   ],
   "detect-silence": [
@@ -1028,6 +1042,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --crf, --video-bitrate -> render (v0.26 proxy quality controls)
 //   --threshold-db, --min-silence, --pad -> detect-silence (v0.20 silence spans)
 //   --target, --per-clip, --max-gain-db -> loudness (v0.31 EBU R128 delivery gain)
+//   --tolerance, --max-true-peak -> loudness (delivery gate on the judged mix)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 //   --lexicon            -> tts (pronunciation rules for the spoken text)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
@@ -1054,6 +1069,8 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--target",
   "--per-clip",
   "--max-gain-db",
+  "--tolerance",
+  "--max-true-peak",
   "--compact",
   "--command",
   "--add",

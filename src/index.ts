@@ -266,6 +266,7 @@ Create:
 
 Preview:
   loudness   <project> [--target <LUFS>] [--per-clip] [--max-gain-db <dB>] [--apply]
+             [--tolerance <LU>] [--max-true-peak <dBTP>]
              Measure every audible clip with ffmpeg's EBU R128 meter (over the
              part of its media the timeline plays) and estimate the export's
              integrated loudness. A draft carries no master gain, so a quiet
@@ -273,6 +274,10 @@ Preview:
              adds the gain that reaches it, one gain for the whole mix (keeps
              the balance) or per clip with --per-clip; --apply writes it as
              segment volume. Boosts are capped at --max-gain-db (default 20).
+             Delivery gate: --tolerance (needs --target) and --max-true-peak
+             judge the mix after this run's gain with --apply, the mix as it
+             stands without; a miss exits 1 with the reason on stderr, and
+             the result's "gate" object says which check failed.
   render     <project> [--out <file.mp4>] [options]
              Render a low-res ffmpeg PROXY preview of the timeline so you can
              watch an edit without opening CapCut. Flattens the main video
@@ -1119,10 +1124,12 @@ interface Flags {
   videoBitrate?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
-  // loudness: delivery target, per-clip normalization, boost cap
+  // loudness: delivery target, per-clip normalization, boost cap, delivery gate
   target?: number;
   perClip?: boolean;
   maxGainDb?: number;
+  tolerance?: number;
+  maxTruePeak?: number;
   // render: refuse an unfaithful proxy / fail on output duration drift
   strict?: boolean;
   verify?: boolean;
@@ -1356,6 +1363,8 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--volume", "volume"],
   ["--target", "target"],
   ["--max-gain-db", "maxGainDb"],
+  ["--tolerance", "tolerance"],
+  ["--max-true-peak", "maxTruePeak"],
   ["--min-script-match", "minScriptMatch"],
   ["--window", "window"],
   ["--similarity", "similarity"],
@@ -1913,9 +1922,12 @@ function cmdSpeed(draft: Draft, filePath: string, segId: string, multiplier: str
 
 // `loudness` measures the draft's audible clips (EBU R128) and, with
 // --target, the gain that brings the export there; --apply writes it as
-// segment volume through the normal journaled save.
+// segment volume through the normal journaled save. --tolerance and
+// --max-true-peak make it a delivery gate: the result carries `gate`, and a
+// miss exits 1 with one line on stderr (with --apply the gain is still
+// written, as lint --fix writes its repairs before reporting what remains).
 async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { applyLoudness, measureLoudness } = await import("./loudness.js");
+  const { applyLoudness, judgeLoudness, measureLoudness } = await import("./loudness.js");
   if (flags.apply && flags.target === undefined) die("--apply needs --target <LUFS>: say what loudness to reach.");
   let report: ReturnType<typeof measureLoudness>;
   try {
@@ -1925,6 +1937,8 @@ async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promis
       perClip: flags.perClip,
       maxGainDb: flags.maxGainDb,
       draftDir: draftProjectDir(filePath),
+      tolerance: flags.tolerance,
+      maxTruePeak: flags.maxTruePeak,
     });
   } catch (e) {
     die((e as Error).message);
@@ -1934,7 +1948,26 @@ async function cmdLoudness(draft: Draft, filePath: string, flags: Flags): Promis
     changed = applyLoudness(draft, report);
     if (changed > 0) saveDraft(filePath, draft);
   }
-  out({ ok: true, ...report, applied: Boolean(flags.apply) && !isDryRun(), changed }, flags);
+  const judged = judgeLoudness(report, {
+    tolerance: flags.tolerance,
+    maxTruePeak: flags.maxTruePeak,
+    afterGain: Boolean(flags.apply),
+  });
+  const failure = judged?.failure ?? null;
+  out(
+    {
+      ok: failure === null,
+      ...report,
+      ...(judged ? { gate: judged.gate } : {}),
+      applied: Boolean(flags.apply) && !isDryRun(),
+      changed,
+    },
+    flags,
+  );
+  if (failure !== null) {
+    process.stderr.write(`loudness gate failed: ${failure}\n`);
+    process.exitCode = 1;
+  }
 }
 
 function cmdVolume(draft: Draft, filePath: string, segId: string, levelStr: string, flags: Flags, save = true): void {

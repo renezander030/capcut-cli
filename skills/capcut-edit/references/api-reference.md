@@ -680,6 +680,12 @@ balance; `--per-clip` levels each clip to the target instead. `--max-gain-db`
 caps a boost (default 20). `--apply` writes the gain as segment volume through
 the journal, so `restore` undoes it. Skipped clips carry a `skipped` reason.
 
+Delivery gate: `--tolerance <LU>` (needs `--target`) and `--max-true-peak <dBTP>`
+judge the mix after this run's gain with `--apply` (cap included), the mix as it
+stands without. A miss exits 1 with `ok: false`, one reason line on stderr and a
+`gate` object (`target`, `tolerance`, `estimate_lufs`, `within`, `max_true_peak`,
+`estimate_true_peak`, `true_peak_ok`). Without either flag nothing changes.
+
 ### `capcut render <project> --all-video-tracks --burn-captions`
 
 Composites overlay tracks with transform/opacity, mixes audio fades, and uses
