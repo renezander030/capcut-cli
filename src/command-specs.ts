@@ -677,6 +677,12 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "boolean",
       'Skip the coverage check. By default, after transcribing (not with --words), ffmpeg measures the speech in the transcribed audio (silencedetect) and the result\'s `coverage` block reports speech_s, captioned_s, ratio, the uncaptioned spans and tail_uncaptioned_s (speech after the last cue); any uncaptioned span prints one `[uncaptioned-speech]` warning on stderr. Without ffmpeg the block is {skipped: "ffmpeg not found"} and the run does not fail.',
     ),
+    option(
+      "no_cache",
+      ["--no-cache"],
+      "boolean",
+      "Neither read nor write the transcript cache. By default the raw transcription (before --script, grouping, styling and --translate) is cached, keyed by the sha256 of the transcribed audio bytes, the engine, whisper command, model, language and word-timing mode, so a run that only changes those later steps does not transcribe (or, with --cloud, upload) again. The result reports transcript_cache: hit, miss or off. Cache directory: CAPCUT_CLI_CACHE_DIR, else $XDG_CACHE_HOME/capcut-cli/transcripts, else ~/.cache/capcut-cli/transcripts (%LOCALAPPDATA%\\capcut-cli\\cache\\transcripts on Windows). --dry-run reads it but never writes it.",
+    ),
     TRACK_NAME,
     STYLE_REF,
     PRESET,
@@ -1091,6 +1097,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --like, --from-store -> migrate (v0.23 schema-marker restamp from a donor project)
 //   --word-reveal, --min-script-match, --audio-stream -> caption (v0.26 caption controls)
 //   --min-uncaptioned, --no-coverage -> caption (coverage check)
+//   --no-cache           -> caption (transcript cache)
 //   --apply-plan         -> batch (v0.29 reviewed batch plans)
 //   --from -> shift-all; --ripple -> remove (v0.26 boundary-safe ripple editing)
 //   --frame-grid -> lint (v0.26 exact integer timeline preflight)
@@ -1127,6 +1134,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--video-bitrate",
   "--min-script-match",
   "--min-uncaptioned",
+  "--no-cache",
   "--no-coverage",
   "--from",
   "--ripple",

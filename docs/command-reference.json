@@ -4608,6 +4608,15 @@
           "description": "Skip the coverage check. By default, after transcribing (not with --words), ffmpeg measures the speech in the transcribed audio (silencedetect) and the result's `coverage` block reports speech_s, captioned_s, ratio, the uncaptioned spans and tail_uncaptioned_s (speech after the last cue); any uncaptioned span prints one `[uncaptioned-speech]` warning on stderr. Without ffmpeg the block is {skipped: \"ffmpeg not found\"} and the run does not fail."
         },
         {
+          "name": "no_cache",
+          "flags": [
+            "--no-cache"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Neither read nor write the transcript cache. By default the raw transcription (before --script, grouping, styling and --translate) is cached, keyed by the sha256 of the transcribed audio bytes, the engine, whisper command, model, language and word-timing mode, so a run that only changes those later steps does not transcribe (or, with --cloud, upload) again. The result reports transcript_cache: hit, miss or off. Cache directory: CAPCUT_CLI_CACHE_DIR, else $XDG_CACHE_HOME/capcut-cli/transcripts, else ~/.cache/capcut-cli/transcripts (%LOCALAPPDATA%\\capcut-cli\\cache\\transcripts on Windows). --dry-run reads it but never writes it."
+        },
+        {
           "name": "track_name",
           "flags": [
             "--track-name"

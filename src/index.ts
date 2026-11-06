@@ -751,6 +751,20 @@ Caption (v0.4 — real subtitle objects, fixes import-srt mimicry):
                                     covers; any found prints one
                                     [uncaptioned-speech] warning on stderr.
                                     Without ffmpeg it is skipped, never fatal.
+               --no-cache           Transcribe again even when the transcript
+                                    cache holds this audio. By default the raw
+                                    transcription is cached (keyed by the audio
+                                    bytes, engine, whisper command, model,
+                                    language and word-timing mode), so a run
+                                    that only changes styling, grouping,
+                                    --script or --translate does not transcribe
+                                    (or, with --cloud, upload) again; the result
+                                    says transcript_cache hit|miss|off. Cache
+                                    dir: CAPCUT_CLI_CACHE_DIR, else
+                                    $XDG_CACHE_HOME/capcut-cli/transcripts, else
+                                    ~/.cache/capcut-cli/transcripts
+                                    (%LOCALAPPDATA%\\capcut-cli\\cache\\transcripts
+                                    on Windows). --dry-run never writes it.
                --language <code>    ISO code or "auto" (default)
                --track-name <s>     Caption track name (default: "captions")
                --style-ref <seg-id> Mirror styling from existing text segment
@@ -977,9 +991,10 @@ interface Flags {
   script?: string;
   wordReveal?: boolean;
   minScriptMatch?: number;
-  // caption coverage check
+  // caption coverage check + transcript cache
   noCoverage?: boolean;
   minUncaptioned?: number;
+  noCache?: boolean;
   // detect-retakes
   window?: number;
   similarity?: number;
@@ -1291,6 +1306,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--karaoke", "karaoke"],
   ["--no-probe", "noProbe"],
   ["--no-coverage", "noCoverage"],
+  ["--no-cache", "noCache"],
   ["--retime", "retime"],
   ["--dry-run", "dryRun"],
   ["--fail-fast", "failFast"],
@@ -4147,6 +4163,7 @@ async function cmdCaption(draft: Draft, filePath: string, flags: Flags): Promise
     colorCycle: emphasis.cycle,
     coverage: flags.noCoverage ? false : undefined,
     minUncaptioned: flags.minUncaptioned,
+    cache: flags.noCache ? false : undefined,
   };
   if (flags.cloud && isDryRun()) {
     // A dry run sends nothing anywhere: report what --cloud would upload.

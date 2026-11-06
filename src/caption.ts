@@ -28,6 +28,14 @@ import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } fr
 import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
+import {
+  readTranscriptCache,
+  sha256File,
+  TRANSCRIPT_CACHE_VERSION,
+  type TranscriptCacheKey,
+  type TranscriptCacheState,
+  writeTranscriptCache,
+} from "./transcript-cache.js";
 import { resolveWhisperCommand, whisperDialect } from "./whisper.js";
 
 export interface CaptionOptions {
@@ -70,6 +78,8 @@ export interface CaptionOptions {
   coverage?: boolean;
   /** Shortest uncaptioned speech span the coverage check lists, seconds (default 1.5). */
   minUncaptioned?: number;
+  /** false (--no-cache) neither reads nor writes the transcript cache. */
+  cache?: boolean;
 }
 
 export interface CaptionWord {
@@ -114,6 +124,8 @@ export interface CaptionResult {
   script?: AlignmentReport;
   /** Speech in the transcribed audio that no cue covers (absent with --words or --no-coverage). */
   coverage?: CoverageReport;
+  /** Whether the transcription came from the transcript cache (absent with --words: nothing is transcribed). */
+  transcript_cache?: TranscriptCacheState;
   /** The script the transcript is written in, which chose the word separator
    * and the --max-words / --max-chars defaults (see script.ts). */
   caption_script: CaptionScript;
@@ -215,6 +227,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   // The speech in the audio that was transcribed, measured before a temporary
   // extracted stream is cleaned up; compared with the cues once they exist.
   let speech: TimeSpan[] | { skipped: string } | undefined;
+  let transcriptCache: TranscriptCacheState | undefined;
   const measure = (audio: string) =>
     opts.coverage === false ? undefined : measureSpeech(audio, opts.ffmpegCmd ?? "ffmpeg");
   if (fromWords) {
@@ -229,32 +242,34 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     }
     transcription = { cues: [], words: external.words, engine: "words" };
   } else if (opts.cloud) {
-    const heard = await withCaptionAudio(draft, opts, async (cloudAudio): Promise<TranscriptionResult> => {
-      const durationMs = cloudAudioDurationMs(draft, opts, cloudAudio);
-      if (isDryRun()) throw new Error("--cloud never uploads under --dry-run; plan the upload with planCloudUpload.");
-      process.stderr.write(
-        `WARNING: --cloud is experimental and unofficial: uploading ${cloudAudio} to ByteDance's CapCut servers for recognition.\n`,
-      );
-      const languageWarning = cloudLanguageWarning(opts);
-      if (languageWarning) process.stderr.write(languageWarning);
-      const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
+    const heard = await withCaptionAudio(draft, opts, async (cloudAudio) => {
+      // A cache hit uploads nothing: the recognition below runs only on a miss.
+      const cached = await transcribeWithCache(cloudAudio, opts, async (): Promise<TranscriptionResult> => {
+        const durationMs = cloudAudioDurationMs(draft, opts, cloudAudio);
+        if (isDryRun()) throw new Error("--cloud never uploads under --dry-run; plan the upload with planCloudUpload.");
+        process.stderr.write(
+          `WARNING: --cloud is experimental and unofficial: uploading ${cloudAudio} to ByteDance's CapCut servers for recognition.\n`,
+        );
+        const languageWarning = cloudLanguageWarning(opts);
+        if (languageWarning) process.stderr.write(languageWarning);
+        const cloudRes = await transcribeAudioCapcutCloud(cloudAudio, { durationMs });
+        return { cues: cloudRes.cues, words: cloudRes.words, engine: "capcut-cloud" };
+      });
       speech = measure(cloudAudio);
-      return {
-        cues: cloudRes.cues,
-        words: cloudRes.words,
-        engine: "capcut-cloud",
-      };
+      return cached;
     });
     sourceAudio = heard.source;
-    transcription = heard.result;
+    transcription = heard.result.transcription;
+    transcriptCache = heard.result.state;
   } else {
-    const heard = await withCaptionAudio(draft, opts, (audio) => {
-      const result = runWhisper(audio, opts);
+    const heard = await withCaptionAudio(draft, opts, async (audio) => {
+      const cached = await transcribeWithCache(audio, opts, () => runWhisper(audio, opts));
       speech = measure(audio);
-      return result;
+      return cached;
     });
     sourceAudio = heard.source;
-    transcription = heard.result;
+    transcription = heard.result.transcription;
+    transcriptCache = heard.result.state;
   }
   const recognizedWords = transcription.words.length > 0 ? transcription.words : wordsFromCues(transcription.cues);
   // The transcript's script decides how words join into a cue (no space inside
@@ -476,7 +491,47 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     color_cycle: colorCycle.length > 0 ? colorCycle.length : undefined,
     script: scriptReport,
     coverage,
+    transcript_cache: transcriptCache,
   };
+}
+
+/**
+ * The transcript cache key for this run: the transcribed audio's bytes plus
+ * every setting that changes what the engine returns. --cloud takes no model
+ * or language (the service detects the language), so those stay null there.
+ */
+export function transcriptCacheKey(opts: CaptionOptions, audioSha256: string): TranscriptCacheKey {
+  const cloud = opts.cloud === true;
+  return {
+    version: TRANSCRIPT_CACHE_VERSION,
+    audio_sha256: audioSha256,
+    engine: cloud ? "capcut-cloud" : detectEngine(opts),
+    whisper_cmd: cloud ? null : whisperCommand(opts),
+    model: cloud ? null : (opts.whisperModel ?? "base"),
+    language: cloud ? null : (opts.language ?? "auto"),
+    // Whisper is asked for word-timestamp JSON only for these modes (runWhisper).
+    word_timing: cloud || opts.karaoke === true || opts.wordReveal === true ? "words" : "lines",
+    cloud,
+  };
+}
+
+/**
+ * Run `transcribe` unless the cache already holds its result for this audio
+ * and these settings. A dry run reads the cache but never writes it.
+ */
+async function transcribeWithCache(
+  audio: string,
+  opts: CaptionOptions,
+  transcribe: () => TranscriptionResult | Promise<TranscriptionResult>,
+): Promise<{ transcription: TranscriptionResult; state: TranscriptCacheState }> {
+  if (opts.cache === false) return { transcription: await transcribe(), state: "off" };
+  const key = transcriptCacheKey(opts, sha256File(audio));
+  const cached = readTranscriptCache(key);
+  // readTranscriptCache only returns an entry whose engine equals key.engine.
+  if (cached) return { transcription: cached as TranscriptionResult, state: "hit" };
+  const transcription = await transcribe();
+  if (!isDryRun()) writeTranscriptCache(key, transcription);
+  return { transcription, state: "miss" };
 }
 
 export function buildAudioStreamInvocation(audio: string, stream: number, output: string): string[] {

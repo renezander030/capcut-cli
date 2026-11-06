@@ -679,6 +679,14 @@ uncaptioned span prints one `[uncaptioned-speech]` line on stderr; the exit code
 does not change. Without ffmpeg it is `{skipped: "ffmpeg not found"}`;
 `--no-coverage` skips it.
 
+The raw transcription is cached by the transcribed audio's sha256 plus engine,
+Whisper command, model, language and word-timing mode, so re-running `caption`
+with other styling, grouping, `--script` or `--translate` reuses it without
+transcribing or uploading again (`transcript_cache: "hit"`). The cache lives in
+`CAPCUT_CLI_CACHE_DIR`, else `$XDG_CACHE_HOME/capcut-cli/transcripts`, else
+`~/.cache/capcut-cli/transcripts`; `--no-cache` bypasses it and `--dry-run`
+never writes it.
+
 ### `capcut loudness <project> [--target <lufs>] [--per-clip] [--apply]`
 
 Measures each audible clip with ffmpeg's EBU R128 meter over the media range the
