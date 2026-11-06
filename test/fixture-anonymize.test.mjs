@@ -184,7 +184,7 @@ describe("fixture --anonymize", () => {
     assert.equal(report.anonymized, true);
     assert.equal(report.anonymization.media_files, 2);
     assert.equal(report.anonymization.folders, 2);
-    assert.match(report.source_dir, /\/project$/);
+    assert.match(report.source_dir, /[\\/]project$/);
     assert.match(readFileSync(join(p.out, "README.md"), "utf-8"), /--anonymize/);
 
     for (const { rel, text } of bundledFiles(p.out)) {
