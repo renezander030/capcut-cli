@@ -240,7 +240,7 @@ const usages = {
   relink: "capcut relink <project> (--dir <path> [--recursive] | --from <prefix> --to <prefix>) [--stage]",
   timeline: "capcut timeline <project> [--cols <number>]",
   projects: "capcut projects [query] [--drafts <path>] [--names]",
-  diff: "capcut diff <project-a> <project-b>",
+  diff: "capcut diff <project-a> (<project-b> | --since-write)",
   concat: "capcut concat <project-a> <project-b> [--out <path>]",
   config: "capcut config",
   describe: "capcut describe [--compact] [--command <name>]",
@@ -817,6 +817,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("names", ["--names"], "boolean", "Read project display names."),
   ],
   concat: [OUT],
+  diff: [
+    option(
+      "since_write",
+      ["--since-write"],
+      "boolean",
+      "Compare <project-a> with what capcut-cli itself last wrote to it instead of with a second draft, to see " +
+        "what the app changed when it opened or saved a tool-written draft (a = as written, b = now). Adds " +
+        "since_write: {file, written_at, written_by, written_sha256, current_sha256, changed, top_level_changed, " +
+        "track_order_changed}; changed is false when the file is byte-identical to the write. Every write records " +
+        "its result in the draft's history directory; a draft with no recorded write exits 1.",
+    ),
+  ],
   doctor: [
     option(
       "drafts",
@@ -1125,6 +1137,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --min-silent-secs    -> lint (opt-in silent-stretch check)
 //   --recursive -> relink (v0.27 nested media search)
 //   --anonymize -> fixture (neutral media, folder, project and text placeholders)
+//   --since-write -> diff (compare with the CLI's last recorded write)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -1194,6 +1207,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--reset",
   "--script",
   "--similarity",
+  "--since-write",
   "--soft-captions",
   "--strict",
   "--sync",

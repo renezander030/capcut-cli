@@ -68,7 +68,7 @@
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | yes | Swap a segment's source file (placeholder > final) keeping its timing, effects, and keyframes. |
 | `timeline` | `capcut timeline <project> [--cols <number>]` | no | Show the track/segment layout (JSON, or -H ASCII bars). |
 | `projects` | `capcut projects [query] [--drafts <path>] [--names]` | no | List CapCut/JianYing draft folders on disk. |
-| `diff` | `capcut diff <project-a> <project-b>` | no | Compare two drafts (segments/materials/tracks added/removed/changed). |
+| `diff` | `capcut diff <project-a> (<project-b> \| --since-write)` | no | Compare two drafts (segments/materials/tracks added/removed/changed), or with --since-write a draft with what capcut-cli last wrote to it. |
 | `concat` | `capcut concat <project-a> <project-b> [--out <path>]` | yes | Append one draft onto another's timeline (id-safe), write to --out or in place. |
 | `config` | `capcut config` | no | Show the resolved config (.capcutrc + effective defaults). |
 | `describe` | `capcut describe [--compact] [--command <name>]` | no | Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index. |

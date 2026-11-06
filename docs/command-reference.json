@@ -5442,8 +5442,8 @@
     },
     {
       "name": "diff",
-      "summary": "Compare two drafts (segments/materials/tracks added/removed/changed).",
-      "usage": "capcut diff <project-a> <project-b>",
+      "summary": "Compare two drafts (segments/materials/tracks added/removed/changed), or with --since-write a draft with what capcut-cli last wrote to it.",
+      "usage": "capcut diff <project-a> (<project-b> | --since-write)",
       "positionals": [
         {
           "name": "project-a",
@@ -5456,7 +5456,17 @@
           "required": true
         }
       ],
-      "options": [],
+      "options": [
+        {
+          "name": "since_write",
+          "flags": [
+            "--since-write"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Compare <project-a> with what capcut-cli itself last wrote to it instead of with a second draft, to see what the app changed when it opened or saved a tool-written draft (a = as written, b = now). Adds since_write: {file, written_at, written_by, written_sha256, current_sha256, changed, top_level_changed, track_order_changed}; changed is false when the file is byte-identical to the write. Every write records its result in the draft's history directory; a draft with no recorded write exits 1."
+        }
+      ],
       "mutates": false,
       "prerequisites": [],
       "output": {

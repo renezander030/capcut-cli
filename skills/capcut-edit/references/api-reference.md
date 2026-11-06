@@ -34,7 +34,9 @@ capcut <command> <project> [args] [flags]
 Every write conflict-checks the loaded files, prepares same-directory temporary
 files, fsyncs, and renames atomically. Every readable timeline target is
 synchronized and receives a `.bak` plus rolling `.capcut-cli-history/`
-snapshots. Use `capcut restore <project> [--step N | --list]`.
+snapshots. Use `capcut restore <project> [--step N | --list]`. The same
+directory keeps `<file>.last-write`, the content of the most recent write, so
+`capcut diff <project> --since-write` can show what the app changed since.
 
 ### ID prefix rule
 

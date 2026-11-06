@@ -38,6 +38,7 @@ import type { Draft, MaterialText, Segment, Timerange, Track } from "./draft.js"
 import {
   assertTargetsUnchangedOnDisk,
   commitDraftTargets,
+  contentDigest,
   extractCodeUnitStyleRanges,
   extractText,
   findDraft,
@@ -49,6 +50,8 @@ import {
   isDryRun,
   loadDraft,
   loadedDraftStore,
+  readLastWrite,
+  recordLastWrite,
   saveDraft,
   setDryRun,
   setForceWrite,
@@ -77,6 +80,7 @@ import {
   parseCandidate,
   planTimelineSync,
   setActiveTimelineSelection,
+  timelineFromText,
 } from "./store.js";
 import { formatDuration, formatTime, parseTimeInput } from "./time.js";
 import type { UserEnumEntry } from "./user-enums.js";
@@ -535,6 +539,8 @@ Maintenance & inspection:
   timeline   <project> [--cols N]               Show track/segment layout (JSON, or -H ASCII bars)
   projects   [query] [--drafts <dir>] [--names] List CapCut/JianYing draft folders on disk
   diff       <projectA> <projectB>             Compare two drafts (added/removed/changed)
+             --since-write: compare <projectA> with what capcut-cli last wrote
+             to it, to see what the app changed after opening or saving it.
   concat     <projectA> <draftB> [--out <p>]   Append draftB onto projectA's timeline (id-safe)
   config                                       Show resolved .capcutrc + effective defaults
   describe [--compact] [--command <name>]        Emit command contracts or a compact discovery index
@@ -1189,6 +1195,8 @@ interface Flags {
   check?: boolean;
   // fixture --anonymize
   anonymize?: boolean;
+  // diff --since-write
+  sinceWrite?: boolean;
   plan?: boolean;
   apply?: boolean;
   // batch --plan <file> / --apply-plan <file>
@@ -1326,6 +1334,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--continue-on-error", "continueOnError"],
   ["--check", "check"],
   ["--anonymize", "anonymize"],
+  ["--since-write", "sinceWrite"],
   ["--apply", "apply"],
   ["--nested", "nested"],
   ["--pip", "pip"],
@@ -5283,6 +5292,9 @@ async function cmdRestore(projectPath: string | undefined, flags: Flags): Promis
   const restoreSource = (source: string): void => {
     if (!hasSynchronizedSiblings) {
       copyFileSync(source, filePath);
+      // A restore is the CLI's own write; `diff --since-write` compares with it
+      // (a multi-file restore records through saveDraft).
+      recordLastWrite(filePath, readFileSync(filePath, "utf-8"));
       return;
     }
     const restored = loadDraft(filePath);
@@ -5545,7 +5557,7 @@ const SUMMARIES: Record<string, string> = {
   relink: "Repair broken media paths (--dir or --from/--to).",
   timeline: "Show the track/segment layout (JSON, or -H ASCII bars).",
   projects: "List CapCut/JianYing draft folders on disk.",
-  diff: "Compare two drafts (segments/materials/tracks added/removed/changed).",
+  diff: "Compare two drafts (segments/materials/tracks added/removed/changed), or with --since-write a draft with what capcut-cli last wrote to it.",
   concat: "Append one draft onto another's timeline (id-safe), write to --out or in place.",
   config: "Show the resolved config (.capcutrc + effective defaults).",
   describe: "Emit command contracts as JSON, optionally filtered by name or reduced to a compact discovery index.",
@@ -5730,15 +5742,9 @@ function indexMaterialContent(draft: Draft): Map<string, string> {
   return m;
 }
 
-// `diff` reports what changed between two drafts: segments added/removed/changed
-// and materials added/removed. Read-only.
-function cmdDiff(positional: string[], flags: Flags): void {
-  const aPath = positional[1];
-  const bPath = positional[2];
-  if (!aPath || !bPath) die("Usage: capcut diff <projectA> <projectB>");
-  const a = readDraft(aPath).draft;
-  const b = readDraft(bPath).draft;
-
+// What changed from draft `a` to draft `b`: segments added/removed/changed and
+// materials added/removed/changed, the shape `diff` prints.
+function diffDrafts(a: Draft, b: Draft) {
   const aSeg = indexSegments(a);
   const bSeg = indexSegments(b);
   const segAdded: string[] = [];
@@ -5772,16 +5778,87 @@ function cmdDiff(positional: string[], flags: Flags): void {
   const changed =
     segAdded.length + segRemoved.length + segChanged.length + matAdded.length + matRemoved.length + matChanged.length >
     0;
+  return {
+    changed,
+    tracks: { a: a.tracks.length, b: b.tracks.length },
+    segments: { added: segAdded, removed: segRemoved, changed: segChanged },
+    materials: { added: matAdded, removed: matRemoved, changed: matChanged },
+  };
+}
+
+// `diff` reports what changed between two drafts: segments added/removed/changed
+// and materials added/removed. Read-only.
+function cmdDiff(positional: string[], flags: Flags): void {
+  if (flags.sinceWrite) {
+    cmdDiffSinceWrite(positional, flags);
+    return;
+  }
+  const aPath = positional[1];
+  const bPath = positional[2];
+  if (!aPath || !bPath) die("Usage: capcut diff <projectA> <projectB>  |  capcut diff <project> --since-write");
+  const a = readDraft(aPath).draft;
+  const b = readDraft(bPath).draft;
+  out({ ok: true, ...diffDrafts(a, b) }, flags);
+}
+
+// `diff <project> --since-write`: the draft on disk against what capcut-cli
+// itself last wrote to it (the record every write keeps in the history
+// directory), so the changes the app made when it opened or saved a
+// tool-written draft show up as `a` = written, `b` = now. Read-only.
+function cmdDiffSinceWrite(positional: string[], flags: Flags): void {
+  const project = positional[1];
+  if (!project || positional[2]) die("Usage: capcut diff <project> --since-write");
+  const filePath = findDraft(project);
+  const record = readLastWrite(filePath);
+  if (!record) {
+    die(
+      `No record of a capcut-cli write to ${filePath}. --since-write compares the draft with what this CLI last ` +
+        "wrote to it, which every edit command records from this version on; this draft has not been written since.",
+    );
+  }
+  const raw = readFileSync(filePath, "utf-8");
+  const written = timelineFromText(record.content);
+  const current = timelineFromText(stripBom(raw));
+  if (!written) die(`The recorded write to ${filePath} does not contain a readable timeline.`);
+  if (!current) die(`${filePath} does not contain a readable timeline.`);
+
+  const currentSha = contentDigest(raw);
+  const changed = currentSha !== record.sha256;
+  // The segment/material diff leaves out the rest of the document, which is
+  // where an app re-save usually shows: list the top-level fields that differ
+  // and whether the tracks were reordered.
+  const keys = [...new Set([...Object.keys(written), ...Object.keys(current)])].sort();
+  const topLevelChanged = keys.filter((key) => JSON.stringify(written[key]) !== JSON.stringify(current[key]));
+  const writtenIds = written.tracks.map((track) => track.id);
+  const currentIds = current.tracks.map((track) => track.id);
+  const shared = (ids: string[], other: string[]) => ids.filter((id) => other.includes(id));
+  const trackOrderChanged =
+    JSON.stringify(shared(writtenIds, currentIds)) !== JSON.stringify(shared(currentIds, writtenIds));
+
   out(
     {
       ok: true,
-      changed,
-      tracks: { a: a.tracks.length, b: b.tracks.length },
-      segments: { added: segAdded, removed: segRemoved, changed: segChanged },
-      materials: { added: matAdded, removed: matRemoved, changed: matChanged },
+      ...diffDrafts(written, current),
+      since_write: {
+        file: path.basename(filePath),
+        written_at: record.written_at,
+        written_by: record.command,
+        written_sha256: record.sha256,
+        current_sha256: currentSha,
+        changed,
+        top_level_changed: topLevelChanged,
+        track_order_changed: trackOrderChanged,
+      },
     },
     flags,
   );
+  if (!flags.quiet) {
+    process.stderr.write(
+      changed
+        ? `${path.basename(filePath)} changed since capcut-cli wrote it at ${record.written_at}.\n`
+        : `No changes: ${path.basename(filePath)} is exactly what capcut-cli wrote at ${record.written_at}.\n`,
+    );
+  }
 }
 
 // `concat` appends draftB onto draftA's timeline. B's segments are time-shifted

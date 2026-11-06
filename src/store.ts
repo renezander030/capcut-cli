@@ -152,6 +152,15 @@ function findTimeline(value: unknown, path: string[] = [], depth = 0): { draft: 
   return null;
 }
 
+/** The timeline in a draft file's text, at the root or inside an envelope; null when there is none. */
+export function timelineFromText(raw: string): Draft | null {
+  try {
+    return findTimeline(JSON.parse(raw) as unknown)?.draft ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Exported for factory.ts (register): read one file into a DraftCandidate —
 // BOM-stripped, envelope-aware — without the sibling discovery a full
 // discoverDraftStore would do.
