@@ -423,7 +423,10 @@ describe("sync-timelines", () => {
     // writes would be refused as well. It answers `ps -axo pid=,ppid=,comm=`
     // with an editor that is not in the CLI's own process chain (#168).
     const fakeDir = mkdtempSync(join(tmpdir(), "fake-editor-"));
-    writeFileSync(join(fakeDir, "ps"), "#!/bin/sh\necho '  4242     1 /Applications/CapCut.app/Contents/MacOS/CapCut'\n");
+    writeFileSync(
+      join(fakeDir, "ps"),
+      "#!/bin/sh\necho '  4242     1 /Applications/CapCut.app/Contents/MacOS/CapCut'\n",
+    );
     chmodSync(join(fakeDir, "ps"), 0o755);
     const env = { PATH: `${fakeDir}${delimiter}${process.env.PATH}` };
     after(() => {

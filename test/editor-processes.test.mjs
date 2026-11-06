@@ -47,7 +47,12 @@ describe("editorProcesses matching", () => {
 // #168: under Volta the `capcut` command is a shim executable named `capcut`
 // that starts node, so the CLI's own parent matched the editor by name.
 describe("editorProcesses leaves out the CLI's own process chain", () => {
-  const shim = ["    1     0 /sbin/launchd", "  400     1 -zsh", "  500   400 /Users/me/.volta/bin/capcut", "  501   500 node"];
+  const shim = [
+    "    1     0 /sbin/launchd",
+    "  400     1 -zsh",
+    "  500   400 /Users/me/.volta/bin/capcut",
+    "  501   500 node",
+  ];
 
   it("ignores a Volta shim named capcut that is the CLI's parent (#168)", () => {
     const rows = parseProcessRows(shim.join("\n"), "posix");
@@ -61,9 +66,17 @@ describe("editorProcesses leaves out the CLI's own process chain", () => {
   });
 
   it("walks the whole parent chain, not only the direct parent", () => {
-    const listing = ["  400     1 -zsh", "  450   400 capcut", "  460   450 npm exec capcut-cli", "  501   460 node"].join("\n");
+    const listing = [
+      "  400     1 -zsh",
+      "  450   400 capcut",
+      "  460   450 npm exec capcut-cli",
+      "  501   460 node",
+    ].join("\n");
     const rows = parseProcessRows(listing, "posix");
-    assert.deepEqual([...ownProcessChain(rows, 501, 460)].sort((a, b) => a - b), [400, 450, 460, 501]);
+    assert.deepEqual(
+      [...ownProcessChain(rows, 501, 460)].sort((a, b) => a - b),
+      [400, 450, 460, 501],
+    );
     assert.deepEqual(matchEditorRows(rows, "posix", ownProcessChain(rows, 501, 460)), []);
   });
 
