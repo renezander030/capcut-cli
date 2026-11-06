@@ -2,7 +2,7 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.33.0] — 2026-11-06
 
 ### Added
 
@@ -23,6 +23,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 ### Fixed
 
 - `text-style` applies `--font-size`, `--color`, `--align`, `--x` and `--y` without `--preset`. The flags were declared (and shared with `add-text`) but only honoured through a preset, so a plain `text-style <project> <id> --font-size 22 --color #FFD60A` exited 0 and left the text unchanged. Font size and colour are written to the material and to every style block CapCut renders from, `--x`/`--y` move the segment as `restyle` does, and `--color` must be `#RRGGBB`. `compile`'s `text-style` operation accepts and validates `fontSize`, `alignment` and `color` too.
+- Writes under Volta no longer stop with `[editor-open]`. The editor-open guard compared process names only, so the shim named `capcut` that starts node was taken for the CapCut editor and every `--apply` was refused. The guard now leaves out the CLI's own process and each of its parents (on Windows, where `tasklist` lists no parent ids, the direct parent) and still finds an editor running beside it ([#168](https://github.com/renezander030/capcut-cli/issues/168)).
 - `fixture --out` requires a new or empty directory outside the source project. It refuses occupied destinations and output symlinks instead of modifying original drafts, overwriting unrelated files, or leaving private media in a bundle reported as media-free. Bundles are built in a temporary sibling directory and published only after generation and redaction inspection finish; a generation failure leaves a new destination absent or an existing empty destination empty. Existing redaction findings remain available for manual review.
 
 ## [0.32.0] — 2026-10-29
