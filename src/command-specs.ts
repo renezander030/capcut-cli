@@ -251,7 +251,7 @@ const usages = {
     "capcut harvest-enums [<project> | --sync | --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]",
   doctor: "capcut doctor [--drafts <dir>]",
   diagnose: "capcut diagnose <project> [--bundle <report.json>]",
-  fixture: "capcut fixture <project> --out <dir> [--check]",
+  fixture: "capcut fixture <project> --out <dir> [--anonymize] [--check]",
   "sync-timelines": "capcut sync-timelines <project-dir> [--nested] [--apply]",
   restore: "capcut restore <project> [--step <number> | --list]",
   serve: "capcut serve [--queue <path>] [options]",
@@ -834,6 +834,16 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Output directory for the sanitized bundle: a new or empty directory outside the source project.",
     ),
     option(
+      "anonymize",
+      ["--anonymize"],
+      "boolean",
+      "Also replace what the draft is about: media file names become media-001.<ext> and folder names on media " +
+        "and project paths folder-001 (consistently across every mirror; standard folders such as Desktop are kept), " +
+        "the project name becomes project, and every text is replaced character by character with placeholders " +
+        "of the same length and script (CJK 字, Latin x/X, digits 0; spaces, punctuation and style ranges kept). " +
+        "The report records anonymized: true and counts what was replaced. Media files are never copied.",
+    ),
+    option(
       "check",
       ["--check"],
       "boolean",
@@ -1114,6 +1124,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --max-still-secs, --max-shot-secs -> lint (opt-in pacing checks)
 //   --min-silent-secs    -> lint (opt-in silent-stretch check)
 //   --recursive -> relink (v0.27 nested media search)
+//   --anonymize -> fixture (neutral media, folder, project and text placeholders)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
@@ -1126,6 +1137,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--compact",
   "--command",
   "--add",
+  "--anonymize",
   "--audio-stream",
   "--apply",
   "--apply-plan",

@@ -5953,7 +5953,7 @@
     {
       "name": "fixture",
       "summary": "Build a shareable, redacted compatibility bundle (timeline JSON only) for a version-support issue, including the mask-keyframe evidence report (#44).",
-      "usage": "capcut fixture <project> --out <dir> [--check]",
+      "usage": "capcut fixture <project> --out <dir> [--anonymize] [--check]",
       "positionals": [
         {
           "name": "project",
@@ -5970,6 +5970,15 @@
           "type": "path",
           "required": false,
           "description": "Output directory for the sanitized bundle: a new or empty directory outside the source project."
+        },
+        {
+          "name": "anonymize",
+          "flags": [
+            "--anonymize"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Also replace what the draft is about: media file names become media-001.<ext> and folder names on media and project paths folder-001 (consistently across every mirror; standard folders such as Desktop are kept), the project name becomes project, and every text is replaced character by character with placeholders of the same length and script (CJK 字, Latin x/X, digits 0; spaces, punctuation and style ranges kept). The report records anonymized: true and counts what was replaced. Media files are never copied."
         },
         {
           "name": "check",

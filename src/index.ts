@@ -541,7 +541,8 @@ Maintenance & inspection:
   diagnose   <project> [--bundle <report.json>] Inspect canonical draft files and divergence
   fixture    <project> --out <dir>              Build a shareable, redacted compatibility bundle
              (timeline JSON only, no media; home paths + emails redacted) to
-             attach to a version-support issue like #35.
+             attach to a version-support issue like #35. --anonymize also
+             replaces media names, folder names, the project name and texts.
   sync-timelines <project-dir> [--apply]        Reconcile timeline mirrors (template-2.tmp,
              draft_info.json) that drifted from draft_content.json, so a CLI
              edit is honored by CapCut >= 8.7 (issue #35). Prints the plan
@@ -1186,6 +1187,8 @@ interface Flags {
   bundle?: string;
   continueOnError?: boolean;
   check?: boolean;
+  // fixture --anonymize
+  anonymize?: boolean;
   plan?: boolean;
   apply?: boolean;
   // batch --plan <file> / --apply-plan <file>
@@ -1322,6 +1325,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--force-write", "forceWrite"],
   ["--continue-on-error", "continueOnError"],
   ["--check", "check"],
+  ["--anonymize", "anonymize"],
   ["--apply", "apply"],
   ["--nested", "nested"],
   ["--pip", "pip"],
@@ -6393,10 +6397,12 @@ async function main(): Promise<void> {
       process.exit(check.ok ? 0 : 1);
     }
     if (!projectPath) {
-      die("Usage: capcut fixture <project> --out <dir> [--check]  |  capcut fixture <bundle-dir> --check");
+      die(
+        "Usage: capcut fixture <project> --out <dir> [--anonymize] [--check]  |  capcut fixture <bundle-dir> --check",
+      );
     }
-    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--check]");
-    const report = sanitizeDraftBundle(projectPath, flags.out);
+    if (!flags.out) die("Missing --out <dir>. Usage: capcut fixture <project> --out <dir> [--anonymize] [--check]");
+    const report = sanitizeDraftBundle(projectPath, flags.out, { anonymize: flags.anonymize === true });
     // Scan the real output path from the flag: report.out_dir is itself
     // redacted (a home-dir project reports /home/USER/…), so it is display
     // data, not a filesystem path.
@@ -6405,6 +6411,13 @@ async function main(): Promise<void> {
     if (!flags.quiet) {
       const total = Object.values(report.redaction_kinds).reduce((a, b) => a + b, 0);
       process.stderr.write(`Sanitized bundle: ${report.out_dir} (${report.files.length} files, ${total} redactions)\n`);
+      if (report.anonymization) {
+        const a = report.anonymization;
+        process.stderr.write(
+          `Anonymized: media files ${a.media_files}, folder names ${a.folders}, texts ${a.text_fields} ` +
+            `(${a.characters} characters).\n`,
+        );
+      }
       process.stderr.write(
         check.ok
           ? "Review the files, then attach the folder to the relevant issue.\n"
