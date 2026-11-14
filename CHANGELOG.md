@@ -8,6 +8,13 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 - `README.ja.md`, a Japanese translation of the README, linked from the language selector in all three READMEs and shipped in the npm package.
 
+## [0.34.0] — 2026-11-14
+
+### Added
+
+- Linux x64 portable release archive with a bundled Node runtime, both CLI launchers and a SHA-256 checksum. It runs without Node or npm on PATH and keeps bundled command metadata/templates after relocation.
+- Portable packaging validates its runtime and license, rejects shared-libnode runtimes and refuses to overwrite existing distributions. Release and package checks exercise the archive before publication.
+
 ## [0.33.1] — 2026-11-06
 
 ### Fixed

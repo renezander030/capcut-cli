@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.33.1",
+  "version": "0.34.0",
   "description": "Independent, unofficial CLI to create and edit CapCut projects — build drafts from scratch, add video/audio/text, subtitles, timing, speed, volume, templates, cut long-form to shorts. No API needed. Not affiliated with ByteDance.",
   "type": "module",
   "bin": {
@@ -51,7 +51,8 @@
     "format": "biome format --write src/ test/",
     "docs:commands": "npm run build && node scripts/generate-command-docs.mjs",
     "wasm:verify": "npm run build && npm --prefix wasm/capcut-core run verify",
-    "prepare": "husky"
+    "prepare": "husky",
+    "pack:portable": "npm run build && node scripts/build-portable.mjs"
   },
   "lint-staged": {
     "src/**/*.ts": [
