@@ -49,6 +49,18 @@ jobs:
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
           npm run smoke:package -- "$RUNNER_TEMP"/pack/capcut-cli-*.tgz
 
+      - name: Build and verify the Linux x64 portable archive
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/portable-config
+          CAPCUT_CLI_APP_VERSIONS: ${{ runner.temp }}/portable-config/versions.json
+        run: |
+          npm run pack:portable -- --out "$RUNNER_TEMP/portable"
+          cd "$RUNNER_TEMP/portable"
+          sha256sum -c *.sha256
+          tar -xzf capcut-cli-*.tar.gz
+          env PATH= ./capcut-cli-v*-linux-x64/capcut --version
+          env PATH= ./capcut-cli-v*-linux-x64/capcut describe --compact
+
   lint:
     runs-on: ubuntu-latest
     steps:
