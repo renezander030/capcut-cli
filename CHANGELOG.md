@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `README.ja.md`, a Japanese translation of the README, linked from the language selector in all three READMEs and shipped in the npm package.
+
 ## [0.33.1] — 2026-11-06
 
 ### Fixed

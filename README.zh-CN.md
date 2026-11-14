@@ -10,7 +10,7 @@
 [![node](https://img.shields.io/node/v/capcut-cli.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/capcut-cli.svg)](./LICENSE)
 
-[English](./README.md) | 中文
+[English](./README.md) | 中文 | [日本語](./README.ja.md)
 
 **在终端里创建和编辑真正的 CapCut / 剪映项目 —— 或者交给任何大模型 Agent 来做。**
 

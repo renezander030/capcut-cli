@@ -10,7 +10,7 @@
 [![node](https://img.shields.io/node/v/capcut-cli.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/capcut-cli.svg)](./LICENSE)
 
-English | [中文](./README.zh-CN.md)
+English | [中文](./README.zh-CN.md) | [日本語](./README.ja.md)
 
 **Create and edit real CapCut / JianYing projects from the terminal — or any LLM agent.**
 
