@@ -4,6 +4,7 @@ Copy-paste recipes for common CapCut / JianYing workflows. Every recipe is one s
 
 | Recipe | Use case |
 |---|---|
+| [compile-local-clip.md](./compile-local-clip.md) | Build one CapCut draft from a local video with `capcut compile` |
 | [cut-to-shorts.md](./cut-to-shorts.md) | Slice one long video into multiple shorts |
 | [batch-fix-subtitles.md](./batch-fix-subtitles.md) | Fix typos and re-sync timing in one pass |
 | [build-short-from-scratch.md](./build-short-from-scratch.md) | CLI-only: clip + VO + music + title → finished short |

@@ -1,0 +1,20 @@
+{
+  "name": "Local Clip Example",
+  "width": 1080,
+  "height": 1920,
+  "fps": 30,
+  "ratio": "9:16",
+  "tracks": [
+    {
+      "type": "video",
+      "name": "Video",
+      "items": [
+        {
+          "path": "../media/cleopatra-family-faces-short.mp4",
+          "start": 0,
+          "duration": 5
+        }
+      ]
+    }
+  ]
+}
