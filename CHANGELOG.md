@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-11-19
+
+### Added
+- Portable macOS downloads for Apple Silicon and Intel, with a bundled Node runtime, license and SHA-256 checksum. Both CLI names run without Node or npm on PATH.
+- Native macOS archive checks before release publication, including relocated paths, bundled-template compilation and runtime-target validation.
+
 ## [Unreleased]
 
 ### Added

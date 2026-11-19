@@ -32,20 +32,28 @@ https://github.com/user-attachments/assets/ba6d4f4c-626b-4d09-bcf2-d32471c427be
 npm install -g capcut-cli
 ```
 
-### Linux x64 without installing Node or npm
+### Portable downloads without installing Node or npm
 
-Download `capcut-cli-v0.34.0-linux-x64.tar.gz` and its `.sha256` file from the [release assets](https://github.com/renezander030/capcut-cli/releases). Verify and extract them together:
+Download `capcut-cli-v0.35.0-linux-x64.tar.gz` and its `.sha256` file from the [release assets](https://github.com/renezander030/capcut-cli/releases). Verify and extract them together:
 
 ```sh
-sha256sum -c capcut-cli-v0.34.0-linux-x64.tar.gz.sha256
-tar -xzf capcut-cli-v0.34.0-linux-x64.tar.gz
-./capcut-cli-v0.34.0-linux-x64/capcut --version
-./capcut-cli-v0.34.0-linux-x64/capcut describe --compact
+sha256sum -c capcut-cli-v0.35.0-linux-x64.tar.gz.sha256
+tar -xzf capcut-cli-v0.35.0-linux-x64.tar.gz
+./capcut-cli-v0.35.0-linux-x64/capcut --version
+./capcut-cli-v0.35.0-linux-x64/capcut describe --compact
 ```
 
-Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. This archive targets Linux x64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. macOS and Windows continue to use the npm installation above. This is a portable directory, not a single-file executable.
+Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. This archive targets Linux x64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. Windows continues to use the npm installation above. This is a portable directory, not a single-file executable.
 
-To build an archive from source, use a complete official Node distribution and run `npm run pack:portable -- --out ./portable` (or add `--node-root <node-distribution>`). The builder uses the local npm payload, downloads nothing and refuses to overwrite existing artifacts.
+On macOS, choose `darwin-arm64` for Apple Silicon or `darwin-x64` for Intel. Download the matching archive and checksum from the same release, then verify and extract them (Apple Silicon example):
+
+```sh
+shasum -a 256 -c capcut-cli-v0.35.0-darwin-arm64.tar.gz.sha256
+tar -xzf capcut-cli-v0.35.0-darwin-arm64.tar.gz
+./capcut-cli-v0.35.0-darwin-arm64/capcut --version
+```
+
+To build an archive from source, use a complete official Node distribution and run `npm run pack:portable -- --out ./portable` (or add `--node-root <node-distribution>`). Build on the target platform and architecture; macOS builds also require GNU tar (`brew install gnu-tar`) and `otool` from the command-line developer tools. The builder uses the local npm payload, downloads nothing, rejects runtimes linked to non-system macOS libraries, and refuses to overwrite existing artifacts. Archive users do not need these build tools.
 
 From Python: `pip install capcut` wraps the same binary — `capcut.run("quickstart", "my-short", video="clip.mp4", ratio="9:16")` — see [python/README.md](https://github.com/renezander030/capcut-cli/blob/master/python/README.md).
 

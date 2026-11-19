@@ -1,17 +1,31 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { buildPortable } from "../scripts/build-portable.mjs";
 
 const runtimeRoot = process.env.CAPCUT_PORTABLE_NODE_ROOT || resolve(dirname(process.execPath), "..");
-describe("Linux x64 portable distribution", {
+const target = `${process.platform}-${process.arch}`;
+if (process.env.CAPCUT_PORTABLE_REQUIRED === "1") {
+  assert.ok(["linux-x64", "darwin-x64", "darwin-arm64"].includes(target), `Unsupported portable target: ${target}`);
+  assert.ok(existsSync(join(runtimeRoot, "LICENSE")), "A complete official Node distribution is required");
+}
+describe("portable distribution", {
   skip:
-    process.platform !== "linux" || process.arch !== "x64" || !existsSync(join(runtimeRoot, "LICENSE"))
-      ? "Requires Linux x64 and a complete official Node distribution (CAPCUT_PORTABLE_NODE_ROOT)"
+    !["linux-x64", "darwin-x64", "darwin-arm64"].includes(target) || !existsSync(join(runtimeRoot, "LICENSE"))
+      ? "Requires a supported host and a complete official Node distribution (CAPCUT_PORTABLE_NODE_ROOT)"
       : false,
 }, () => {
   let root;
@@ -23,7 +37,7 @@ describe("Linux x64 portable distribution", {
     receipt = buildPortable({ outDir: join(root, "archives"), ...(nodeRoot ? { nodeRoot } : {}) });
     const result = spawnSync("tar", ["-xzf", receipt.archive, "-C", root], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
-    extracted = join(root, `capcut-cli-v${receipt.version}-linux-x64`);
+    extracted = join(root, `capcut-cli-v${receipt.version}-${target}`);
   });
   after(() => rmSync(root, { recursive: true, force: true }));
   function invoke(command, args) {
@@ -69,7 +83,11 @@ describe("Linux x64 portable distribution", {
     assert.ok(readFileSync(join(extracted, "runtime", "LICENSE"), "utf8").includes("Copyright"));
     assert.equal(createHash("sha256").update(readFileSync(receipt.archive)).digest("hex"), receipt.sha256);
     assert.match(readFileSync(receipt.checksum, "utf8"), new RegExp(`^${receipt.sha256}  capcut-cli-`));
-    assert.equal(JSON.parse(readFileSync(join(extracted, "PORTABLE.json"), "utf8")).version, receipt.version);
+    const manifest = JSON.parse(readFileSync(join(extracted, "PORTABLE.json"), "utf8"));
+    assert.equal(manifest.version, receipt.version);
+    assert.equal(manifest.target, target);
+    assert.equal(receipt.target, target);
+    assert.equal(manifest.node, receipt.runtime);
   });
   it("refuses to overwrite a previous distribution", () => {
     const before = readFileSync(receipt.archive);
@@ -78,6 +96,18 @@ describe("Linux x64 portable distribution", {
       /already exists/,
     );
     assert.deepEqual(readFileSync(receipt.archive), before);
+  });
+  it("rejects a runtime for another target before producing an archive", () => {
+    const wrong = join(root, "wrong-target");
+    mkdirSync(join(wrong, "bin"), { recursive: true });
+    writeFileSync(join(wrong, "LICENSE"), "Example runtime");
+    writeFileSync(
+      join(wrong, "bin", "node"),
+      `#!/bin/sh\nprintf '%s\\n' '{"version":"22.0.0","platform":"win32","arch":"x64"}'\n`,
+    );
+    chmodSync(join(wrong, "bin", "node"), 0o755);
+    assert.throws(() => buildPortable({ outDir: join(root, "wrong-output"), nodeRoot: wrong }), /runtime must be/);
+    assert.equal(existsSync(join(root, "wrong-output")), false);
   });
   it("rejects an incomplete runtime before producing an archive", () => {
     const missing = join(root, "incomplete");
