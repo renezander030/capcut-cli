@@ -16,7 +16,7 @@ function run(command, args, options = {}) {
 /** Package the npm payload and a self-contained Node runtime; never downloads or publishes. */
 export function buildPortable({ outDir, nodeRoot = resolve(dirname(process.execPath), ".."), root = sourceRoot }) {
   const target = `${process.platform}-${process.arch}`;
-  if (!["linux-x64", "darwin-x64", "darwin-arm64"].includes(target)) throw new Error("Portable archives support Linux x64 and macOS x64/arm64 only");
+  if (!["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target)) throw new Error("Portable archives support Linux and macOS x64/arm64 only");
   const tar = process.platform === "darwin" ? "gtar" : "tar";
   if (!run(tar, ["--version"]).includes("GNU tar")) throw new Error("Building portable archives requires GNU tar (gnu-tar on macOS)");
   const node = join(nodeRoot, "bin", "node");

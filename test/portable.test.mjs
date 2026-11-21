@@ -19,12 +19,17 @@ import { buildPortable } from "../scripts/build-portable.mjs";
 const runtimeRoot = process.env.CAPCUT_PORTABLE_NODE_ROOT || resolve(dirname(process.execPath), "..");
 const target = `${process.platform}-${process.arch}`;
 if (process.env.CAPCUT_PORTABLE_REQUIRED === "1") {
-  assert.ok(["linux-x64", "darwin-x64", "darwin-arm64"].includes(target), `Unsupported portable target: ${target}`);
+  assert.ok(
+    ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target),
+    `Unsupported portable target: ${target}`,
+  );
   assert.ok(existsSync(join(runtimeRoot, "LICENSE")), "A complete official Node distribution is required");
+  if (process.env.CAPCUT_PORTABLE_EXPECT_TARGET) assert.equal(target, process.env.CAPCUT_PORTABLE_EXPECT_TARGET);
 }
 describe("portable distribution", {
   skip:
-    !["linux-x64", "darwin-x64", "darwin-arm64"].includes(target) || !existsSync(join(runtimeRoot, "LICENSE"))
+    !["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target) ||
+    !existsSync(join(runtimeRoot, "LICENSE"))
       ? "Requires a supported host and a complete official Node distribution (CAPCUT_PORTABLE_NODE_ROOT)"
       : false,
 }, () => {
@@ -108,6 +113,20 @@ describe("portable distribution", {
     chmodSync(join(wrong, "bin", "node"), 0o755);
     assert.throws(() => buildPortable({ outDir: join(root, "wrong-output"), nodeRoot: wrong }), /runtime must be/);
     assert.equal(existsSync(join(root, "wrong-output")), false);
+  });
+  it("rejects a runtime for another architecture on the same platform", () => {
+    const wrong = join(root, "wrong-architecture");
+    mkdirSync(join(wrong, "bin"), { recursive: true });
+    writeFileSync(join(wrong, "LICENSE"), "Example runtime");
+    const metadata = JSON.stringify({
+      version: "22.0.0",
+      platform: process.platform,
+      arch: process.arch === "arm64" ? "x64" : "arm64",
+    });
+    writeFileSync(join(wrong, "bin", "node"), `#!/bin/sh\nprintf '%s\\n' '${metadata}'\n`);
+    chmodSync(join(wrong, "bin", "node"), 0o755);
+    assert.throws(() => buildPortable({ outDir: join(root, "wrong-arch-output"), nodeRoot: wrong }), /runtime must be/);
+    assert.equal(existsSync(join(root, "wrong-arch-output")), false);
   });
   it("rejects an incomplete runtime before producing an archive", () => {
     const missing = join(root, "incomplete");

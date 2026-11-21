@@ -34,23 +34,25 @@ npm install -g capcut-cli
 
 ### Portable downloads without installing Node or npm
 
-Download `capcut-cli-v0.35.0-linux-x64.tar.gz` and its `.sha256` file from the [release assets](https://github.com/renezander030/capcut-cli/releases). Verify and extract them together:
+Download `capcut-cli-v0.36.0-linux-x64.tar.gz` and its `.sha256` file from the [release assets](https://github.com/renezander030/capcut-cli/releases). Verify and extract them together:
 
 ```sh
-sha256sum -c capcut-cli-v0.35.0-linux-x64.tar.gz.sha256
-tar -xzf capcut-cli-v0.35.0-linux-x64.tar.gz
-./capcut-cli-v0.35.0-linux-x64/capcut --version
-./capcut-cli-v0.35.0-linux-x64/capcut describe --compact
+sha256sum -c capcut-cli-v0.36.0-linux-x64.tar.gz.sha256
+tar -xzf capcut-cli-v0.36.0-linux-x64.tar.gz
+./capcut-cli-v0.36.0-linux-x64/capcut --version
+./capcut-cli-v0.36.0-linux-x64/capcut describe --compact
 ```
 
-Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. This archive targets Linux x64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. Windows continues to use the npm installation above. This is a portable directory, not a single-file executable.
+On Linux arm64 (aarch64), choose `capcut-cli-v0.36.0-linux-arm64.tar.gz` and its matching `.sha256` file, then use the same verification and extraction commands with that filename. Use the archive matching the machine architecture; these archives bundle Node, not ffmpeg or the desktop editor.
+
+Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. Linux archives target x64 or arm64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. Windows continues to use the npm installation above. This is a portable directory, not a single-file executable.
 
 On macOS, choose `darwin-arm64` for Apple Silicon or `darwin-x64` for Intel. Download the matching archive and checksum from the same release, then verify and extract them (Apple Silicon example):
 
 ```sh
-shasum -a 256 -c capcut-cli-v0.35.0-darwin-arm64.tar.gz.sha256
-tar -xzf capcut-cli-v0.35.0-darwin-arm64.tar.gz
-./capcut-cli-v0.35.0-darwin-arm64/capcut --version
+shasum -a 256 -c capcut-cli-v0.36.0-darwin-arm64.tar.gz.sha256
+tar -xzf capcut-cli-v0.36.0-darwin-arm64.tar.gz
+./capcut-cli-v0.36.0-darwin-arm64/capcut --version
 ```
 
 To build an archive from source, use a complete official Node distribution and run `npm run pack:portable -- --out ./portable` (or add `--node-root <node-distribution>`). Build on the target platform and architecture; macOS builds also require GNU tar (`brew install gnu-tar`) and `otool` from the command-line developer tools. The builder uses the local npm payload, downloads nothing, rejects runtimes linked to non-system macOS libraries, and refuses to overwrite existing artifacts. Archive users do not need these build tools.
