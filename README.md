@@ -47,6 +47,8 @@ On Linux arm64 (aarch64), choose `capcut-cli-v0.36.0-linux-arm64.tar.gz` and its
 
 Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. Linux archives target x64 or arm64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. Windows continues to use the npm installation above. This is a portable directory, not a single-file executable.
 
+You can add the extracted directory to `PATH` or create symbolic links to `capcut` and `capcut-cli` in a directory already on `PATH`. The launchers follow absolute and relative link chains using the system `/usr/bin/readlink`, and keep relative input and output paths relative to your working directory. Keep the extracted package in place while links point to it.
+
 On macOS, choose `darwin-arm64` for Apple Silicon or `darwin-x64` for Intel. Download the matching archive and checksum from the same release, then verify and extract them (Apple Silicon example):
 
 ```sh

@@ -59,7 +59,19 @@ export function buildPortable({ outDir, nodeRoot = resolve(dirname(process.execP
     copyFileSync(node, join(payload, "runtime", "node"));
     chmodSync(join(payload, "runtime", "node"), 0o755);
     copyFileSync(license, join(payload, "runtime", "LICENSE"));
-    const launcher = '#!/bin/sh\nbase=$(CDPATH= cd -- "${0%/*}" && pwd) || exit 1\nexec "$base/runtime/node" "$base/app/dist/index.js" "$@"\n';
+    const launcher = [
+      "#!/bin/sh",
+      'script=$0',
+      'case "$script" in */*) ;; *) script=$(command -v "$script") || exit 1 ;; esac',
+      'while [ -L "$script" ]; do',
+      '  base=$(CDPATH= cd -P -- "${script%/*}" && pwd) || exit 1',
+      '  target=$(/usr/bin/readlink "$script") || exit 1',
+      '  case "$target" in /*) script=$target ;; *) script=$base/$target ;; esac',
+      'done',
+      'base=$(CDPATH= cd -P -- "${script%/*}" && pwd) || exit 1',
+      'exec "$base/runtime/node" "$base/app/dist/index.js" "$@"',
+      "",
+    ].join("\n");
     for (const command of ["capcut", "capcut-cli"]) {
       writeFileSync(join(payload, command), launcher, { mode: 0o755 });
     }

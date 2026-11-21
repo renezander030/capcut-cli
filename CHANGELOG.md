@@ -8,6 +8,9 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 - Portable Linux arm64 downloads with a bundled Node runtime, license and SHA-256 checksum.
 - Native arm64 archive checks before release publication, including both launchers, relocated paths and bundled-template compilation. Mismatched runtime architectures are rejected before an archive is created.
 
+### Fixed
+- Portable launchers resolve absolute and relative symbolic links, including chains, so links on PATH use the bundled runtime while preserving relative command arguments.
+
 ## [0.35.0] - 2026-11-19
 
 ### Added

@@ -9,10 +9,11 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { buildPortable } from "../scripts/build-portable.mjs";
 
@@ -83,6 +84,50 @@ describe("portable distribution", {
     renameSync(extracted, moved);
     extracted = moved;
     assert.equal(invoke("capcut", ["--version"]).trim(), receipt.version);
+  });
+  it("runs through absolute and relative symlink chains without Node on PATH", () => {
+    const bin = join(root, "linked commands");
+    mkdirSync(bin);
+    for (const command of ["capcut", "capcut-cli"]) {
+      const intermediate = join(bin, `${command}-target`);
+      symlinkSync(join(extracted, command), intermediate);
+      symlinkSync(relative(bin, intermediate), join(bin, command));
+      const result = spawnSync(command, ["--version"], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, PATH: bin, NODE_OPTIONS: "" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), receipt.version);
+    }
+  });
+  it("preserves relative arguments and the working directory through a linked launcher", () => {
+    const link = join(root, "linked-cli");
+    symlinkSync(relative(root, join(extracted, "capcut")), link);
+    writeFileSync(
+      join(root, "linked input.json"),
+      JSON.stringify({
+        name: "Linked example",
+        tracks: [{ type: "text", items: [{ text: "Linked output", start: 0, duration: 2 }] }],
+      }),
+    );
+    const result = spawnSync(
+      link,
+      ["compile", "linked input.json", "--out", "linked output", "--template", "bundled"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: "",
+          NODE_OPTIONS: "",
+          XDG_CONFIG_HOME: join(root, "config"),
+          CAPCUT_CLI_APP_VERSIONS: join(root, "config", "versions.json"),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(readFileSync(join(root, "linked output", "draft_content.json"), "utf8"), /Linked output/);
   });
   it("includes the runtime license and a checksum matching the actual archive", () => {
     assert.ok(readFileSync(join(extracted, "runtime", "LICENSE"), "utf8").includes("Copyright"));
