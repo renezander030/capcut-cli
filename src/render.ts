@@ -46,6 +46,42 @@ export interface RenderOptions {
   progress?: boolean; // stream ffmpeg's own stderr instead of buffering it
   strict?: boolean; // refuse (nothing rendered) when the fidelity census is not faithful
   ffprobeCmd?: string; // ffprobe binary for output verification (default "ffprobe")
+  audioTrack?: number; // which audio stream of each audio source to play (0-based; default the first)
+  audioChannel?: "left" | "right" | "mix"; // play one channel of a stereo source, or both mixed to mono
+  /**
+   * Filled by renderDraft from ffprobe: each audio file's channel count per audio stream (null when unreadable). With
+   * it, --audio-track applies to files that have several streams and --audio-channel to streams that have several
+   * channels; without it (a dry run) both apply as given.
+   */
+  audioProbe?: ReadonlyMap<string, number[] | null>;
+}
+
+/** One audio file of an executed render: how many audio streams it has, which one played and how. */
+export interface AudioSourceReport {
+  path: string;
+  /** Audio streams in the file; null when ffprobe could not count them. */
+  streams: number | null;
+  used: number;
+  /** Channels of the stream that played; null when unknown. */
+  channels: number | null;
+  /** The --audio-channel applied to this file; null when none was asked or its stream is mono. */
+  channel: "left" | "right" | "mix" | null;
+}
+
+/** Which stream of an audio file plays, and whether --audio-channel applies to it. */
+function audioChoice(path: string, opts: RenderOptions): AudioSourceReport {
+  const known = opts.audioProbe?.get(path) ?? null;
+  const chooses = opts.audioTrack !== undefined && (known === null || known.length > 1);
+  const used = chooses ? (opts.audioTrack as number) : 0;
+  const channels = known?.[used] ?? null;
+  const pans = opts.audioChannel !== undefined && (channels === null || channels > 1);
+  return {
+    path,
+    streams: known === null ? null : known.length,
+    used,
+    channels,
+    channel: pans ? (opts.audioChannel ?? null) : null,
+  };
 }
 
 /**
@@ -179,6 +215,8 @@ export interface RenderResult extends RenderPlan {
   executed: boolean;
   /** Present after a real render: the written file's duration against the draft's. */
   verification?: OutputVerification;
+  /** Present after a real render: each audio source's stream count and the stream that played. */
+  audio_sources?: AudioSourceReport[];
 }
 
 /**
@@ -212,7 +250,7 @@ const BASE_CHAIN_FILTERS = ["fps", "scale", "pad", "setsar", "format", "concat",
 // dropping them changes the audio (unlike the drawtext/overlay flag fallbacks,
 // which only withhold an explicitly optional extra).
 const AUDIO_CHAIN_FILTERS = ["atrim", "asetpts", "adelay", "anull", "amix", "apad"] as const;
-const AUDIO_CONDITIONAL_FILTERS = ["atempo", "volume", "afade"] as const;
+const AUDIO_CONDITIONAL_FILTERS = ["atempo", "volume", "afade", "pan"] as const;
 
 /**
  * Every filter name the -filters probe checks. The chain/probe guard test
@@ -249,6 +287,7 @@ export interface FfmpegCapabilities {
   atempo: boolean;
   volume: boolean;
   afade: boolean;
+  pan: boolean;
 }
 
 type ProbedFilterFlags = Record<(typeof PROBED_FILTERS)[number], boolean>;
@@ -748,6 +787,39 @@ export function probeRenderOutput(
   return checkOutputDuration(probe.durationUs, expectedUs, fps);
 }
 
+// --audio-channel: one channel of a stereo source (left/right) or both mixed down, as mono.
+function panFor(channel: RenderOptions["audioChannel"]): string | null {
+  if (channel === "left") return "pan=mono|c0=c0";
+  if (channel === "right") return "pan=mono|c0=c1";
+  if (channel === "mix") return "pan=mono|c0=0.5*c0+0.5*c1";
+  return null;
+}
+
+/**
+ * A file's audio streams as their channel counts, in stream order, from ffprobe; null when it cannot be read. Each
+ * stream index counts once: ffprobe can list a stream again under each program of a container (MPEG-TS).
+ */
+export function probeAudioStreams(path: string, ffprobeCmd = "ffprobe"): number[] | null {
+  const r = spawnSync(
+    ffprobeCmd,
+    ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels", "-of", "csv=p=0", path],
+    {
+      encoding: "utf-8",
+      timeout: 30_000,
+    },
+  );
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  const byIndex = new Map<number, number>();
+  const lines = r.stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  for (const line of lines) {
+    const match = /^(\d+),(\d*)/.exec(line.trim());
+    if (!match) return null; // not ffprobe's index,channels answer: unknown, so the flags apply as given
+    const index = Number(match[1]);
+    if (!byIndex.has(index)) byIndex.set(index, match[2] === "" ? 0 : Number(match[2]));
+  }
+  return [...byIndex.entries()].sort((x, y) => x[0] - y[0]).map(([, channels]) => channels);
+}
+
 // atempo accepts 0.5..2.0 per filter instance, so a speed outside that range
 // is a chain of stages whose product is the speed (3x = 2 x 1.5, 0.25x = 0.5 x 0.5).
 function atempoFor(speed: number): string | null {
@@ -985,6 +1057,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
       continue;
     }
     const idx = inputs.length;
+    const choice = audioChoice(path, opts);
     inputs.push({ index: idx, path, kind: "audio" });
     inputArgs.push("-i", path);
     const srcStart = round3(seg.source_timerange.start / US);
@@ -1001,6 +1074,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     const chain = [
       `atrim=start=${srcStart}:duration=${srcDur}`,
       "asetpts=PTS-STARTPTS",
+      panFor(choice.channel ?? undefined),
       tempo,
       vol !== 1 ? `volume=${round3(vol)}` : null,
       fadeIn > 0 ? `afade=t=in:st=0:d=${round3(fadeIn)}` : null,
@@ -1008,7 +1082,11 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
       `adelay=${startMs}|${startMs}`,
     ].filter(Boolean);
     const label = `a${idx}`;
-    filterParts.push(`[${idx}:a]${chain.join(",")}[${label}]`);
+    const stream =
+      choice.used > 0 || (opts.audioTrack !== undefined && choice.streams === null)
+        ? `${idx}:a:${choice.used}`
+        : `${idx}:a`;
+    filterParts.push(`[${stream}]${chain.join(",")}[${label}]`);
     audioLabels.push(`[${label}]`);
   }
 
@@ -1170,6 +1248,17 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
       });
     }
   }
+  // Each audio file is probed once: which stream plays and whether --audio-channel applies depend on what it holds.
+  const audioPaths = [
+    ...new Set(
+      audioSegments(draft)
+        .map((seg) => findAudioPath(draft, seg.material_id))
+        .filter((path): path is string => !!path && existsSync(path)),
+    ),
+  ];
+  effective.audioProbe = new Map(
+    audioPaths.map((path) => [path, probeAudioStreams(path, opts.ffprobeCmd ?? "ffprobe")]),
+  );
   const basePlan = buildRenderPlan(draft, effective);
   const plan = { ...basePlan, capabilities, skipped: [...basePlan.skipped, ...fallbackSkipped] };
   if (opts.strict) assertFaithful(plan.fidelity);
@@ -1183,13 +1272,29 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     throw missingFiltersError(
       opts.ffmpegCmd ?? "ffmpeg",
       missingConditional,
-      "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
+      "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades, " +
+        "pan = --audio-channel). " +
         "Rendering without them would silently change the audio, so render refuses instead of degrading. ",
     );
   }
 
   if (opts.dryRun) {
     return { ...plan, ok: true, executed: false };
+  }
+
+  // One report per audio file: how many streams it has and which one plays. A file without the chosen stream among
+  // several, or with no audio stream at all, is refused before ffmpeg runs.
+  const audio_sources = audioPaths.map((path) => audioChoice(path, effective));
+  for (const source of audio_sources) {
+    if (source.streams === 0) {
+      throw new Error(`render: ${source.path} has no audio stream. Nothing was rendered.`);
+    }
+    if (source.streams !== null && source.used >= source.streams) {
+      throw new Error(
+        `render: ${source.path} has ${source.streams} audio streams; --audio-track ${source.used} does not exist ` +
+          "(streams count from 0). Nothing was rendered.",
+      );
+    }
   }
 
   // The SRT must exist before ffmpeg opens its inputs; it stays next to the
@@ -1295,5 +1400,5 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     }
     verification.proxy = proxy;
   }
-  return { ...plan, ok, executed: true, verification };
+  return { ...plan, ok, executed: true, verification, audio_sources };
 }

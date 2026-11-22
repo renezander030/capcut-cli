@@ -411,7 +411,12 @@ describe("render — plan (buildRenderPlan, pure)", () => {
         },
       ],
     });
-    const plan = buildRenderPlan(draft, { out: join(s.dir, "p.mp4"), burnCaptions: true, allVideoTracks: true });
+    const plan = buildRenderPlan(draft, {
+      out: join(s.dir, "p.mp4"),
+      burnCaptions: true,
+      allVideoTracks: true,
+      audioChannel: "mix", // pan
+    });
     const used = filterNamesInGraph(plan.filterComplex);
     const probed = new Set(PROBED_FILTERS);
     // null: the identity passthrough, present in any build that runs at all.
@@ -659,7 +664,8 @@ describe("render — missing-filter refusals (exact messages)", () => {
     assert.equal(
       message,
       `render: ffmpeg at '${cmd}' is missing the filter 'volume', ` +
-        "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
+        "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades, " +
+        "pan = --audio-channel). " +
         "Rendering without them would silently change the audio, so render refuses instead of degrading. " +
         INSTALL(cmd),
     );
@@ -789,4 +795,182 @@ describe("render — audio speed beyond 0.5..2x chains atempo stages", () => {
       assert.match(audioChain(s.dir, speed), new RegExp(`asetpts=PTS-STARTPTS,${stages},`));
     });
   }
+});
+
+// A source with several audio streams used to play stream 0 with no word about the others.
+describe("render — choose the audio stream or channel", () => {
+  function setup() {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-render-astream-"));
+    return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+  function chainFor(dir, opts) {
+    const plan = buildRenderPlan(buildDraft(dir, { withText: false }), { out: join(dir, "p.mp4"), ...opts });
+    return plan.filterComplex.split(";").find((part) => part.startsWith("[2:a"));
+  }
+
+  it("--audio-track picks that audio stream of each audio source", () => {
+    const s = setup();
+    after(s.cleanup);
+    assert.match(chainFor(s.dir, { audioTrack: 1 }), /^\[2:a:1\]atrim/);
+    assert.match(chainFor(s.dir, {}), /^\[2:a\]atrim/);
+  });
+
+  for (const [channel, pan] of [
+    ["left", "pan=mono|c0=c0"],
+    ["right", "pan=mono|c0=c1"],
+    ["mix", "pan=mono|c0=0.5*c0+0.5*c1"],
+  ]) {
+    it(`--audio-channel ${channel} plays ${pan}`, () => {
+      const s = setup();
+      after(s.cleanup);
+      assert.ok(chainFor(s.dir, { audioChannel: channel }).includes(`asetpts=PTS-STARTPTS,${pan},`));
+    });
+  }
+
+  it("refuses a negative track and an unknown channel", () => {
+    const s = setup();
+    after(s.cleanup);
+    const draftPath = join(s.dir, "draft_content.json");
+    writeFileSync(draftPath, JSON.stringify(buildDraft(s.dir, { withText: false })));
+    const track = spawnCli(["render", draftPath, "--dry-run", "--audio-track", "-1"]);
+    assert.notEqual(track.status, 0);
+    assert.match(track.stderr, /--audio-track/);
+    const channel = spawnCli(["render", draftPath, "--dry-run", "--audio-channel", "centre"]);
+    assert.notEqual(channel.status, 0);
+    assert.match(channel.stderr, /--audio-channel/);
+  });
+
+  // A draft with a single-stream music bed (two segments) and a voice file with two streams: stereo, then mono.
+  function mixedDraft(dir) {
+    const draft = buildDraft(dir, { withText: false });
+    const voice = join(dir, "voice.m4a");
+    writeFileSync(voice, "");
+    draft.materials.audios.push({ id: "ma2", path: voice, name: "voice", type: "extract_music", duration: 4 * US });
+    const music = draft.tracks.find((t) => t.type === "audio");
+    music.segments.push({ ...music.segments[0], id: "seg-ma1-b", target_timerange: { start: 3 * US, duration: US } });
+    music.segments[0].target_timerange.duration = 2 * US;
+    music.segments[0].source_timerange.duration = 2 * US;
+    draft.tracks.push({
+      id: "ta2",
+      type: "audio",
+      name: "voice",
+      attribute: 0,
+      segments: [{ ...music.segments[0], id: "seg-voice", material_id: "ma2", volume: 1 }],
+    });
+    return draft;
+  }
+  const probe = (dir) =>
+    new Map([
+      [join(dir, "music.mp3"), [1]],
+      [join(dir, "voice.m4a"), [2, 1]],
+    ]);
+  const chains = (plan) => plan.filterComplex.split(";").filter((part) => /^\[\d+:a/.test(part));
+
+  it("a single-stream source plays its stream whatever --audio-track says; the others play the chosen one", () => {
+    const s = setup();
+    after(s.cleanup);
+    const plan = buildRenderPlan(mixedDraft(s.dir), {
+      out: join(s.dir, "p.mp4"),
+      audioTrack: 1,
+      audioProbe: probe(s.dir),
+    });
+    assert.deepEqual(
+      chains(plan)
+        .map((c) => c.match(/^\[(\d+:a(?::\d+)?)\]/)[1].replace(/^\d+/, "i"))
+        .sort(),
+      ["i:a", "i:a", "i:a:1"],
+    );
+  });
+
+  it("--audio-channel leaves a mono stream as it is and takes the channel of a stereo one", () => {
+    const s = setup();
+    after(s.cleanup);
+    const plan = buildRenderPlan(mixedDraft(s.dir), {
+      out: join(s.dir, "p.mp4"),
+      audioChannel: "right",
+      audioProbe: probe(s.dir),
+    });
+    assert.deepEqual(
+      chains(plan)
+        .map((c) => c.includes("pan=mono|c0=c1"))
+        .sort(),
+      [false, false, true],
+    );
+    const mono = buildRenderPlan(mixedDraft(s.dir), {
+      out: join(s.dir, "p.mp4"),
+      audioTrack: 1,
+      audioChannel: "mix",
+      audioProbe: probe(s.dir),
+    });
+    assert.ok(
+      chains(mono).every((c) => !c.includes("pan=")),
+      "the voice's stream 1 is mono too",
+    );
+  });
+
+  it("names each audio file once, renders a mixed draft with --audio-track, and refuses a track no file has", {
+    skip: isWindows,
+  }, () => {
+    const s = setup();
+    after(s.cleanup);
+    const draftPath = join(s.dir, "draft_content.json");
+    writeFileSync(draftPath, JSON.stringify(mixedDraft(s.dir)));
+    const names = [...BASE_VIDEO_FILTERS, ...UNCONDITIONAL_AUDIO_FILTERS, "volume", "atempo", "pan"];
+    const ffmpeg = join(s.dir, "ffmpeg-writes");
+    writeFileSync(
+      ffmpeg,
+      [
+        "#!/bin/sh",
+        'case "$*" in',
+        "  *-filters*) cat <<'EOF'",
+        ...names.map((name) => FILTER_LINES[name] ?? ` ... ${name}               A->A       x`),
+        "EOF",
+        "    exit 0 ;;",
+        "  *-encoders*) echo ' V..... libx264              H.264'; exit 0 ;;",
+        "esac",
+        'for last; do :; done; printf x > "$last"; exit 0',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(ffmpeg, 0o755);
+    const ffprobe = join(s.dir, "ffprobe-per-file");
+    writeFileSync(
+      ffprobe,
+      "#!/bin/sh\n" +
+        // index,channels per audio stream; the music file's one stream is listed twice, as ffprobe can for a
+        // container with programs (MPEG-TS), and still counts once
+        'case "$*" in *-version*) exit 0 ;; *select_streams*voice.m4a*) printf "0,2\\n1,1\\n"; exit 0 ;; *select_streams*) printf "0,1\\n0,1\\n"; exit 0 ;; esac\n' +
+        'echo \'{"streams":[{"codec_type":"video","width":360,"height":640}],"format":{"duration":"4.000000"}}\'\n',
+    );
+    chmodSync(ffprobe, 0o755);
+    const base = ["render", draftPath, "--out", join(s.dir, "p.mp4"), "--ffmpeg-cmd", ffmpeg, "--ffprobe-cmd", ffprobe];
+    const plain = spawnCli(base);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.deepEqual(
+      plain.json.audio_sources.map((a) => [
+        a.path.endsWith("voice.m4a") ? "voice" : "music",
+        a.streams,
+        a.used,
+        a.channels,
+      ]),
+      [
+        ["music", 1, 0, 1],
+        ["voice", 2, 0, 2],
+      ],
+    );
+    assert.equal((plain.stderr.match(/audio streams; stream 0 played/g) ?? []).length, 1, plain.stderr);
+    assert.match(plain.stderr, /voice\.m4a has 2 audio streams/);
+    const chosen = spawnCli([...base, "--audio-track", "1"]);
+    assert.equal(chosen.status, 0, chosen.stderr);
+    assert.deepEqual(
+      chosen.json.audio_sources.map((a) => [a.streams, a.used]),
+      [
+        [1, 0],
+        [2, 1],
+      ],
+    );
+    const missing = spawnCli([...base, "--audio-track", "2"]);
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /voice\.m4a has 2 audio streams; --audio-track 2 does not exist/);
+  });
 });

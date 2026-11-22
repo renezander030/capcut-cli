@@ -6795,6 +6795,29 @@
           "description": "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode."
         },
         {
+          "name": "audio_track",
+          "flags": [
+            "--audio-track"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Play this audio stream of each audio source (0-based; default the first). The result lists each source's stream count; a track a source does not have is refused before rendering."
+        },
+        {
+          "name": "audio_channel",
+          "flags": [
+            "--audio-channel"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "left, right, or mix: play one channel of a stereo source, or both mixed, as mono.",
+          "values": [
+            "left",
+            "right",
+            "mix"
+          ]
+        },
+        {
           "name": "burn_captions",
           "flags": [
             "--burn-captions"

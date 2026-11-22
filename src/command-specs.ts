@@ -997,6 +997,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode.",
     ),
     option(
+      "audio_track",
+      ["--audio-track"],
+      "number",
+      "Play this audio stream of each audio source (0-based; default the first). The result lists each source's stream count; a track a source does not have is refused before rendering.",
+    ),
+    option(
+      "audio_channel",
+      ["--audio-channel"],
+      "enum",
+      "left, right, or mix: play one channel of a stereo source, or both mixed, as mono.",
+      { values: ["left", "right", "mix"] },
+    ),
+    option(
       "burn_captions",
       ["--burn-captions"],
       "boolean",
@@ -1165,9 +1178,12 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --recursive -> relink (v0.27 nested media search)
 //   --anonymize -> fixture (neutral media, folder, project and text placeholders)
 //   --since-write -> diff (compare with the CLI's last recorded write)
+//   --audio-track, --audio-channel -> render (choose the audio stream or channel)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--audio-track",
+  "--audio-channel",
   "--active-timeline",
   "--target",
   "--per-clip",

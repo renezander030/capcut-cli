@@ -316,6 +316,11 @@ Preview:
                --encoder <name>   Video encoder for -c:v (default libx264)
                --crf <0..51>      Constant quality (default 28)
                --video-bitrate <r> Target bitrate such as 2500k or 4M
+               --audio-track <n>  Play this audio stream of each audio source
+                                  (0-based; default the first; the result lists
+                                  every source's stream count)
+               --audio-channel <c> left, right, or mix: one channel of a stereo
+                                  source, or both mixed, as mono
                --dry-run          Print the ffmpeg plan; do not execute
 
 Analyze:
@@ -1187,6 +1192,8 @@ interface Flags {
   encoder?: string;
   crf?: number;
   videoBitrate?: string;
+  audioTrack?: number;
+  audioChannel?: string;
   burnCaptions?: boolean;
   allVideoTracks?: boolean;
   // loudness: delivery target, per-clip normalization, boost cap, delivery gate
@@ -1421,6 +1428,7 @@ const STRING_FLAGS = new Map<string, FlagKey<string>>([
   ["--ffmpeg-cmd", "ffmpegCmd"],
   ["--encoder", "encoder"],
   ["--video-bitrate", "videoBitrate"],
+  ["--audio-channel", "audioChannel"],
   ["--bundle", "bundle"],
   ["--data", "data"],
   ["--into", "into"],
@@ -1478,6 +1486,7 @@ const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
   ["--intensity", "intensity"],
   ["--fps", "fps"],
   ["--crf", "crf"],
+  ["--audio-track", "audioTrack"],
   ["--threshold", "threshold"],
   ["--min-gap", "minGap"],
   ["--threshold-db", "thresholdDb"],
@@ -6253,6 +6262,12 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
   if (flags.videoBitrate !== undefined && !/^(?:0\.\d*[1-9]\d*|[1-9]\d*(?:\.\d+)?)[kKmM]?$/.test(flags.videoBitrate)) {
     die("--video-bitrate must be a positive ffmpeg rate such as 2500k or 4M.");
   }
+  if (flags.audioTrack !== undefined && (!Number.isInteger(flags.audioTrack) || flags.audioTrack < 0)) {
+    die("--audio-track must be a stream number from 0.");
+  }
+  if (flags.audioChannel !== undefined && !["left", "right", "mix"].includes(flags.audioChannel)) {
+    die("--audio-channel must be left, right, or mix.");
+  }
   const opts = {
     out: flags.out,
     scale: flags.scale,
@@ -6261,6 +6276,8 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     encoder: flags.encoder,
     crf: flags.crf,
     videoBitrate: flags.videoBitrate,
+    audioTrack: flags.audioTrack,
+    audioChannel: flags.audioChannel as "left" | "right" | "mix" | undefined,
     burnCaptions: flags.burnCaptions,
     softCaptions: flags.softCaptions,
     allVideoTracks: flags.allVideoTracks,
@@ -6282,6 +6299,13 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
   const result = renderDraft(draft, filePath, opts);
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
+  for (const source of result.audio_sources ?? []) {
+    if (source.streams !== null && source.streams > 1 && flags.audioTrack === undefined) {
+      process.stderr.write(
+        `Note: ${source.path} has ${source.streams} audio streams; stream 0 played (choose another with --audio-track <n>).\n`,
+      );
+    }
+  }
   // The file stays on disk either way; the result above says why. A measured duration that misses the draft's fails.
   // Where the proxy cannot play the draft's whole length (gaps closed, picture ending with the last main-track clip),
   // the file is held to what it plays instead (a match is a note, short of it fails); --verify fails any drift, and
