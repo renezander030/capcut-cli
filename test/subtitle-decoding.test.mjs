@@ -111,3 +111,26 @@ describe("subtitle decoding integrity", () => {
     assert.equal(existsSync(out), false);
   });
 });
+
+describe("readSubtitleCues", () => {
+  it("reads SRT and WebVTT through the strict UTF-8 reader", async (t) => {
+    const { readSubtitleCues } = await import("../dist/bom.js");
+    const fix = setup(t);
+    const srt = join(fix.dir, "a.srt");
+    const vtt = join(fix.dir, "a.vtt");
+    const bad = join(fix.dir, "bad.vtt");
+    writeFileSync(srt, "﻿1\n00:00:01,000 --> 00:00:02,000\nCafé\n");
+    writeFileSync(vtt, "WEBVTT\n\n00:01.000 --> 00:02.000\nCafé\n");
+    writeFileSync(
+      bad,
+      Buffer.concat([Buffer.from("WEBVTT\n\n00:01.000 --> 00:02.000\nCaf"), Buffer.from([0xe9]), Buffer.from("\n")]),
+    );
+    for (const path of [srt, vtt]) {
+      assert.deepEqual(
+        readSubtitleCues(path).map((c) => [c.startUs, c.endUs, c.text]),
+        [[1_000_000, 2_000_000, "Café"]],
+      );
+    }
+    assert.throws(() => readSubtitleCues(bad), /not valid UTF-8/);
+  });
+});

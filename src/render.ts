@@ -758,10 +758,65 @@ export function proxyLength(
   return { duration_us: written, reasons };
 }
 
-export const PROXY_REASON_TEXT: Record<ProxyShortening, string> = {
+const PROXY_REASON_TEXT: Record<ProxyShortening, string> = {
   main_track_gaps: "closes main-track gaps (fidelity.dropped.main_track_gaps)",
   past_main_track: "ends with the main track's last clip (music or captions past it are cut)",
 };
+
+/**
+ * What a render tells its caller beyond the JSON result: stderr notes, and the error that fails it. One place for
+ * the exit rules: a duration that misses the draft's fails; a draft with main-track gaps is held to its gaps-closed
+ * length instead (a match is a note, short of it fails); --verify fails any drift and an unmeasured file.
+ */
+export function renderOutcome(
+  result: RenderPlan & Partial<Pick<RenderResult, "verification" | "audio_sources">>,
+  opts: { verify?: boolean; audioTrack?: number } = {},
+): { notes: string[]; error?: string } {
+  const notes: string[] = [];
+  for (const font of result.fidelity.dropped.missing_fonts?.fonts ?? []) {
+    notes.push(`Note: font ${font} is missing or unusable here; its captions are drawn in ffmpeg's default face.`);
+  }
+  for (const source of result.audio_sources ?? []) {
+    if (source.streams !== null && source.streams > 1 && opts.audioTrack === undefined) {
+      notes.push(
+        `Note: ${source.path} has ${source.streams} audio streams; stream 0 played (choose another with --audio-track <n>).`,
+      );
+    }
+  }
+  const check = result.verification;
+  if (!check) return { notes };
+  const proxy = check.proxy;
+  const why = proxy?.reasons.map((reason) => PROXY_REASON_TEXT[reason]).join(" and ");
+  if (proxy?.within_tolerance && !opts.verify) {
+    notes.push(
+      `Note: output is ${check.duration_us}us against the draft's ${check.expected_duration_us}us because the proxy ` +
+        `${why}: it plays ${proxy.duration_us}us; --verify makes this an error.`,
+    );
+    return { notes };
+  }
+  if (proxy?.within_tolerance === false && !opts.verify) {
+    return {
+      notes,
+      error:
+        `render: output duration ${check.duration_us}us is ${proxy.drift_us}us off the ${proxy.duration_us}us the proxy ` +
+        `plays (it ${why}${proxy.reasons.includes("main_track_gaps") ? ", so with gaps closed" : ""}), beyond the ` +
+        `one-frame tolerance of ${check.tolerance_us}us. The file was kept at ${result.output}.`,
+    };
+  }
+  if (opts.verify && !check.verified) {
+    return { notes, error: `render --verify: output could not be verified: ${check.reason}` };
+  }
+  if (check.verified && !check.within_tolerance) {
+    return {
+      notes,
+      error:
+        `render: output duration ${check.duration_us}us drifts ${check.drift_us}us from the draft's ` +
+        `${check.expected_duration_us}us, beyond the one-frame tolerance of ${check.tolerance_us}us. ` +
+        `The file was kept at ${result.output}; the result's \`fidelity\` lists what the proxy dropped (main_track_gaps shortens it).`,
+    };
+  }
+  return { notes };
+}
 
 /** The proxy's length with main-track gaps closed: concat plays each main-track segment for its timeline duration. */
 export function closedGapsDurationUs(draft: Draft): number {

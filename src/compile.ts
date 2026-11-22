@@ -14,7 +14,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { readSubtitleText, stripBom } from "./bom.js";
+import { readSubtitleCues, stripBom } from "./bom.js";
 import {
   addKeyframes,
   addTransition,
@@ -50,7 +50,6 @@ import {
 } from "./factory.js";
 import { planChangedMediaRegistration } from "./materials-register.js";
 import { type MediaProbe, probeMedia } from "./probe.js";
-import { parseSubtitles } from "./srt.js";
 import { assertActiveTimelineUnchanged, type DraftStoreOptions } from "./store.js";
 
 /**
@@ -1108,7 +1107,7 @@ function populateDraft(
           break;
         }
         case "captions": {
-          const cues = parseSubtitles(readSubtitleText(resolvePath(operation.path, specDir)));
+          const cues = readSubtitleCues(resolvePath(operation.path, specDir));
           if (cues.length === 0) throw new Error("captions file contains no cues");
           const offset = Math.round((operation.timeOffset ?? 0) * US);
           for (const cue of cues) {

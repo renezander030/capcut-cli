@@ -93,6 +93,45 @@ export function writeZip(sourceDir, archivePath, prefix) {
 // cmd.exe launchers: %~dp0 is the launcher's own folder, so the directory can move and may contain spaces
 const CMD_LAUNCHER = ["@echo off", "setlocal", '"%~dp0runtime\\node.exe" "%~dp0app\\dist\\index.js" %*', "exit /b %ERRORLEVEL%", ""].join("\r\n");
 
+// POSIX launchers resolve symlink chains to their own folder, so a link on PATH runs the bundled runtime
+const SH_LAUNCHER = [
+  "#!/bin/sh",
+  'script=$0',
+  'case "$script" in */*) ;; *) script=$(command -v "$script") || exit 1 ;; esac',
+  'while [ -L "$script" ]; do',
+  '  base=$(CDPATH= cd -P -- "${script%/*}" && pwd) || exit 1',
+  '  target=$(/usr/bin/readlink "$script") || exit 1',
+  '  case "$target" in /*) script=$target ;; *) script=$base/$target ;; esac',
+  'done',
+  'base=$(CDPATH= cd -P -- "${script%/*}" && pwd) || exit 1',
+  'exec "$base/runtime/node" "$base/app/dist/index.js" "$@"',
+  "",
+].join("\n");
+
+/** What differs per target once the runtime is checked: its file name, the launchers and the archive format. */
+function portableLayout(windows, tar) {
+  if (windows) {
+    return {
+      runtimeName: "node.exe",
+      extension: "zip",
+      writeLaunchers: (payload) => {
+        for (const command of ["capcut", "capcut-cli"]) writeFileSync(join(payload, `${command}.cmd`), CMD_LAUNCHER);
+      },
+      writeArchive: (scratch, name, staged) => writeZip(join(scratch, name), staged, name),
+    };
+  }
+  return {
+    runtimeName: "node",
+    extension: "tar.gz",
+    writeLaunchers: (payload) => {
+      chmodSync(join(payload, "runtime", "node"), 0o755);
+      for (const command of ["capcut", "capcut-cli"]) writeFileSync(join(payload, command), SH_LAUNCHER, { mode: 0o755 });
+    },
+    writeArchive: (scratch, name, staged) =>
+      run(tar, ["--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "-czf", staged, "-C", scratch, name]),
+  };
+}
+
 /**
  * Package the npm payload and a self-contained Node runtime; never downloads or publishes.
  * The Windows archive (win-x64) is built natively on Windows; `target: "win-x64"` with `nodeVersion` also builds it
@@ -136,7 +175,8 @@ export function buildPortable({ outDir, nodeRoot, root = sourceRoot, target = po
   const name = `capcut-cli-v${version}-${target}`;
   const output = resolve(outDir);
   mkdirSync(output, { recursive: true });
-  const archive = join(output, `${name}.${windows ? "zip" : "tar.gz"}`);
+  const layout = portableLayout(windows, tar);
+  const archive = join(output, `${name}.${layout.extension}`);
   const checksum = `${archive}.sha256`;
   if (existsSync(archive) || existsSync(checksum)) throw new Error("Portable output already exists; choose an empty output directory");
   const scratch = mkdtempSync(join(tmpdir(), "capcut-portable-"));
@@ -153,37 +193,15 @@ export function buildPortable({ outDir, nodeRoot, root = sourceRoot, target = po
     if (filename !== `capcut-cli-${version}.tgz`) throw new Error("Unexpected npm package identity");
     run(tar, ["-xzf", join(scratch, filename), "-C", app, "--strip-components=1"]);
     if (JSON.parse(readFileSync(join(app, "package.json"), "utf8")).version !== version) throw new Error("Packed version differs from the source");
-    const runtimeName = windows ? "node.exe" : "node";
-    copyFileSync(node, join(payload, "runtime", runtimeName));
-    if (!windows) chmodSync(join(payload, "runtime", runtimeName), 0o755);
+    copyFileSync(node, join(payload, "runtime", layout.runtimeName));
     copyFileSync(license, join(payload, "runtime", "LICENSE"));
-    if (windows) {
-      for (const command of ["capcut", "capcut-cli"]) writeFileSync(join(payload, `${command}.cmd`), CMD_LAUNCHER);
-    } else {
-      const launcher = [
-        "#!/bin/sh",
-        'script=$0',
-        'case "$script" in */*) ;; *) script=$(command -v "$script") || exit 1 ;; esac',
-        'while [ -L "$script" ]; do',
-        '  base=$(CDPATH= cd -P -- "${script%/*}" && pwd) || exit 1',
-        '  target=$(/usr/bin/readlink "$script") || exit 1',
-        '  case "$target" in /*) script=$target ;; *) script=$base/$target ;; esac',
-        'done',
-        'base=$(CDPATH= cd -P -- "${script%/*}" && pwd) || exit 1',
-        'exec "$base/runtime/node" "$base/app/dist/index.js" "$@"',
-        "",
-      ].join("\n");
-      for (const command of ["capcut", "capcut-cli"]) {
-        writeFileSync(join(payload, command), launcher, { mode: 0o755 });
-      }
-    }
+    layout.writeLaunchers(payload);
     writeFileSync(join(payload, "PORTABLE.json"), `${JSON.stringify({ version, target, node: runtime.version }, null, 2)}\n`);
-    const staged = join(scratch, windows ? "portable.zip" : "portable.tar.gz");
-    if (windows) writeZip(payload, staged, name);
-    else run(tar, ["--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "-czf", staged, "-C", scratch, name]);
+    const staged = join(scratch, `portable.${layout.extension}`);
+    layout.writeArchive(scratch, name, staged);
     const sha256 = createHash("sha256").update(readFileSync(staged)).digest("hex");
     const sum = join(scratch, "portable.sha256");
-    writeFileSync(sum, `${sha256}  ${name}.${windows ? "zip" : "tar.gz"}\n`);
+    writeFileSync(sum, `${sha256}  ${name}.${layout.extension}\n`);
     copyFileSync(staged, archive, constants.COPYFILE_EXCL);
     copyFileSync(sum, checksum, constants.COPYFILE_EXCL);
     return { archive, checksum, sha256, version, runtime: runtime.version, target };

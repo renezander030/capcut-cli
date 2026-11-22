@@ -13,6 +13,7 @@ import {
   probeRenderOutput,
   renderDraft,
 } from "../dist/render.js";
+import { writeFakeFfmpeg } from "./helpers/fake-ffmpeg.mjs";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 
 const US = 1_000_000;
@@ -233,54 +234,7 @@ describe("render output verification (pure)", () => {
 
 // A fake ffmpeg with every probed filter and libx264 that "renders" by
 // touching its last argument (the output path).
-function fakeFfmpeg(dir) {
-  const path = join(dir, "fake-ffmpeg");
-  const filters = [
-    "fps",
-    "scale",
-    "pad",
-    "setsar",
-    "format",
-    "trim",
-    "setpts",
-    "concat",
-    "atrim",
-    "asetpts",
-    "adelay",
-    "anull",
-    "amix",
-    "apad",
-    "atempo",
-    "volume",
-    "afade",
-    "drawtext",
-    "overlay",
-  ];
-  writeFileSync(
-    path,
-    [
-      "#!/bin/sh",
-      'case "$*" in',
-      "  *-filters*)",
-      "    cat <<'EOF'",
-      ...filters.map((name) => ` ... ${name.padEnd(18)} V->V       fake.`),
-      "EOF",
-      "    exit 0 ;;",
-      "  *-encoders*)",
-      "    cat <<'EOF'",
-      " V..... libx264              H.264",
-      " S..... mov_text             3GPP Timed Text subtitle",
-      "EOF",
-      "    exit 0 ;;",
-      "esac",
-      'for last; do :; done; : > "$last"',
-      "exit 0",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
+const fakeFfmpeg = (dir) => writeFakeFfmpeg(dir, { encoders: ["libx264", "mov_text"], writesOutput: true });
 
 // A fake ffprobe reporting the container duration given in FAKE_FFPROBE_DURATION (seconds).
 function fakeFfprobe(dir) {

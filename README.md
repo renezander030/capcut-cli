@@ -184,7 +184,7 @@ JSON by default (pipe to `jq`); add `-H` for a human-readable table. Pass `--jia
 | **Add** | `add-video` · `add-audio` · `add-text` (Wikimedia URLs supported, license-checked) |
 | **Edit / animate** | trim · speed · volume · transitions · masks · text/image animations · easing curves |
 | **Templates** | apply and extract reusable layouts · `make-preset` (portable text-style presets) |
-| **Subtitles & i18n** | `caption` · `import-srt` (SRT or WebVTT) · `export-srt` (line/word SRT + VTT) · `translate` (multi-language draft clone) |
+| **Subtitles & i18n** | `caption` · `import-srt` (SRT or WebVTT) · `export-srt` (line/word SRT + VTT) · `dub` (one TTS clip per cue) · `translate` (multi-language draft clone) |
 | **Effects** | `sfx` · `chroma` (chroma key) · `matting` (smart background removal) |
 | **Long-form → short** | `cut` · `detect-scenes` (ffmpeg scene-cut detection) · `detect-silence` · `detect-retakes` (repeated takes) |
 | **Automation** | `serve` (stateless JSONL runner) · `migrate` · `doctor` · `sync-timelines` (8.7 mirror repair) |

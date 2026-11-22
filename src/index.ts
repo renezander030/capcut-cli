@@ -13,7 +13,7 @@ import {
   trackAppVersion,
 } from "./app-versions.js";
 import type { AssEvent, AssStyleDef } from "./ass.js";
-import { parseJsonObject, readSubtitleText, stripBom } from "./bom.js";
+import { parseJsonObject, readSubtitleCues, readSubtitleText, stripBom } from "./bom.js";
 import {
   buildCommandSpecs,
   type CommandSpec,
@@ -2888,7 +2888,6 @@ async function cmdTts(draft: Draft, filePath: string, positional: string[], flag
 async function cmdDub(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
   const { collisionSafeOutPath, synthesizeSpeech, ttsTextWouldBeOption } = await import("./tts.js");
   const { cueSpeechText, planDubClips } = await import("./dub.js");
-  const { parseSubtitles } = await import("./srt.js");
   const { addAudio } = await import("./factory.js");
   const { probeMedia } = await import("./probe.js");
   const source = positional[2];
@@ -2902,7 +2901,7 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
   if (flags.noProbe) die("dub measures every clip with ffprobe to place it; --no-probe is not available here.");
   let cues: Array<{ index: number; startUs: number; endUs: number; text: string }>;
   try {
-    cues = parseSubtitles(readSubtitleText(source));
+    cues = readSubtitleCues(source);
   } catch (e) {
     die(`${source}: ${(e as Error).message}`);
   }
@@ -4022,11 +4021,9 @@ async function importCuesToDraft(
 }
 
 async function cmdImportSrt(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
-  const { parseSubtitles } = await import("./srt.js");
   const srtArg = positional[2];
   if (!srtArg) die(`Usage: capcut import-srt <project> <srt-or-vtt-path-or-->`);
-  const srtContent = readSubtitleText(srtArg === "-" ? 0 : srtArg);
-  const cues = parseSubtitles(srtContent);
+  const cues = readSubtitleCues(srtArg === "-" ? 0 : srtArg);
   if (cues.length === 0) die(`Subtitle file produced 0 cues`);
   await importCuesToDraft(draft, filePath, cues, flags, "srt");
 }
@@ -6253,17 +6250,8 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
 // `render` produces a low-res ffmpeg proxy preview of the timeline. Read-only:
 // it never mutates the draft. With --dry-run it returns the ffmpeg plan without
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
-function noteMissingFonts(fonts: string[] | undefined, flags: Flags): void {
-  if (flags.quiet) return;
-  for (const font of fonts ?? []) {
-    process.stderr.write(
-      `Note: font ${font} is missing or unusable here; its captions are drawn in ffmpeg's default face.\n`,
-    );
-  }
-}
-
 async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { PROXY_REASON_TEXT, assertFaithful, buildRenderPlan, renderDraft } = await import("./render.js");
+  const { assertFaithful, buildRenderPlan, renderDraft, renderOutcome } = await import("./render.js");
   if (flags.crf !== undefined && flags.videoBitrate !== undefined) {
     die("--crf and --video-bitrate are mutually exclusive.");
   }
@@ -6305,53 +6293,19 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     });
     if (opts.strict) assertFaithful(plan.fidelity);
     out({ ok: true, executed: false, ...plan }, flags);
-    noteMissingFonts(plan.fidelity.dropped.missing_fonts?.fonts, flags);
+    reportRenderOutcome(renderOutcome(plan), flags);
     return;
   }
   const result = renderDraft(draft, filePath, opts);
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
-  noteMissingFonts(result.fidelity.dropped.missing_fonts?.fonts, flags);
-  for (const source of result.audio_sources ?? []) {
-    if (source.streams !== null && source.streams > 1 && flags.audioTrack === undefined) {
-      process.stderr.write(
-        `Note: ${source.path} has ${source.streams} audio streams; stream 0 played (choose another with --audio-track <n>).\n`,
-      );
-    }
-  }
-  // The file stays on disk either way; the result above says why. A measured duration that misses the draft's fails.
-  // Where the proxy cannot play the draft's whole length (gaps closed, picture ending with the last main-track clip),
-  // the file is held to what it plays instead (a match is a note, short of it fails); --verify fails any drift, and
-  // also fails when the file could not be measured.
-  const check = result.verification;
-  const proxy = check?.proxy;
-  const why = proxy?.reasons.map((reason) => PROXY_REASON_TEXT[reason]).join(" and ");
-  if (proxy?.within_tolerance && !flags.verify) {
-    if (!flags.quiet) {
-      process.stderr.write(
-        `Note: output is ${check?.duration_us}us against the draft's ${check?.expected_duration_us}us because the proxy ` +
-          `${why}: it plays ${proxy.duration_us}us; --verify makes this an error.\n`,
-      );
-    }
-    return;
-  }
-  if (proxy?.within_tolerance === false && !flags.verify) {
-    die(
-      `render: output duration ${check?.duration_us}us is ${proxy.drift_us}us off the ${proxy.duration_us}us the proxy ` +
-        `plays (it ${why}${proxy.reasons.includes("main_track_gaps") ? ", so with gaps closed" : ""}), beyond the ` +
-        `one-frame tolerance of ${check?.tolerance_us}us. The file was kept at ${result.output}.`,
-    );
-  }
-  if (check && (flags.verify || (check.verified && !check.within_tolerance))) {
-    if (!check.verified) die(`render --verify: output could not be verified: ${check.reason}`);
-    if (!check.within_tolerance) {
-      die(
-        `render: output duration ${check.duration_us}us drifts ${check.drift_us}us from the draft's ` +
-          `${check.expected_duration_us}us, beyond the one-frame tolerance of ${check.tolerance_us}us. ` +
-          `The file was kept at ${result.output}; the result's \`fidelity\` lists what the proxy dropped (main_track_gaps shortens it).`,
-      );
-    }
-  }
+  // The file stays on disk either way; the result above says why, and renderOutcome holds the exit rules.
+  reportRenderOutcome(renderOutcome(result, { verify: flags.verify, audioTrack: flags.audioTrack }), flags);
+}
+
+function reportRenderOutcome(outcome: { notes: string[]; error?: string }, flags: Flags): void {
+  if (!flags.quiet) for (const note of outcome.notes) process.stderr.write(`${note}\n`);
+  if (outcome.error) die(outcome.error);
 }
 
 async function cmdDetectScenes(positional: string[], flags: Flags): Promise<void> {
@@ -6487,10 +6441,9 @@ async function cmdDetectRetakes(draft: Draft | null, flags: Flags): Promise<void
   let source: string;
   let durationUs: number | null = null;
   if (draft === null) {
-    const { parseSubtitles } = await import("./srt.js");
     const srtPath = flags.srt as string;
     if (!existsSync(srtPath)) die(`--srt file not found: ${srtPath}`);
-    cues = parseSubtitles(readSubtitleText(srtPath)).map((c) => ({
+    cues = readSubtitleCues(srtPath).map((c) => ({
       text: c.text,
       startUs: c.startUs,
       endUs: c.endUs,

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { parseSubtitles, type SrtCue } from "./srt.js";
 
 /**
  * Lenient text reads: strip a leading UTF-8 BOM (U+FEFF). Windows PowerShell's
@@ -47,4 +48,9 @@ export function readSubtitleText(path: string | number): string {
     const source = typeof path === "number" ? "stdin" : path;
     throw new Error(`Subtitle input is not valid UTF-8: ${source}. Convert the file to UTF-8 before importing it.`);
   }
+}
+
+/** SRT or WebVTT cues from a file or stdin (fd 0), read strictly as UTF-8: the one way commands get subtitle cues. */
+export function readSubtitleCues(path: string | number): SrtCue[] {
+  return parseSubtitles(readSubtitleText(path));
 }
