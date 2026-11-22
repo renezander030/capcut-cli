@@ -10,6 +10,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 
 ### Fixed
 - Portable launchers resolve absolute and relative symbolic links, including chains, so links on PATH use the bundled runtime while preserving relative command arguments.
+- A save whose final rename fails (for example a file held open by the editor on Windows) now removes its temporary file instead of leaving it beside the draft.
 
 ## [0.35.0] - 2026-11-19
 

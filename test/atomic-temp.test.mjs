@@ -130,3 +130,24 @@ describe("atomic state-file write: parent folder, private mode, no planted temp"
     assert.equal(readFileSync(target, "utf-8"), "tracked");
   });
 });
+
+describe("atomic write: a failed rename leaves no scratch file", () => {
+  const dirs = [];
+  after(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("removes its own temp and rethrows when the target cannot be replaced", () => {
+    for (const write of [writeAtomic, writeFileAtomic]) {
+      const dir = mkdtempSync(join(tmpdir(), "capcut-atomic-fail-"));
+      dirs.push(dir);
+      // A non-empty directory where the file should go: rename(2) refuses it on every platform.
+      const target = join(dir, "draft_content.json");
+      mkdirSync(target);
+      writeFileSync(join(target, "keep.txt"), "kept");
+      assert.throws(() => write(target, "{}"));
+      assert.deepEqual(readdirSync(dir), ["draft_content.json"]);
+      assert.equal(readFileSync(join(target, "keep.txt"), "utf-8"), "kept");
+    }
+  });
+});

@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { appVersionEvidence, formatAppVersionDriftWarning, trackAppVersion } from "./app-versions.js";
-import { writeTemp } from "./atomic-write.js";
+import { replaceAtomic, writeTemp } from "./atomic-write.js";
 import { stripBom } from "./bom.js";
 import { journalDigest } from "./journal-digest.js";
 import {
@@ -674,7 +674,7 @@ export function saveDraft(
 // Exported for factory.ts (register): the same temp+fsync+rename write the
 // draft save path uses, for metadata files outside commitDraftTargets.
 export function writeAtomic(path: string, content: string): void {
-  renameSync(writeTemp(path, content), path);
+  replaceAtomic(path, content);
 }
 
 export function extractText(content: string): string {

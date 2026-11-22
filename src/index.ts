@@ -2333,11 +2333,11 @@ interface ImportApplyResult {
 async function applyImportPlan(draft: Draft, filePath: string, plan: ImportPlan): Promise<ImportApplyResult> {
   const { addAudio, addText, addVideo } = await import("./factory.js");
   const result: ImportApplyResult = { tracks: 0, clips: 0, captions: 0, placeholders: [] };
-  const claimed = new Set(draft.tracks.map((t) => `${t.type} ${t.name}`));
+  const claimed = new Set(draft.tracks.map((t) => `${t.type}\u0000${t.name}`));
   const claimTrack = (kind: string, base: string): string => {
     let name = base;
-    for (let n = 2; claimed.has(`${kind} ${name}`); n++) name = `${base} (${n})`;
-    claimed.add(`${kind} ${name}`);
+    for (let n = 2; claimed.has(`${kind}\u0000${name}`); n++) name = `${base} (${n})`;
+    claimed.add(`${kind}\u0000${name}`);
     return name;
   };
   for (const track of plan.tracks) {
