@@ -2,6 +2,16 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-11-20
+
+### Added
+- Portable Linux arm64 downloads with a bundled Node runtime, license and SHA-256 checksum.
+- Native arm64 archive checks before release publication, including both launchers, relocated paths and bundled-template compilation. Mismatched runtime architectures are rejected before an archive is created.
+
+### Fixed
+- Portable launchers resolve absolute and relative symbolic links, including chains, so links on PATH use the bundled runtime while preserving relative command arguments.
+- A save whose final rename fails (for example a file held open by the editor on Windows) now removes its temporary file instead of leaving it beside the draft.
+
 ## [0.35.0] - 2026-11-19
 
 ### Added

@@ -13,11 +13,12 @@ permissions:
   contents: read
 
 jobs:
-  portable-macos:
+  portable-native:
     strategy:
       fail-fast: false
       matrix:
         include:
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
           - { os: macos-15, target: darwin-arm64 }
           - { os: macos-15-intel, target: darwin-x64 }
     runs-on: ${{ matrix.os }}
@@ -27,18 +28,20 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: brew list --versions gnu-tar || brew install gnu-tar
+      - if: runner.os == 'macOS'
+        run: brew list --versions gnu-tar || brew install gnu-tar
       - run: npm ci
       - run: npm run build
       - name: Verify the native portable CLI and bundled templates
         env:
           CAPCUT_PORTABLE_REQUIRED: '1'
+          CAPCUT_PORTABLE_EXPECT_TARGET: ${{ matrix.target }}
           XDG_CONFIG_HOME: ${{ runner.temp }}/portable-config
           CAPCUT_CLI_APP_VERSIONS: ${{ runner.temp }}/portable-config/versions.json
         run: node --test test/portable.test.mjs
       - name: Build the release archive
         run: npm run pack:portable -- --out "$RUNNER_TEMP/portable"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: portable-${{ matrix.target }}
           path: |
@@ -47,7 +50,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: portable-macos
+    needs: portable-native
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the GitHub Release
@@ -87,9 +90,9 @@ jobs:
           env PATH= ./capcut-cli-v*-linux-x64/capcut --version
           env PATH= ./capcut-cli-v*-linux-x64/capcut describe --compact
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: portable-darwin-*
+          pattern: portable-*
           path: ${{ runner.temp }}/portable
           merge-multiple: true
       - name: Verify all release archive checksums

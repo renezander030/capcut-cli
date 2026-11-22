@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 
 function writeAndSync(path: string, content: string): void {
@@ -41,11 +41,27 @@ export function writeTemp(target: string, content: string): string {
 }
 
 /**
+ * Atomically replace (or create) `path`: temp+fsync+rename. A rename that fails
+ * (a target held open on Windows, a directory in the way) removes its own temp
+ * file and rethrows, as the multi-file draft commit does, so no scratch file is
+ * left beside the draft.
+ */
+export function replaceAtomic(path: string, content: string): void {
+  const temp = writeTemp(path, content);
+  try {
+    renameSync(temp, path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
+}
+
+/**
  * Atomically replace (or create) a small state file outside a draft: the user
  * enums catalogue and the app-version tracker. Same temp+fsync+rename as a
  * draft save, plus the parent directory created on demand.
  */
 export function writeFileAtomic(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
-  renameSync(writeTemp(path, content), path);
+  replaceAtomic(path, content);
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -27,6 +27,13 @@ try {
   };
   assert.equal(invoke(["--version"]).stdout.trim(), expectedVersion);
   assert.equal(load(join(packageRoot, "package.json")).version, expectedVersion);
+  // Users run the installed bin entries, not dist/index.js: both names must resolve and start.
+  for (const name of ["capcut", "capcut-cli"]) {
+    const shim = join(root, "node_modules", ".bin", process.platform === "win32" ? `${name}.cmd` : name);
+    const r = spawnSync(shim, ["--version"], { encoding: "utf8", shell: process.platform === "win32" });
+    assert.equal(r.status, 0, `${name}: ${r.stderr}`);
+    assert.equal(r.stdout.trim(), expectedVersion);
+  }
   const lib = await import(pathToFileURL(join(packageRoot, "dist", "lib.js")));
   assert.equal(typeof lib.loadDraft, "function");
   assert.ok(existsSync(join(packageRoot, "docs", "command-reference.json")));
@@ -113,7 +120,6 @@ try {
   assert.equal(existsSync(invalidOut), false);
 
   const replacementDir = join(root, "new-media");
-  const { mkdirSync } = await import("node:fs");
   mkdirSync(replacementDir);
   const newClip = join(replacementDir, "clip.wav");
   const newBytes = Buffer.from(wav);

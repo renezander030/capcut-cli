@@ -9,22 +9,28 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { buildPortable } from "../scripts/build-portable.mjs";
 
 const runtimeRoot = process.env.CAPCUT_PORTABLE_NODE_ROOT || resolve(dirname(process.execPath), "..");
 const target = `${process.platform}-${process.arch}`;
 if (process.env.CAPCUT_PORTABLE_REQUIRED === "1") {
-  assert.ok(["linux-x64", "darwin-x64", "darwin-arm64"].includes(target), `Unsupported portable target: ${target}`);
+  assert.ok(
+    ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target),
+    `Unsupported portable target: ${target}`,
+  );
   assert.ok(existsSync(join(runtimeRoot, "LICENSE")), "A complete official Node distribution is required");
+  if (process.env.CAPCUT_PORTABLE_EXPECT_TARGET) assert.equal(target, process.env.CAPCUT_PORTABLE_EXPECT_TARGET);
 }
 describe("portable distribution", {
   skip:
-    !["linux-x64", "darwin-x64", "darwin-arm64"].includes(target) || !existsSync(join(runtimeRoot, "LICENSE"))
+    !["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target) ||
+    !existsSync(join(runtimeRoot, "LICENSE"))
       ? "Requires a supported host and a complete official Node distribution (CAPCUT_PORTABLE_NODE_ROOT)"
       : false,
 }, () => {
@@ -79,6 +85,50 @@ describe("portable distribution", {
     extracted = moved;
     assert.equal(invoke("capcut", ["--version"]).trim(), receipt.version);
   });
+  it("runs through absolute and relative symlink chains without Node on PATH", () => {
+    const bin = join(root, "linked commands");
+    mkdirSync(bin);
+    for (const command of ["capcut", "capcut-cli"]) {
+      const intermediate = join(bin, `${command}-target`);
+      symlinkSync(join(extracted, command), intermediate);
+      symlinkSync(relative(bin, intermediate), join(bin, command));
+      const result = spawnSync(command, ["--version"], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, PATH: bin, NODE_OPTIONS: "" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), receipt.version);
+    }
+  });
+  it("preserves relative arguments and the working directory through a linked launcher", () => {
+    const link = join(root, "linked-cli");
+    symlinkSync(relative(root, join(extracted, "capcut")), link);
+    writeFileSync(
+      join(root, "linked input.json"),
+      JSON.stringify({
+        name: "Linked example",
+        tracks: [{ type: "text", items: [{ text: "Linked output", start: 0, duration: 2 }] }],
+      }),
+    );
+    const result = spawnSync(
+      link,
+      ["compile", "linked input.json", "--out", "linked output", "--template", "bundled"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: "",
+          NODE_OPTIONS: "",
+          XDG_CONFIG_HOME: join(root, "config"),
+          CAPCUT_CLI_APP_VERSIONS: join(root, "config", "versions.json"),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(readFileSync(join(root, "linked output", "draft_content.json"), "utf8"), /Linked output/);
+  });
   it("includes the runtime license and a checksum matching the actual archive", () => {
     assert.ok(readFileSync(join(extracted, "runtime", "LICENSE"), "utf8").includes("Copyright"));
     assert.equal(createHash("sha256").update(readFileSync(receipt.archive)).digest("hex"), receipt.sha256);
@@ -108,6 +158,20 @@ describe("portable distribution", {
     chmodSync(join(wrong, "bin", "node"), 0o755);
     assert.throws(() => buildPortable({ outDir: join(root, "wrong-output"), nodeRoot: wrong }), /runtime must be/);
     assert.equal(existsSync(join(root, "wrong-output")), false);
+  });
+  it("rejects a runtime for another architecture on the same platform", () => {
+    const wrong = join(root, "wrong-architecture");
+    mkdirSync(join(wrong, "bin"), { recursive: true });
+    writeFileSync(join(wrong, "LICENSE"), "Example runtime");
+    const metadata = JSON.stringify({
+      version: "22.0.0",
+      platform: process.platform,
+      arch: process.arch === "arm64" ? "x64" : "arm64",
+    });
+    writeFileSync(join(wrong, "bin", "node"), `#!/bin/sh\nprintf '%s\\n' '${metadata}'\n`);
+    chmodSync(join(wrong, "bin", "node"), 0o755);
+    assert.throws(() => buildPortable({ outDir: join(root, "wrong-arch-output"), nodeRoot: wrong }), /runtime must be/);
+    assert.equal(existsSync(join(root, "wrong-arch-output")), false);
   });
   it("rejects an incomplete runtime before producing an archive", () => {
     const missing = join(root, "incomplete");

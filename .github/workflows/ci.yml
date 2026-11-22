@@ -118,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     name: platform smoke (${{ matrix.os }})
     steps:
@@ -132,8 +132,8 @@ jobs:
         if: runner.os == 'macOS'
         run: brew list --versions gnu-tar || brew install gnu-tar
       - run: npm test
-      - name: Require native portable checks on macOS
-        if: runner.os == 'macOS'
+      - name: Require native portable checks on Linux and macOS
+        if: runner.os != 'Windows'
         env:
           CAPCUT_PORTABLE_REQUIRED: '1'
         run: node --test test/portable.test.mjs
