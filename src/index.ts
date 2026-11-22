@@ -6251,6 +6251,15 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
 // `render` produces a low-res ffmpeg proxy preview of the timeline. Read-only:
 // it never mutates the draft. With --dry-run it returns the ffmpeg plan without
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
+function noteMissingFonts(fonts: string[] | undefined, flags: Flags): void {
+  if (flags.quiet) return;
+  for (const font of fonts ?? []) {
+    process.stderr.write(
+      `Note: font ${font} is missing or unusable here; its captions are drawn in ffmpeg's default face.\n`,
+    );
+  }
+}
+
 async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
   const { PROXY_REASON_TEXT, assertFaithful, buildRenderPlan, renderDraft } = await import("./render.js");
   if (flags.crf !== undefined && flags.videoBitrate !== undefined) {
@@ -6294,11 +6303,13 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     });
     if (opts.strict) assertFaithful(plan.fidelity);
     out({ ok: true, executed: false, ...plan }, flags);
+    noteMissingFonts(plan.fidelity.dropped.missing_fonts?.fonts, flags);
     return;
   }
   const result = renderDraft(draft, filePath, opts);
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
+  noteMissingFonts(result.fidelity.dropped.missing_fonts?.fonts, flags);
   for (const source of result.audio_sources ?? []) {
     if (source.streams !== null && source.streams > 1 && flags.audioTrack === undefined) {
       process.stderr.write(

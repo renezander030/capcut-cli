@@ -433,11 +433,13 @@ interface TextOverlay {
   y: number;
   /** The draft's font file, already escaped for drawtext's fontfile option; undefined = ffmpeg's default face. */
   fontFile?: string;
+  /** The font file the draft names when none of them can be used here; undefined when one resolved or none is named. */
+  missingFont?: string;
 }
 
 function textSegments(draft: Draft): TextOverlay[] {
   const out: TextOverlay[] = [];
-  const fonts = new Map<string, string | undefined>();
+  const fonts = new Map<string, { file?: string; missing?: string }>();
   for (const t of draft.tracks) {
     if (t.type !== "text") continue;
     for (const s of t.segments) {
@@ -445,14 +447,15 @@ function textSegments(draft: Draft): TextOverlay[] {
       const raw = typeof mat?.content === "string" ? extractText(mat.content) : "";
       if (raw) {
         const material = mat as unknown as Record<string, unknown>;
-        if (!fonts.has(s.material_id)) fonts.set(s.material_id, draftFontFile(material));
+        if (!fonts.has(s.material_id)) fonts.set(s.material_id, draftFont(material));
         out.push({
           seg: s,
           text: raw,
           color: safeColor(material.text_color),
           fontSize: Number(material.font_size ?? 15),
           y: s.clip?.transform.y ?? -0.6,
-          fontFile: fonts.get(s.material_id),
+          fontFile: fonts.get(s.material_id)?.file,
+          missingFont: fonts.get(s.material_id)?.missing,
         });
       }
     }
@@ -469,7 +472,7 @@ const FONT_FILE_EXTENSIONS = new Set([".ttf", ".otf", ".ttc"]);
  * material's own `font_path`. Only an existing .ttf/.otf/.ttc file whose path
  * can be written into the filter graph is used.
  */
-function draftFontFile(material: Record<string, unknown>): string | undefined {
+function draftFont(material: Record<string, unknown>): { file?: string; missing?: string } {
   const candidates: unknown[] = [];
   if (typeof material.content === "string") {
     try {
@@ -485,12 +488,14 @@ function draftFontFile(material: Record<string, unknown>): string | undefined {
     const escaped = escapeFilterPath(path);
     if (escaped === undefined) continue;
     try {
-      if (statSync(path).isFile()) return escaped;
+      if (statSync(path).isFile()) return { file: escaped };
     } catch {
       /* missing or unreadable: try the next candidate */
     }
   }
-  return undefined;
+  // A font was named and none could be used: the caption falls back to ffmpeg's default face.
+  const named = candidates.find((path): path is string => typeof path === "string" && path.trim() !== "");
+  return named === undefined ? {} : { missing: named };
 }
 
 /**
@@ -509,6 +514,7 @@ export const FIDELITY_CATEGORIES = [
   "main_track_gaps",
   "overlay_tracks",
   "text",
+  "missing_fonts",
   "stickers",
   "transitions",
   "effects",
@@ -532,6 +538,8 @@ const FIDELITY_HINTS: Record<FidelityCategory, string> = {
   main_track_gaps: "the proxy concatenates main-track segments, so timeline gaps close up and later clips play early",
   overlay_tracks: "extra video tracks are not composited; pass --all-video-tracks",
   text: "text is not drawn on the picture; pass --burn-captions (--soft-captions only adds a subtitle stream)",
+  missing_fonts:
+    "a caption's draft font file is missing or unusable here, so it is drawn in ffmpeg's default face; install the font or point the draft at its file",
   stickers: "sticker tracks are not rendered",
   transitions: "transitions are not rendered; segments cut hard",
   effects: "video effects are not rendered",
@@ -549,6 +557,8 @@ export interface FidelityEntry {
   count: number;
   segment_ids: string[];
   hint: string;
+  /** missing_fonts only: each font file the draft names that could not be used, once. */
+  fonts?: string[];
 }
 
 export interface FidelityCensus {
@@ -650,6 +660,14 @@ export function fidelityCensus(
     }
   }
   if (!opts.burnCaptions) for (const { seg } of textSegments(draft)) add("text", seg.id);
+  const missingFonts: string[] = [];
+  if (opts.burnCaptions) {
+    for (const { seg, missingFont } of textSegments(draft)) {
+      if (missingFont === undefined) continue;
+      add("missing_fonts", seg.id);
+      if (!missingFonts.includes(missingFont)) missingFonts.push(missingFont);
+    }
+  }
 
   const dropped: Partial<Record<FidelityCategory, FidelityEntry>> = {};
   for (const category of FIDELITY_CATEGORIES) {
@@ -659,6 +677,7 @@ export function fidelityCensus(
       count: ids.length,
       segment_ids: ids.slice(0, FIDELITY_ID_CAP),
       hint: FIDELITY_HINTS[category],
+      ...(category === "missing_fonts" ? { fonts: missingFonts } : {}),
     };
   }
   return {
