@@ -6301,7 +6301,7 @@ async function cmdDetectRetakes(draft: Draft | null, flags: Flags): Promise<void
     const { parseSrt } = await import("./srt.js");
     const srtPath = flags.srt as string;
     if (!existsSync(srtPath)) die(`--srt file not found: ${srtPath}`);
-    cues = parseSrt(stripBom(readFileSync(srtPath, "utf-8"))).map((c) => ({
+    cues = parseSrt(readSubtitleText(srtPath)).map((c) => ({
       text: c.text,
       startUs: c.startUs,
       endUs: c.endUs,

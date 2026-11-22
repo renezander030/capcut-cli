@@ -8,6 +8,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 - CapCut 9.5.0 is recorded as supported on a reported round trip, and 9.8.0 as untested with its report that a compiled draft opens (no round trip yet), each with its evidence link, and `capcut version` names the write-only route for JianYing 11.x drafts ([#50](https://github.com/renezander030/capcut-cli/issues/50), [#178](https://github.com/renezander030/capcut-cli/pull/178), [easy-jianying#1](https://github.com/YeJe-cpu/easy-jianying/issues/1)).
 
 ### Fixed
+- `quickstart --srt` and `detect-retakes --srt` refuse a subtitle file that is not valid UTF-8, as `import-srt` does, instead of writing replacement characters into captions ([subtitleedit#16978](https://github.com/SubtitleEdit/subtitleedit/issues/16978)).
 
 ## [0.36.0] - 2026-11-20
 
