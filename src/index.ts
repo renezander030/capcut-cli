@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,7 @@ export const COMMANDS = [
   "add-video",
   "add-text",
   "tts",
+  "dub",
   "crop",
   "cut",
   "duplicate",
@@ -426,6 +427,17 @@ Add:
                                   text only (longest match, word boundaries)
                --volume <n>       Volume 0.0-1.0 (default: 1.0)
                --track-name <s>   Track name (default: "audio")
+
+  dub        <project> <subtitles.srt|.vtt> --tts-cmd <template>
+             Dub a subtitle track: one clip per cue, synthesized with the
+             same --tts-cmd template as tts (once per cue, markup removed),
+             placed at the cue's start for the length ffprobe measures. A
+             clip that runs into the next cue or into a segment already on
+             the track is refused and nothing is written. Options:
+               --trim-overlap     Cut such a clip where the next one starts
+               --lexicon <file>   Pronunciation rules, as for tts
+               --volume <n>       Volume 0.0-1.0 (default: 1.0)
+               --track-name <s>   Track name (default: "dub")
 
 Edit:
   set-text   <project> <id> <text>              Change text content
@@ -1125,6 +1137,7 @@ interface Flags {
   keywordSize?: number;
   colorCycle?: string;
   noProbe?: boolean;
+  trimOverlap?: boolean;
   ffprobeCmd?: string;
   // tts
   text?: string;
@@ -1320,6 +1333,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--fix", "fix"],
   ["--karaoke", "karaoke"],
   ["--no-probe", "noProbe"],
+  ["--trim-overlap", "trimOverlap"],
   ["--no-coverage", "noCoverage"],
   ["--no-cache", "noCache"],
   ["--retime", "retime"],
@@ -2859,6 +2873,122 @@ async function cmdTts(draft: Draft, filePath: string, positional: string[], flag
     },
     flags,
   );
+}
+
+async function cmdDub(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
+  const { collisionSafeOutPath, synthesizeSpeech, ttsTextWouldBeOption } = await import("./tts.js");
+  const { cueSpeechText, parseCueFile, planDubClips } = await import("./dub.js");
+  const { addAudio } = await import("./factory.js");
+  const { probeMedia } = await import("./probe.js");
+  const source = positional[2];
+  if (!existsSync(source)) die(`Subtitle file not found: ${source}`);
+  if (!flags.ttsCmd) {
+    die(
+      "Missing --tts-cmd <template>. dub runs a local TTS tool you provide once per cue (without a shell): {out} is " +
+        "the .wav path the tool must write; {text} the cue's text as one argument, or the text is piped to stdin.",
+    );
+  }
+  if (flags.noProbe) die("dub measures every clip with ffprobe to place it; --no-probe is not available here.");
+  let cues: Array<{ index: number; startUs: number; endUs: number; text: string }>;
+  try {
+    cues = parseCueFile(readSubtitleText(source));
+  } catch (e) {
+    die(`${source}: ${(e as Error).message}`);
+  }
+  if (cues.length === 0) die(`${source} has no cues to dub.`);
+  let rules: unknown[] | undefined;
+  const lexiconMod = flags.lexicon !== undefined ? await import("./lexicon.js") : undefined;
+  if (lexiconMod && flags.lexicon !== undefined) {
+    if (!existsSync(flags.lexicon)) die(`refused [lexicon-invalid]: lexicon file not found: ${flags.lexicon}`);
+    try {
+      rules = lexiconMod.parseLexicon(JSON.parse(stripBom(readFileSync(flags.lexicon, "utf-8"))));
+    } catch (e) {
+      die(`refused [lexicon-invalid]: ${flags.lexicon}: ${(e as Error).message}`);
+    }
+  }
+  const trackName = flags.trackName ?? "dub";
+  const assetsDir = path.resolve(draftProjectDir(filePath), "assets", "audio");
+  const made: string[] = [];
+  const spoken: Array<{ cue: number; startUs: number; speechUs: number; path: string; text: string }> = [];
+  const skipped: number[] = [];
+  // What each cue says, decided before any TTS run: a cue whose text would reach the tool as an option is refused
+  // here, so subtitles (untrusted text) never change how the tool runs, and nothing is written.
+  const todo: Array<{ cue: (typeof cues)[number]; text: string }> = [];
+  for (const cue of cues) {
+    let text = cueSpeechText(cue.text);
+    if (lexiconMod && rules) text = lexiconMod.applyLexicon(text, rules as never).spoken_text.trim();
+    if (!text) {
+      skipped.push(cue.index);
+      continue;
+    }
+    if (ttsTextWouldBeOption(flags.ttsCmd, text)) {
+      die(
+        `refused [dub-text-option]: cue ${cue.index}'s text starts with "-", and --tts-cmd passes {text} as its own ` +
+          "argument, so the TTS tool would read it as an option. Use a --tts-cmd without {text} (the text then goes to " +
+          "the tool's stdin) or change the cue. Nothing was written.",
+      );
+    }
+    todo.push({ cue, text });
+  }
+  try {
+    for (const { cue, text } of todo) {
+      const outPath = collisionSafeOutPath(assetsDir, `dub-${String(cue.index).padStart(3, "0")}`);
+      made.push(outPath);
+      synthesizeSpeech(text, flags.ttsCmd, outPath);
+      const media = probeMedia(outPath, flags.ffprobeCmd);
+      if (!media?.durationUs || media.durationUs <= 0) {
+        throw new Error(
+          `the clip for cue ${cue.index} has no duration ffprobe can read (${outPath}); install ffprobe.`,
+        );
+      }
+      spoken.push({ cue: cue.index, startUs: cue.startUs, speechUs: media.durationUs, path: outPath, text });
+    }
+  } catch (e) {
+    for (const file of made) rmSync(file, { force: true });
+    die(`dub: ${(e as Error).message} Nothing was written.`);
+  }
+  if (spoken.length === 0) die(`${source}: no cue has text to speak.`);
+  const track = draft.tracks.find((t) => t.type === "audio" && t.name === trackName);
+  const occupied = (track?.segments ?? []).map((s) => ({
+    startUs: s.target_timerange.start,
+    endUs: s.target_timerange.start + s.target_timerange.duration,
+  }));
+  const plan = planDubClips(spoken, occupied, flags.trimOverlap === true);
+  if (plan.refusals.length) {
+    for (const file of made) rmSync(file, { force: true });
+    die(
+      `refused [dub-overlap]: ${plan.refusals.join("; ")}. Shorten those cues' text or pass --trim-overlap. Nothing was written.`,
+    );
+  }
+  // Placing the clips or saving the draft can still refuse (the write guard, for one): the clips go with it.
+  let clips: Array<Record<string, unknown>>;
+  try {
+    clips = plan.clips.map((clip) => {
+      const source = spoken.find((s) => s.cue === clip.cue && s.startUs === clip.startUs) as (typeof spoken)[number];
+      const result = addAudio(draft, filePath, {
+        path: source.path,
+        start: clip.startUs,
+        duration: clip.durationUs,
+        volume: flags.volume,
+        trackName,
+      });
+      return {
+        cue: clip.cue,
+        segment_id: result.segmentId,
+        path: source.path,
+        start_us: clip.startUs,
+        duration_us: clip.durationUs,
+        speech_us: clip.speechUs,
+        trimmed: clip.trimmed,
+        text: source.text,
+      };
+    });
+    saveDraft(filePath, draft);
+  } catch (e) {
+    for (const file of made) rmSync(file, { force: true });
+    throw e;
+  }
+  out({ ok: true, source, track_name: trackName, cues: cues.length, clips, skipped_cues: skipped }, flags);
 }
 
 async function cmdAddVideo(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
@@ -5507,6 +5637,7 @@ const SUMMARIES: Record<string, string> = {
   material: "Full detail for one material.",
   "add-audio": "Add a local or Wikimedia audio file on an audio track.",
   tts: "Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment.",
+  dub: "Dub a subtitle track: one clip per SRT or WebVTT cue via a local TTS command (--tts-cmd), each at its cue start.",
   "add-video": "Add a local or Wikimedia video/image on a video track.",
   "add-text": "Add a text segment with font/color/position options.",
   crop: "Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset).",
@@ -6830,6 +6961,10 @@ async function main(): Promise<void> {
       break;
     case "tts":
       await cmdTts(draft, filePath, positional, flags);
+      break;
+    case "dub":
+      requireArgs(positional, 3, "capcut dub <project> <subtitles.srt|.vtt> --tts-cmd <template>");
+      await cmdDub(draft, filePath, positional, flags);
       break;
     case "crop":
       requireArgs(positional, 3, "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]");

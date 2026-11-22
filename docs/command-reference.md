@@ -28,6 +28,7 @@
 | `add-video` | `capcut add-video <project> <file-or-url> <start> [duration] [options]` | yes | Add a local or Wikimedia video/image on a video track. |
 | `add-text` | `capcut add-text <project> <start> <duration> <text> [options]` | yes | Add a text segment with font/color/position options. |
 | `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]` | yes | Synthesize a voiceover from text via a local TTS command (--tts-cmd) and add it as an audio segment. |
+| `dub` | `capcut dub <project> <subtitles.srt\|.vtt> --tts-cmd <template> [--lexicon <file>] [--trim-overlap] [options]` | yes | Dub a subtitle track: one clip per SRT or WebVTT cue via a local TTS command (--tts-cmd), each at its cue start. |
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | yes | Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset). |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | yes | Extract a time range into a new standalone draft. |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | yes | Duplicate a segment at its same timeline position onto a track above the source. |

@@ -7,6 +7,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 ### Added
 - CapCut 9.5.0 is recorded as supported on a reported round trip, and 9.8.0 as untested with its report that a compiled draft opens (no round trip yet), each with its evidence link, and `capcut version` names the write-only route for JianYing 11.x drafts ([#50](https://github.com/renezander030/capcut-cli/issues/50), [#178](https://github.com/renezander030/capcut-cli/pull/178), [easy-jianying#1](https://github.com/YeJe-cpu/easy-jianying/issues/1)).
 - Portable Windows x64 download: `capcut-cli-v<version>-win-x64.zip` bundles the official Node runtime with `capcut.cmd` and `capcut-cli.cmd` launchers and a `.sha256` file; every release builds and runs it on a Windows runner before publishing ([rea-capcut#12](https://github.com/Xiangyu-CAS/rea-capcut/issues/12)).
+- `dub` turns a subtitle track into speech: one clip per SRT or WebVTT cue from your local TTS command, each placed at its cue's start; speech that would run into the next cue is refused, or cut there with `--trim-overlap` ([Concat#770](https://github.com/jub0t/Concat/issues/770)).
 
 ### Fixed
 - `quickstart --srt` and `detect-retakes --srt` refuse a subtitle file that is not valid UTF-8, as `import-srt` does, instead of writing replacement characters into captions ([subtitleedit#16978](https://github.com/SubtitleEdit/subtitleedit/issues/16978)).

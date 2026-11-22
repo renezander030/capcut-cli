@@ -1559,6 +1559,103 @@
       }
     },
     {
+      "name": "dub",
+      "summary": "Dub a subtitle track: one clip per SRT or WebVTT cue via a local TTS command (--tts-cmd), each at its cue start.",
+      "usage": "capcut dub <project> <subtitles.srt|.vtt> --tts-cmd <template> [--lexicon <file>] [--trim-overlap] [options]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "file",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "tts_cmd",
+          "flags": [
+            "--tts-cmd"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "TTS command template, run once per cue without a shell: {out} (required) is replaced with the .wav path the tool must write, {text} with the cue's text as one argument; without {text} the text is piped to stdin."
+        },
+        {
+          "name": "lexicon",
+          "flags": [
+            "--lexicon"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Pronunciation lexicon JSON applied to each cue's spoken text, as in tts."
+        },
+        {
+          "name": "trim_overlap",
+          "flags": [
+            "--trim-overlap"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Cut a clip whose speech runs into the next cue or into a segment already on the track at that point; without it such a run is refused and nothing is written."
+        },
+        {
+          "name": "volume",
+          "flags": [
+            "--volume"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Audio volume.",
+          "default": 1
+        },
+        {
+          "name": "track_name",
+          "flags": [
+            "--track-name"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Audio track for the clips.",
+          "default": "dub"
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary."
+        },
+        {
+          "name": "active_timeline",
+          "flags": [
+            "--active-timeline"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Explicitly follow the validated Timelines/project.json pointer on an unverified app build. Invalid, deleted or conflicting selected timelines are refused; write guards remain in force."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [
+        "ffprobe",
+        "a local TTS CLI via --tts-cmd"
+      ],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
       "name": "crop",
       "summary": "Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset).",
       "usage": "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
@@ -5590,6 +5687,7 @@
             "material",
             "add-audio",
             "tts",
+            "dub",
             "add-video",
             "add-text",
             "crop",
