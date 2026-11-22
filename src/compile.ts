@@ -50,7 +50,7 @@ import {
 } from "./factory.js";
 import { planChangedMediaRegistration } from "./materials-register.js";
 import { type MediaProbe, probeMedia } from "./probe.js";
-import { parseSrt } from "./srt.js";
+import { parseSubtitles } from "./srt.js";
 import { assertActiveTimelineUnchanged, type DraftStoreOptions } from "./store.js";
 
 /**
@@ -1108,7 +1108,7 @@ function populateDraft(
           break;
         }
         case "captions": {
-          const cues = parseSrt(readSubtitleText(resolvePath(operation.path, specDir)));
+          const cues = parseSubtitles(readSubtitleText(resolvePath(operation.path, specDir)));
           if (cues.length === 0) throw new Error("captions file contains no cues");
           const offset = Math.round((operation.timeOffset ?? 0) * US);
           for (const cue of cues) {

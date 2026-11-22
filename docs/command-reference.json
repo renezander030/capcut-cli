@@ -3791,7 +3791,7 @@
     {
       "name": "import-srt",
       "summary": "Import an SRT file/stdin as one text segment per cue.",
-      "usage": "capcut import-srt <project> <srt-or-> [options]",
+      "usage": "capcut import-srt <project> <srt-or-vtt-or-> [options]",
       "positionals": [
         {
           "name": "project",
@@ -3799,7 +3799,7 @@
           "required": true
         },
         {
-          "name": "srt-or-",
+          "name": "srt-or-vtt-or-",
           "type": "path",
           "required": true
         }

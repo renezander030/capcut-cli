@@ -3,7 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { cueSpeechText, parseCueFile, planDubClips } from "../dist/dub.js";
+import { cueSpeechText, planDubClips } from "../dist/dub.js";
+import { parseSubtitles } from "../dist/srt.js";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 import { tmpDraft } from "./helpers/tmp-draft.mjs";
 
@@ -65,7 +66,7 @@ describe("dub — cue reading and placement", () => {
     const vtt =
       "WEBVTT - a title\n\nNOTE written by hand\n\nSTYLE\n::cue { color: red }\n\nintro\n00:01.000 --> 00:03.000 align:start position:10%\nHello there\n\n00:00:04.000 --> 00:00:06.500\nSecond\n";
     assert.deepEqual(
-      parseCueFile(vtt).map((c) => [c.startUs, c.endUs, c.text]),
+      parseSubtitles(vtt).map((c) => [c.startUs, c.endUs, c.text]),
       [
         [1_000_000, 3_000_000, "Hello there"],
         [4_000_000, 6_500_000, "Second"],
@@ -89,7 +90,7 @@ describe("dub — cue reading and placement", () => {
   });
 
   it("decodes character references once: WebVTT's in the reader, SRT text as written", () => {
-    const [vtt] = parseCueFile("WEBVTT\n\n00:01.000 --> 00:02.000\nTom &amp;lt; Jerry\n");
+    const [vtt] = parseSubtitles("WEBVTT\n\n00:01.000 --> 00:02.000\nTom &amp;lt; Jerry\n");
     assert.equal(cueSpeechText(vtt.text), "Tom &lt; Jerry");
     assert.equal(cueSpeechText("Fish &amp; chips"), "Fish &amp; chips");
   });

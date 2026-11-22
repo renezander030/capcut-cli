@@ -1,40 +1,5 @@
 // Dub a subtitle track: one synthesized clip per cue, placed at the cue's start on one audio track.
-// The pure parts live here (cue reading, spoken text, placement); cmdDub in index.ts runs the TTS tool and writes.
-
-import { parseSrt, type SrtCue } from "./srt.js";
-
-/** WebVTT's character references, decoded once here so cue text reaches the speech step as written. */
-function decodeVttText(line: string): string {
-  return line
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, "\u00a0")
-    .replace(/&lrm;/g, "\u200e")
-    .replace(/&rlm;/g, "\u200f")
-    .replace(/&amp;/g, "&");
-}
-
-/**
- * Cues from SRT or WebVTT text. WebVTT is read by removing what SRT lacks: the WEBVTT header block, NOTE, STYLE and
- * REGION blocks, cue settings after the end time, and the optional hours in mm:ss.ttt timestamps.
- */
-export function parseCueFile(content: string): SrtCue[] {
-  const text = content.replace(/\r\n?/g, "\n");
-  if (!/^WEBVTT(?:[ \t].*)?(?:\n|$)/.test(text)) return parseSrt(text);
-  const blocks = text.split(/\n{2,}/).slice(1);
-  const kept: string[] = [];
-  for (const block of blocks) {
-    const lines = block.split("\n").filter((line, i) => !(i === 0 && line.trim() === ""));
-    if (lines.length === 0 || /^(NOTE|STYLE|REGION)(?:[ \t]|$)/.test(lines[0])) continue;
-    const at = lines.findIndex((line) => line.includes("-->"));
-    if (at < 0) continue;
-    const timing = lines[at]
-      .replace(/^\s*((?:\d+:)?\d{2}:\d{2}\.\d{1,3})\s*-->\s*((?:\d+:)?\d{2}:\d{2}\.\d{1,3}).*$/, "$1 --> $2")
-      .replace(/(^|--> )(\d{2}:\d{2}\.\d)/g, "$100:$2");
-    kept.push([timing, ...lines.slice(at + 1).map(decodeVttText)].join("\n"));
-  }
-  return parseSrt(kept.join("\n\n"));
-}
+// The pure parts live here (spoken text, placement; cues come from srt.ts parseSubtitles); cmdDub in index.ts runs the TTS tool and writes.
 
 // Subtitle markup a cue can carry: SRT's <i> <b> <u> <s> <font>, WebVTT's <v> <c> <lang> <ruby> <rt>. Only these are
 // removed, so a bare "<" or ">" in the words ("2 < 3") stays spoken.

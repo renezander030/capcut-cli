@@ -895,8 +895,9 @@ Subtitles (Phase 3):
              Other override codes ({\\an8}, \\pos, \\k, ...) are stripped
              from the displayed text as before.
              Same flags as import-srt below.
-  import-srt <project> <srt-path-or--> [options]
-             Parse an SRT file and create one text segment per cue.
+  import-srt <project> <srt-or-vtt-path-or--> [options]
+             Parse an SRT or WebVTT file (told apart by the WEBVTT header)
+             and create one text segment per cue.
              Options:
                --track-name <s>      Text track (default: "subtitle")
                --time-offset <s>     Shift all cue timings (e.g. +0.5s)
@@ -2886,7 +2887,8 @@ async function cmdTts(draft: Draft, filePath: string, positional: string[], flag
 
 async function cmdDub(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
   const { collisionSafeOutPath, synthesizeSpeech, ttsTextWouldBeOption } = await import("./tts.js");
-  const { cueSpeechText, parseCueFile, planDubClips } = await import("./dub.js");
+  const { cueSpeechText, planDubClips } = await import("./dub.js");
+  const { parseSubtitles } = await import("./srt.js");
   const { addAudio } = await import("./factory.js");
   const { probeMedia } = await import("./probe.js");
   const source = positional[2];
@@ -2900,7 +2902,7 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
   if (flags.noProbe) die("dub measures every clip with ffprobe to place it; --no-probe is not available here.");
   let cues: Array<{ index: number; startUs: number; endUs: number; text: string }>;
   try {
-    cues = parseCueFile(readSubtitleText(source));
+    cues = parseSubtitles(readSubtitleText(source));
   } catch (e) {
     die(`${source}: ${(e as Error).message}`);
   }
@@ -4020,12 +4022,12 @@ async function importCuesToDraft(
 }
 
 async function cmdImportSrt(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
-  const { parseSrt } = await import("./srt.js");
+  const { parseSubtitles } = await import("./srt.js");
   const srtArg = positional[2];
-  if (!srtArg) die(`Usage: capcut import-srt <project> <srt-path-or-->`);
+  if (!srtArg) die(`Usage: capcut import-srt <project> <srt-or-vtt-path-or-->`);
   const srtContent = readSubtitleText(srtArg === "-" ? 0 : srtArg);
-  const cues = parseSrt(srtContent);
-  if (cues.length === 0) die(`SRT produced 0 cues`);
+  const cues = parseSubtitles(srtContent);
+  if (cues.length === 0) die(`Subtitle file produced 0 cues`);
   await importCuesToDraft(draft, filePath, cues, flags, "srt");
 }
 
@@ -6485,10 +6487,10 @@ async function cmdDetectRetakes(draft: Draft | null, flags: Flags): Promise<void
   let source: string;
   let durationUs: number | null = null;
   if (draft === null) {
-    const { parseSrt } = await import("./srt.js");
+    const { parseSubtitles } = await import("./srt.js");
     const srtPath = flags.srt as string;
     if (!existsSync(srtPath)) die(`--srt file not found: ${srtPath}`);
-    cues = parseSrt(readSubtitleText(srtPath)).map((c) => ({
+    cues = parseSubtitles(readSubtitleText(srtPath)).map((c) => ({
       text: c.text,
       startUs: c.startUs,
       endUs: c.endUs,

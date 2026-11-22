@@ -11,7 +11,7 @@ import { loadDraft, saveDraft } from "./draft.js";
 import { addAudio, addText, addVideo, type CanvasConfig, initDraft, type TemplateReport } from "./factory.js";
 import { lintDraft, summarize } from "./lint.js";
 import { probeMedia } from "./probe.js";
-import { parseSrt } from "./srt.js";
+import { parseSubtitles } from "./srt.js";
 import { diagnoseDraftStore } from "./store.js";
 
 // Fallback when ffprobe is unavailable or the input has no readable duration.
@@ -83,7 +83,7 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     if (p && !existsSync(p)) throw new Error(`Input for ${flag} not found: ${p}`);
   }
   // Read and check the subtitles before anything is created, with the same strict UTF-8 reader as import-srt.
-  const cues = opts.srt ? parseSrt(readSubtitleText(opts.srt)) : [];
+  const cues = opts.srt ? parseSubtitles(readSubtitleText(opts.srt)) : [];
   if (opts.srt && cues.length === 0) throw new Error(`SRT produced 0 cues: ${opts.srt}`);
 
   const steps: QuickstartStep[] = [];

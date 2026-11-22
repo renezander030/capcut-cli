@@ -57,6 +57,77 @@ export function parseSrt(content: string): SrtCue[] {
   return cues;
 }
 
+// --- WebVTT import ---
+
+const VTT_TIME = /^(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})$/;
+const VTT_TIMING = /^(\S+)[ \t]+-->[ \t]+(\S+)(?:[ \t].*)?$/;
+
+function vttTimeToUs(value: string): number | null {
+  const m = VTT_TIME.exec(value);
+  if (!m) return null;
+  const [, h = "0", min, sec, ms] = m;
+  if (parseInt(min, 10) > 59 || parseInt(sec, 10) > 59) return null;
+  return ((parseInt(h, 10) * 3600 + parseInt(min, 10) * 60 + parseInt(sec, 10)) * 1000 + parseInt(ms, 10)) * 1000;
+}
+
+/**
+ * Cue text as an editor shows it: voice, class, language and ruby tags and inline timestamps removed (ruby
+ * annotations too), <b>/<i>/<u> kept as in SRT, and the WebVTT character references decoded.
+ */
+function vttCueText(lines: string[]): string {
+  return lines
+    .join("\n")
+    .replace(/<rt>[\s\S]*?<\/rt>/g, "")
+    .replace(/<\d[\d:.]*>/g, "")
+    .replace(/<\/?(?:v|c|lang|ruby|rt)(?:[.\s][^>]*)?>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lrm;/g, "‎")
+    .replace(/&rlm;/g, "‏")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * WebVTT cues: the WEBVTT header (with an optional title and metadata lines), NOTE, STYLE and REGION blocks,
+ * cue identifiers, cue settings, mm:ss.ttt and many-digit-hour timestamps. Cues are numbered 1..n in file order.
+ */
+export function parseVtt(content: string): SrtCue[] {
+  const lines = content.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
+  if (!/^WEBVTT(?:[ \t].*)?$/.test(lines[0] ?? "")) {
+    throw new Error("Invalid WebVTT: the file must start with a WEBVTT line");
+  }
+  const blank = (line: string) => line.trim() === "";
+  let i = 1;
+  while (i < lines.length && !blank(lines[i])) i++; // header block
+  const cues: SrtCue[] = [];
+  while (i < lines.length) {
+    while (i < lines.length && blank(lines[i])) i++;
+    if (i >= lines.length) break;
+    const start = i;
+    while (i < lines.length && !blank(lines[i])) i++;
+    const block = lines.slice(start, i);
+    if (/^(?:NOTE|STYLE|REGION)(?:[ \t]|$)/.test(block[0])) continue;
+    // A cue's first line is its timing, or an identifier followed by the timing line.
+    const at = !block[0].includes("-->") && block[1]?.includes("-->") ? 1 : 0;
+    const timing = VTT_TIMING.exec(block[at] ?? "");
+    const startUs = timing ? vttTimeToUs(timing[1]) : null;
+    const endUs = timing ? vttTimeToUs(timing[2]) : null;
+    if (startUs === null || endUs === null) {
+      throw new Error(`Invalid WebVTT cue timing near line ${start + at + 1}: ${block[at] ?? block[0]}`);
+    }
+    const index = cues.length + 1;
+    if (endUs <= startUs) throw new Error(`WebVTT cue ${index} has end <= start`);
+    cues.push({ index, startUs, endUs, text: vttCueText(block.slice(at + 1)) });
+  }
+  return cues;
+}
+
+/** Cues from SRT or WebVTT text, told apart by the WEBVTT header. */
+export function parseSubtitles(content: string): SrtCue[] {
+  return /^﻿?WEBVTT/.test(content) ? parseVtt(content) : parseSrt(content);
+}
+
 // --- Export (export-srt) ---
 
 export interface SubtitleWord {

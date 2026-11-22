@@ -226,7 +226,7 @@ const usages = {
   "make-preset": "capcut make-preset <project> <text-segment-id> --out <preset.json>",
   batch:
     "capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl | capcut batch <project> --apply-plan <plan.json>",
-  "import-srt": "capcut import-srt <project> <srt-or-> [options]",
+  "import-srt": "capcut import-srt <project> <srt-or-vtt-or-> [options]",
   "import-ass": "capcut import-ass <project> <ass-or-> [options]",
   "text-ranges": "capcut text-ranges <project> <id> --styles <json-or-@file>",
   caption: "capcut caption <project> (--audio <path> | --from-segment <id> | --words <file.json|->) [options]",
