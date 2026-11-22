@@ -10,6 +10,7 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 ### Fixed
 - `quickstart --srt` and `detect-retakes --srt` refuse a subtitle file that is not valid UTF-8, as `import-srt` does, instead of writing replacement characters into captions ([subtitleedit#16978](https://github.com/SubtitleEdit/subtitleedit/issues/16978)).
 - `render` pads audio to the timeline, so a sound shorter than the video no longer cuts the proxy to its length, and a render whose written duration misses the draft's by more than a frame now exits non-zero instead of reporting success; a draft the proxy cannot play whole (main-track gaps, which it closes, or music and captions past the last clip, where its picture ends) is held to what the proxy plays instead (matching it is a stderr note and an error only with `--verify`, falling short of it fails) ([ComeCut#26](https://github.com/juntaosun/ComeCut/issues/26)).
+- `render` plays audio at its segment speed above 2x and below 0.5x by chaining tempo stages, where it used to stay at 1x while the video was retimed ([Concat#762](https://github.com/jub0t/Concat/issues/762)).
 
 ## [0.36.0] - 2026-11-20
 

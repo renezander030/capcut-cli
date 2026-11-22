@@ -760,3 +760,33 @@ describe("render — short audio pads to the timeline, a failed duration check f
     assert.ok(Math.abs(Number(probe.stdout) - 6) < 0.1, `duration ${probe.stdout}`);
   });
 });
+
+// atempo takes 0.5..2 per stage; speeds outside that used to leave the audio at 1x while the video was retimed.
+describe("render — audio speed beyond 0.5..2x chains atempo stages", () => {
+  function setup() {
+    const dir = mkdtempSync(join(tmpdir(), "capcut-render-tempo-"));
+    return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+  function audioChain(dir, speed) {
+    const draft = buildDraft(dir, { withText: false });
+    const audio = draft.tracks.find((t) => t.type === "audio").segments[0];
+    audio.speed = speed;
+    audio.source_timerange.duration = Math.round(audio.target_timerange.duration * speed);
+    const plan = buildRenderPlan(draft, { out: join(dir, "p.mp4") });
+    return plan.filterComplex.split(";").find((part) => part.startsWith("[2:a]"));
+  }
+
+  for (const [speed, stages] of [
+    [3, "atempo=2,atempo=1.5"],
+    [4, "atempo=2,atempo=2"],
+    [0.25, "atempo=0.5,atempo=0.5"],
+    [0.3, "atempo=0.5,atempo=0.6"],
+    [1.5, "atempo=1.5"],
+  ]) {
+    it(`speed ${speed} plays its audio at ${speed}x (${stages})`, () => {
+      const s = setup();
+      after(s.cleanup);
+      assert.match(audioChain(s.dir, speed), new RegExp(`asetpts=PTS-STARTPTS,${stages},`));
+    });
+  }
+});

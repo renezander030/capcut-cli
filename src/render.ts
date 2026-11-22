@@ -748,12 +748,22 @@ export function probeRenderOutput(
   return checkOutputDuration(probe.durationUs, expectedUs, fps);
 }
 
-// atempo only accepts 0.5..2.0 per filter instance; we keep proxy audio simple
-// and only retime when a single atempo can express it.
+// atempo accepts 0.5..2.0 per filter instance, so a speed outside that range
+// is a chain of stages whose product is the speed (3x = 2 x 1.5, 0.25x = 0.5 x 0.5).
 function atempoFor(speed: number): string | null {
-  if (!speed || speed === 1) return null;
-  if (speed >= 0.5 && speed <= 2) return `atempo=${round3(speed)}`;
-  return null; // out of single-stage range — leave audio at source rate for the proxy
+  if (!speed || speed === 1 || !Number.isFinite(speed) || speed < 0) return null;
+  const stages: number[] = [];
+  let rest = speed;
+  while (rest > 2) {
+    stages.push(2);
+    rest /= 2;
+  }
+  while (rest < 0.5) {
+    stages.push(0.5);
+    rest /= 0.5;
+  }
+  if (Math.abs(rest - 1) > 1e-9) stages.push(rest);
+  return stages.map((stage) => `atempo=${round3(stage)}`).join(",");
 }
 
 function round3(n: number): number {
