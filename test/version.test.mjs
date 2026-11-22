@@ -112,6 +112,37 @@ describe("capcut version — write-guard and evidence assessment", () => {
     assert.equal(v.support.write_guard, "ok");
   });
 
+  it("reports cc 9.5.0 as a reported round trip, supported, with its evidence", () => {
+    const v = versionOf({ platform: { app_source: "cc", app_version: "9.5.0", os: "windows" } });
+    assert.equal(v.support.status, "supported");
+    assert.equal(v.support.evidence, "reported");
+    assert.equal(v.support.write_guard, "ok");
+    assert.match(v.support.notes.join(" "), /capcut-cli\/issues\/50/);
+  });
+
+  it("does not call cc 9.8.0 supported: only a compiled draft opening is reported, no round trip", () => {
+    const v = versionOf({ platform: { app_source: "cc", app_version: "9.8.0", os: "windows" } });
+    assert.equal(v.support.status, "untested");
+    assert.equal(v.support.evidence, "reported");
+    assert.equal(v.support.write_guard, "ok");
+    const notes = v.support.notes.join(" ");
+    assert.match(notes, /a compiled draft is reported to open/);
+    assert.match(notes, /no round trip/);
+    assert.match(notes, /capcut-cli\/pull\/178/);
+  });
+
+  it("says which JianYing 11.x route works: a new plaintext draft, not reading or editing an existing one", () => {
+    const v = versionOf({ platform: { app_source: "lv", app_version: "11.8.0", os: "mac" } });
+    assert.equal(v.support.status, "known-broken");
+    assert.equal(v.support.write_guard, "refuse");
+    const notes = v.support.notes.join(" ");
+    assert.match(notes, /write-only/);
+    assert.match(notes, /new plaintext draft/);
+    assert.match(notes, /easy-jianying\/issues\/1/);
+    const older = versionOf({ platform: { app_source: "lv", app_version: "6.0.0", os: "windows" } });
+    assert.doesNotMatch(older.support.notes.join(" "), /write-only/);
+  });
+
   it("labels cc 7.0.0 untested + expected-compatible (docs alignment, not a tested claim)", () => {
     const v = versionOf({ platform: { app_source: "cc", app_version: "7.0.0", os: "windows" } });
     assert.equal(v.support.status, "untested");

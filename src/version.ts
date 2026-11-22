@@ -45,9 +45,11 @@ interface VersionRegistryEntry {
   ceiling: string | null;
   /** Versions the CLI round-trips with a committed fixture or a reproducible
    * report, each carrying its honest evidence label. */
-  supported: Array<{ version: string; evidence: SupportEvidence }>;
+  supported: Array<{ version: string; evidence: SupportEvidence; source?: string }>;
   /** Schema inspection suggests compatibility; no committed fixture. */
   expected_compatible: string[];
+  /** Builds where only a tool-written draft opening is reported: no round trip (edit, save, reopen), so untested. */
+  opens_reported: Array<{ version: string; source: string }>;
   /** Structured known-broken boundaries: any version >= min matches. */
   broken: Array<{ min: string; reason: string }>;
 }
@@ -61,8 +63,12 @@ const SUPPORTED_APP_VERSIONS: Record<AppSource, VersionRegistryEntry> = {
       // Committed synthetic fixture (test/fixtures/capcut-8.7-windows). A real
       // app-created bundle is still wanted before this moves to fixture-tested.
       { version: "8.7.0", evidence: "synthetic-tested" },
+      // Reported round trips, no committed app-created bundle yet: Windows 9.5.0.4050 and macOS 9.5.0.
+      { version: "9.5.0", evidence: "reported", source: "https://github.com/renezander030/capcut-cli/issues/50" },
     ],
     expected_compatible: ["6.5.0", "7.0.0", "8.0.0", "9.0.0"],
+    // A compiled example draft opens in 9.8.0.4213 on Windows; no round trip is reported.
+    opens_reported: [{ version: "9.8.0", source: "https://github.com/renezander030/capcut-cli/pull/178" }],
     broken: [],
   },
   lv: {
@@ -70,6 +76,7 @@ const SUPPORTED_APP_VERSIONS: Record<AppSource, VersionRegistryEntry> = {
     ceiling: "5.99",
     supported: [{ version: "5.9.0", evidence: "reported" }],
     expected_compatible: [],
+    opens_reported: [],
     broken: [{ min: "6.0", reason: "encrypted draft_content.json era — see `capcut decrypt`" }],
   },
   unknown: {
@@ -77,6 +84,7 @@ const SUPPORTED_APP_VERSIONS: Record<AppSource, VersionRegistryEntry> = {
     ceiling: null,
     supported: [],
     expected_compatible: [],
+    opens_reported: [],
     broken: [],
   },
 };
@@ -291,6 +299,14 @@ export function detectVersion(draft: Draft): VersionInfo {
     // Never downgrade a structured known-broken verdict to untested.
     if (support.status !== "known-broken") support.status = "untested";
     support.notes.push(`JianYing ${app_version} is post-5.9 — likely encrypted; pinning to 5.9 strongly recommended`);
+    if (atLeast(app_version, "11.0")) {
+      // Reported: a new plaintext draft written by a tool opens in 11.4 and 11.8, and the app encrypts it on save.
+      support.notes.push(
+        `JianYing ${app_version} is write-only for tools: a new plaintext draft opens and the app encrypts it on save ` +
+          "(https://github.com/YeJe-cpu/easy-jianying/issues/1, https://github.com/GuanYixuan/pyJianYingDraft/issues/198); " +
+          "an existing 11.x draft cannot be read or edited here because it is encrypted",
+      );
+    }
   }
 
   // Write-guard preview (draft-only; no store discovery here), so
@@ -361,7 +377,18 @@ function assessSupport(
   }
   const supportedMatch = matrix.supported.find((entry) => entry.version === app_version);
   if (supportedMatch) {
+    if (supportedMatch.source) {
+      notes.push(`Version ${app_version} is ${supportedMatch.evidence}: ${supportedMatch.source}`);
+    }
     return { status: "supported", evidence: supportedMatch.evidence, notes };
+  }
+  const opensMatch = matrix.opens_reported.find((entry) => entry.version === app_version);
+  if (opensMatch) {
+    notes.push(
+      `Version ${app_version}: a compiled draft is reported to open (${opensMatch.source}); no round trip (edit, save, ` +
+        "reopen) is reported, so it is not called supported",
+    );
+    return { status: "untested", evidence: "reported", notes };
   }
   if (matrix.expected_compatible.includes(app_version)) {
     notes.push(

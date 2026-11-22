@@ -2,6 +2,13 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-11-22
+
+### Added
+- CapCut 9.5.0 is recorded as supported on a reported round trip, and 9.8.0 as untested with its report that a compiled draft opens (no round trip yet), each with its evidence link, and `capcut version` names the write-only route for JianYing 11.x drafts ([#50](https://github.com/renezander030/capcut-cli/issues/50), [#178](https://github.com/renezander030/capcut-cli/pull/178), [easy-jianying#1](https://github.com/YeJe-cpu/easy-jianying/issues/1)).
+
+### Fixed
+
 ## [0.36.0] - 2026-11-20
 
 ### Added
