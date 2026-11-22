@@ -9,6 +9,9 @@ it("committed command references equal what describe generates", () => {
   const described = spawnCli(["describe"]);
   assert.equal(described.status, 0, described.stderr);
   const docs = renderCommandDocs(described.json);
-  assert.equal(readFileSync(new URL("../docs/command-reference.json", import.meta.url), "utf8"), docs.json);
-  assert.equal(readFileSync(new URL("../docs/command-reference.md", import.meta.url), "utf8"), docs.markdown);
+  // A Windows checkout may turn LF into CRLF (core.autocrlf); the generator writes LF.
+  const committed = (name) =>
+    readFileSync(new URL(`../docs/${name}`, import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  assert.equal(committed("command-reference.json"), docs.json);
+  assert.equal(committed("command-reference.md"), docs.markdown);
 });
