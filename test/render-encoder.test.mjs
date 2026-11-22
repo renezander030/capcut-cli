@@ -57,6 +57,7 @@ function fakeFfmpeg(dir) {
       " ... asetpts            A->A       Set PTS for the output audio frame.",
       " ... adelay             A->A       Delay one or more audio channels.",
       " ... anull              A->A       Pass the source unchanged to the output.",
+      " ... apad               A->A       Pad audio with silence.",
       " ... amix               N->A       Audio mixing.",
       "EOF",
       "    exit 0 ;;",

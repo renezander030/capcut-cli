@@ -994,7 +994,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "verify",
       ["--verify"],
       "boolean",
-      "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept.",
+      "Also exit non-zero when the written file cannot be probed. A render whose probed duration drifts from the draft's by more than one frame always exits non-zero; the file is kept.",
     ),
     option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary for output verification."),
   ],

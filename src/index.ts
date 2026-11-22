@@ -6112,7 +6112,7 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
 // it never mutates the draft. With --dry-run it returns the ffmpeg plan without
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
 async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { assertFaithful, buildRenderPlan, renderDraft } = await import("./render.js");
+  const { PROXY_REASON_TEXT, assertFaithful, buildRenderPlan, renderDraft } = await import("./render.js");
   if (flags.crf !== undefined && flags.videoBitrate !== undefined) {
     die("--crf and --video-bitrate are mutually exclusive.");
   }
@@ -6151,13 +6151,34 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
   const result = renderDraft(draft, filePath, opts);
   out(result, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
-  // --verify: the file stays on disk either way; the result above says why.
+  // The file stays on disk either way; the result above says why. A measured duration that misses the draft's fails.
+  // Where the proxy cannot play the draft's whole length (gaps closed, picture ending with the last main-track clip),
+  // the file is held to what it plays instead (a match is a note, short of it fails); --verify fails any drift, and
+  // also fails when the file could not be measured.
   const check = result.verification;
-  if (flags.verify && check) {
+  const proxy = check?.proxy;
+  const why = proxy?.reasons.map((reason) => PROXY_REASON_TEXT[reason]).join(" and ");
+  if (proxy?.within_tolerance && !flags.verify) {
+    if (!flags.quiet) {
+      process.stderr.write(
+        `Note: output is ${check?.duration_us}us against the draft's ${check?.expected_duration_us}us because the proxy ` +
+          `${why}: it plays ${proxy.duration_us}us; --verify makes this an error.\n`,
+      );
+    }
+    return;
+  }
+  if (proxy?.within_tolerance === false && !flags.verify) {
+    die(
+      `render: output duration ${check?.duration_us}us is ${proxy.drift_us}us off the ${proxy.duration_us}us the proxy ` +
+        `plays (it ${why}${proxy.reasons.includes("main_track_gaps") ? ", so with gaps closed" : ""}), beyond the ` +
+        `one-frame tolerance of ${check?.tolerance_us}us. The file was kept at ${result.output}.`,
+    );
+  }
+  if (check && (flags.verify || (check.verified && !check.within_tolerance))) {
     if (!check.verified) die(`render --verify: output could not be verified: ${check.reason}`);
     if (!check.within_tolerance) {
       die(
-        `render --verify: output duration ${check.duration_us}us drifts ${check.drift_us}us from the draft's ` +
+        `render: output duration ${check.duration_us}us drifts ${check.drift_us}us from the draft's ` +
           `${check.expected_duration_us}us, beyond the one-frame tolerance of ${check.tolerance_us}us. ` +
           `The file was kept at ${result.output}; the result's \`fidelity\` lists what the proxy dropped (main_track_gaps shortens it).`,
       );

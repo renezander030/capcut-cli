@@ -6748,7 +6748,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept."
+          "description": "Also exit non-zero when the written file cannot be probed. A render whose probed duration drifts from the draft's by more than one frame always exits non-zero; the file is kept."
         },
         {
           "name": "ffprobe_cmd",

@@ -211,7 +211,7 @@ const BASE_CHAIN_FILTERS = ["fps", "scale", "pad", "setsar", "format", "concat",
 // rather than up front — and they fail rather than degrade, because silently
 // dropping them changes the audio (unlike the drawtext/overlay flag fallbacks,
 // which only withhold an explicitly optional extra).
-const AUDIO_CHAIN_FILTERS = ["atrim", "asetpts", "adelay", "anull", "amix"] as const;
+const AUDIO_CHAIN_FILTERS = ["atrim", "asetpts", "adelay", "anull", "amix", "apad"] as const;
 const AUDIO_CONDITIONAL_FILTERS = ["atempo", "volume", "afade"] as const;
 
 /**
@@ -245,6 +245,7 @@ export interface FfmpegCapabilities {
   adelay: boolean;
   anull: boolean;
   amix: boolean;
+  apad: boolean;
   atempo: boolean;
   volume: boolean;
   afade: boolean;
@@ -650,6 +651,63 @@ export interface OutputVerification {
   drift_us?: number;
   tolerance_us: number;
   within_tolerance?: boolean;
+  /**
+   * Set when the proxy cannot play the draft's whole length: it closes main-track gaps, and its picture ends with the
+   * main track's last clip (music or captions past it are cut). The file is then held to what the proxy plays: the
+   * sum of the main-track segment durations.
+   */
+  proxy?: ProxyLength;
+}
+
+export type ProxyShortening = "main_track_gaps" | "past_main_track";
+
+export interface ProxyLength {
+  duration_us: number;
+  reasons: ProxyShortening[];
+  drift_us?: number;
+  within_tolerance?: boolean;
+}
+
+/**
+ * The length the proxy writes when it is shorter than the draft, with why; null when it writes the draft's length (or
+ * there is no main video track to end it). It follows the plan's own arguments: with -shortest the file ends with
+ * the main track (gaps closed); with a soft-caption stream there is no -shortest, so the file runs to its longest
+ * stream: the audio, padded to the draft's length, or else the main track or the last cue, whichever ends later.
+ */
+export function proxyLength(
+  draft: Draft,
+  census: FidelityCensus,
+  toleranceUs: number,
+  streams: { softCaptions: boolean; audio: boolean } = { softCaptions: false, audio: false },
+): ProxyLength | null {
+  const main = mainVideoSegments(draft);
+  if (main.length === 0) return null;
+  const reasons: ProxyShortening[] = [];
+  if (census.dropped.main_track_gaps) reasons.push("main_track_gaps");
+  const mainEnd = Math.max(...main.map((seg) => seg.target_timerange.start + seg.target_timerange.duration));
+  if (census.expected_duration_us - mainEnd > toleranceUs) reasons.push("past_main_track");
+  if (reasons.length === 0) return null;
+  let written = closedGapsDurationUs(draft);
+  if (streams.softCaptions) {
+    if (streams.audio) return null; // the padded audio carries the file to the draft's length
+    const lastCue = Math.max(
+      0,
+      ...textSegments(draft).map(({ seg }) => seg.target_timerange.start + seg.target_timerange.duration),
+    );
+    written = Math.max(written, lastCue);
+    if (census.expected_duration_us - written <= toleranceUs) return null;
+  }
+  return { duration_us: written, reasons };
+}
+
+export const PROXY_REASON_TEXT: Record<ProxyShortening, string> = {
+  main_track_gaps: "closes main-track gaps (fidelity.dropped.main_track_gaps)",
+  past_main_track: "ends with the main track's last clip (music or captions past it are cut)",
+};
+
+/** The proxy's length with main-track gaps closed: concat plays each main-track segment for its timeline duration. */
+export function closedGapsDurationUs(draft: Draft): number {
+  return mainVideoSegments(draft).reduce((sum, seg) => sum + seg.target_timerange.duration, 0);
 }
 
 export function frameToleranceUs(fps: number): number {
@@ -952,6 +1010,12 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     aOut = "aout";
     filterParts.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:normalize=0[${aOut}]`);
   }
+  if (aOut) {
+    // A sound shorter than the timeline must not end the proxy: pad the mix to the draft's duration, so
+    // -shortest stops at the video and the written file keeps the timeline's length.
+    filterParts.push(`[${aOut}]apad=whole_dur=${round3(expectedDurationUs(draft) / US)}[apadded]`);
+    aOut = "apadded";
+  }
 
   // --- soft captions (optional): SRT input + mov_text stream ---
   let softCaptions: SoftCaptionsPlan | undefined;
@@ -1204,5 +1268,22 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     plan.fps,
     opts.ffprobeCmd ?? "ffprobe",
   );
-  return { ...plan, ok: true, executed: true, verification };
+  // A file whose measured duration misses the draft's by more than a frame is not a faithful proxy. Where the proxy
+  // cannot play the draft's whole length (gaps closed, picture ending with the last main-track clip), the file is held
+  // to what the proxy plays instead: matching it is ok, falling short of it is a truncation like any other.
+  let ok = !(verification.verified && verification.within_tolerance === false);
+  const proxy = proxyLength(draft, plan.fidelity, verification.tolerance_us, {
+    softCaptions: plan.softCaptions !== undefined,
+    audio: plan.inputs.some((input) => input.kind === "audio"),
+  });
+  if (proxy) {
+    if (verification.verified && verification.duration_us !== undefined) {
+      const against = checkOutputDuration(verification.duration_us, proxy.duration_us, plan.fps);
+      proxy.drift_us = against.drift_us;
+      proxy.within_tolerance = against.within_tolerance;
+      ok = against.within_tolerance === true;
+    }
+    verification.proxy = proxy;
+  }
+  return { ...plan, ok, executed: true, verification };
 }
