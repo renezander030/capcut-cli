@@ -132,8 +132,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew list --versions gnu-tar || brew install gnu-tar
       - run: npm test
-      - name: Require native portable checks on Linux and macOS
-        if: runner.os != 'Windows'
+      - name: Require native portable checks on Linux, macOS and Windows
         env:
           CAPCUT_PORTABLE_REQUIRED: '1'
         run: node --test test/portable.test.mjs

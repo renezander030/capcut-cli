@@ -21,7 +21,12 @@ jobs:
           - { os: ubuntu-24.04-arm, target: linux-arm64 }
           - { os: macos-15, target: darwin-arm64 }
           - { os: macos-15-intel, target: darwin-x64 }
+          # built and run on Windows itself: the portable test drives capcut.cmd through cmd.exe before publishing
+          - { os: windows-latest, target: win-x64 }
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -47,6 +52,8 @@ jobs:
           path: |
             ${{ runner.temp }}/portable/*-${{ matrix.target }}.tar.gz
             ${{ runner.temp }}/portable/*-${{ matrix.target }}.tar.gz.sha256
+            ${{ runner.temp }}/portable/*-${{ matrix.target }}.zip
+            ${{ runner.temp }}/portable/*-${{ matrix.target }}.zip.sha256
           if-no-files-found: error
 
   release:
@@ -118,4 +125,5 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ runner.temp }}/portable/*.tar.gz
+            ${{ runner.temp }}/portable/*.zip
             ${{ runner.temp }}/portable/*.sha256

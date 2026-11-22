@@ -45,7 +45,7 @@ tar -xzf capcut-cli-v0.36.0-linux-x64.tar.gz
 
 On Linux arm64 (aarch64), choose `capcut-cli-v0.36.0-linux-arm64.tar.gz` and its matching `.sha256` file, then use the same verification and extraction commands with that filename. Use the archive matching the machine architecture; these archives bundle Node, not ffmpeg or the desktop editor.
 
-Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. Linux archives target x64 or arm64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. Windows continues to use the npm installation above. This is a portable directory, not a single-file executable.
+Keep the whole extracted directory together; it includes the Node runtime and its license. Both `capcut` and `capcut-cli` launchers work after moving the directory. Linux archives target x64 or arm64 with glibc (not Alpine/musl); optional FFmpeg/Whisper tools remain separate. This is a portable directory, not a single-file executable.
 
 You can add the extracted directory to `PATH` or create symbolic links to `capcut` and `capcut-cli` in a directory already on `PATH`. The launchers follow absolute and relative link chains using the system `/usr/bin/readlink`, and keep relative input and output paths relative to your working directory. Keep the extracted package in place while links point to it.
 
@@ -57,7 +57,18 @@ tar -xzf capcut-cli-v0.36.0-darwin-arm64.tar.gz
 ./capcut-cli-v0.36.0-darwin-arm64/capcut --version
 ```
 
-To build an archive from source, use a complete official Node distribution and run `npm run pack:portable -- --out ./portable` (or add `--node-root <node-distribution>`). Build on the target platform and architecture; macOS builds also require GNU tar (`brew install gnu-tar`) and `otool` from the command-line developer tools. The builder uses the local npm payload, downloads nothing, rejects runtimes linked to non-system macOS libraries, and refuses to overwrite existing artifacts. Archive users do not need these build tools.
+On Windows x64 (from release 0.37.0 on), download `capcut-cli-v<version>-win-x64.zip` and its `.sha256` file. In PowerShell, compare the hash with the one in the `.sha256` file, extract, and run the `capcut.cmd` launcher:
+
+```powershell
+(Get-FileHash capcut-cli-v<version>-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content capcut-cli-v<version>-win-x64.zip.sha256
+Expand-Archive capcut-cli-v<version>-win-x64.zip -DestinationPath .
+.\capcut-cli-v<version>-win-x64\capcut.cmd --version
+```
+
+The folder holds the official Node runtime (`runtime\node.exe` and its license); `capcut.cmd` and `capcut-cli.cmd` work from any location, also with spaces in the path, and you can add the folder to `PATH`. Arguments pass through `cmd.exe`, so quote values containing `&`, `|`, `<`, `>` or `^`. Every release builds this archive on a Windows runner and runs it there before publishing.
+
+To build an archive from source, use a complete official Node distribution and run `npm run pack:portable -- --out ./portable` (or add `--node-root <node-distribution>`). Build on the target platform and architecture (on Windows the archive is a zip, written without extra tools); macOS builds also require GNU tar (`brew install gnu-tar`) and `otool` from the command-line developer tools. The builder uses the local npm payload, downloads nothing, rejects runtimes linked to non-system macOS libraries, and refuses to overwrite existing artifacts. Archive users do not need these build tools.
 
 From Python: `pip install capcut` wraps the same binary — `capcut.run("quickstart", "my-short", video="clip.mp4", ratio="9:16")` — see [python/README.md](https://github.com/renezander030/capcut-cli/blob/master/python/README.md).
 
