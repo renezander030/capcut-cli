@@ -2974,9 +2974,8 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
   let clips: Array<Record<string, unknown>>;
   try {
     clips = plan.clips.map((clip) => {
-      const source = spoken.find((s) => s.cue === clip.cue && s.startUs === clip.startUs) as (typeof spoken)[number];
       const result = addAudio(draft, filePath, {
-        path: source.path,
+        path: clip.path,
         start: clip.startUs,
         duration: clip.durationUs,
         volume: flags.volume,
@@ -2985,12 +2984,12 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
       return {
         cue: clip.cue,
         segment_id: result.segmentId,
-        path: source.path,
+        path: clip.path,
         start_us: clip.startUs,
         duration_us: clip.durationUs,
         speech_us: clip.speechUs,
         trimmed: clip.trimmed,
-        text: source.text,
+        text: clip.text,
       };
     });
     saveDraft(filePath, draft);

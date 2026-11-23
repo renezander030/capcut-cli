@@ -118,6 +118,23 @@ describe("dub — cue reading and placement", () => {
     );
     assert.deepEqual(r.refusals, ["cue 4: its speech runs 0.500 s into a segment already on the track"]);
   });
+  it("returns each placed clip in start order with the fields the caller gave it", () => {
+    const r = planDubClips(
+      [
+        { cue: 2, startUs: 5_000_000, speechUs: 1_000_000, path: "b.wav" },
+        { cue: 1, startUs: 0, speechUs: 1_000_000, path: "a.wav" },
+      ],
+      [],
+      false,
+    );
+    assert.deepEqual(
+      r.clips.map((c) => [c.cue, c.path, c.durationUs]),
+      [
+        [1, "a.wav", 1_000_000],
+        [2, "b.wav", 1_000_000],
+      ],
+    );
+  });
 });
 
 describe("dub — the command", { skip: isWindows && "fake TTS and ffprobe are #! scripts" }, () => {

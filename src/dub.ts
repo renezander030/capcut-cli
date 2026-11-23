@@ -22,13 +22,15 @@ export function cueSpeechText(text: string): string {
     .join(" ");
 }
 
-export interface DubClip {
+/** A clip to place: its cue, where it starts and how long its speech runs. Callers may carry more fields along. */
+export interface DubSpeech {
   cue: number;
   startUs: number;
   speechUs: number;
-  durationUs: number;
-  trimmed: boolean;
 }
+
+/** A placed clip: the caller's clip with every field it carried, plus its length on the track. */
+export type DubClip<T extends DubSpeech = DubSpeech> = T & { durationUs: number; trimmed: boolean };
 
 export interface Occupied {
   startUs: number;
@@ -37,15 +39,16 @@ export interface Occupied {
 
 /**
  * Place each clip at its cue's start for its full speech length. A clip that would run into the next clip or into a
- * segment already on the track is refused, or cut at that point with `trimOverlap`. Returns the clips or the refusals.
+ * segment already on the track is refused, or cut at that point with `trimOverlap`. Returns the clips (in start
+ * order, each still carrying the caller's own fields) or the refusals.
  */
-export function planDubClips(
-  clips: Array<{ cue: number; startUs: number; speechUs: number }>,
+export function planDubClips<T extends DubSpeech>(
+  clips: T[],
   occupied: Occupied[],
   trimOverlap: boolean,
-): { clips: DubClip[]; refusals: string[] } {
+): { clips: DubClip<T>[]; refusals: string[] } {
   const ordered = [...clips].sort((a, b) => a.startUs - b.startUs);
-  const out: DubClip[] = [];
+  const out: DubClip<T>[] = [];
   const refusals: string[] = [];
   for (let i = 0; i < ordered.length; i++) {
     const clip = ordered[i];
