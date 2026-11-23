@@ -23,7 +23,7 @@
 | `opacity` | `capcut opacity <project> <id> <alpha>` | 是 | 设置片段不透明度（0.0-1.0）。 |
 | `export-srt` | `capcut export-srt <project> [options]` | 否 | 把字幕导出为 SRT 或 WebVTT（输出到 stdout），按行或按词。 |
 | `export-ass` | `capcut export-ass <project> [--karaoke] [--out <file.ass>]` | 否 | 把带样式的 ASS 字幕导出到 stdout 或 --out，支持按区间的样式覆盖；--karaoke 输出逐词时间。 |
-| `export-timeline` | `capcut export-timeline <project> [--out <file.otio>]` | 否 | 把视频/音频轨道导出为 OpenTimelineIO JSON，交接给 NLE（DaVinci Resolve 原生导入 .otio）。 |
+| `export-timeline` | `capcut export-timeline <project> [--out <file.otio>] [--captions skip\|markers]` | 否 | 把视频/音频轨道导出为 OpenTimelineIO JSON，交接给 NLE（DaVinci Resolve 原生导入 .otio）。 |
 | `import-timeline` | `capcut import-timeline <file.otio> (--out <new-project> \| --into <project>)` | 是 | 导入 OpenTimelineIO JSON，把嵌套的 Timeline/Stack/Track 展平，生成新草稿（--out）或追加到已有草稿（--into）；不支持的 OTIO 特性一律报告，绝不静默丢弃。 |
 | `materials` | `capcut materials <project> [--type <type>]` | 否 | 列出素材类型与数量；用 --type 过滤。 |
 | `segment` | `capcut segment <project> <id>` | 否 | 单个片段及其素材的完整详情。 |
@@ -31,7 +31,8 @@
 | `add-audio` | `capcut add-audio <project> <file-or-url> <start> [duration] [options]` | 是 | 在音频轨道上添加本地或 Wikimedia 音频文件。 |
 | `add-video` | `capcut add-video <project> <file-or-url> <start> [duration] [options]` | 是 | 在视频轨道上添加本地或 Wikimedia 视频/图片。 |
 | `add-text` | `capcut add-text <project> <start> <duration> <text> [options]` | 是 | 添加文本片段，带字体/颜色/位置选项。 |
-| `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [options]` | 是 | 通过本地 TTS 命令（--tts-cmd）从文本合成配音，并作为音频片段添加。 |
+| `tts` | `capcut tts <project> [start] [duration] (--text <string> \| --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]` | 是 | 通过本地 TTS 命令（--tts-cmd）从文本合成配音，并作为音频片段添加。 |
+| `dub` | `capcut dub <project> <subtitles.srt\|.vtt> --tts-cmd <template> [--lexicon <file>] [--trim-overlap] [options]` | 是 | 为字幕轨配音：通过本地 TTS 命令（--tts-cmd）为每条 SRT 或 WebVTT 字幕生成一段音频，放在该字幕的起点。 |
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | 是 | 读取或设置视频/图片片段的源素材裁剪（--ratio 预设、--rect x,y,w,h 或 --reset）。 |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | 是 | 把一段时间范围提取为一个独立的新草稿。 |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | 是 | 在相同的时间线位置，把片段复制到源轨道上方的轨道。 |
@@ -55,17 +56,18 @@
 | `apply-template` | `capcut apply-template <project> <template> <start> <duration> [text] [options]` | 是 | 用新的时间/文本把模板盖印到项目里。 |
 | `make-preset` | `capcut make-preset <project> <text-segment-id> --out <preset.json>` | 否 | 把文本片段的样式提取为可复用的预设 JSON（通过 --preset 应用）。 |
 | `templates` | `capcut templates <project>` | 否 | 列出内置的可复用模板。 |
-| `batch` | `capcut batch <project> [--continue-on-error] < operations.jsonl` | 是 | 从 stdin（JSONL）批量执行多个编辑，只写一次文件。 |
-| `import-srt` | `capcut import-srt <project> <srt-or-> [options]` | 是 | 导入 SRT 文件/stdin，每条字幕生成一个文本片段。 |
+| `batch` | `capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl \| capcut batch <project> --apply-plan <plan.json>` | 是 | 从 stdin（JSONL）批量执行多个编辑，只写一次文件。 |
+| `import-srt` | `capcut import-srt <project> <srt-or-vtt-or-> [options]` | 是 | 导入 SRT 文件/stdin，每条字幕生成一个文本片段。 |
 | `import-ass` | `capcut import-ass <project> <ass-or-> [options]` | 是 | 把 ASS/SSA 字幕文件导入为文本片段，并把内联覆盖标签保留为按区间的样式。 |
 | `text-ranges` | `capcut text-ranges <project> <id> --styles <json-or-@file>` | 是 | 为文本片段应用字节级精确的多样式区间。 |
-| `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id>) [options]` | 是 | 用 whisper 转写音频，生成真正的字幕轨道片段；支持音轨选择、脚本匹配门槛和逐词显现。 |
+| `caption` | `capcut caption <project> (--audio <path> \| --from-segment <id> \| --words <file.json\|->) [options]` | 是 | 用 whisper 转写音频，生成真正的字幕轨道片段；支持音轨选择、脚本匹配门槛和逐词显现。 |
 | `translate` | `capcut translate <project> --to <language> --out <path> [options]` | 是 | 通过 Anthropic API 把草稿克隆为另一种语言。 |
-| `migrate` | `capcut migrate <project> --from <version> --to <version>` | 是 | 在版本边界之间应用已知的 schema 迁移。 |
+| `migrate` | `capcut migrate <project> (--from <version> --to <version> \| --like <project> \| --from-store)` | 是 | 在版本边界之间应用已知的 schema 迁移。 |
 | `add-sfx` | `capcut add-sfx <project> <slug> <start> <duration> [options]` | 是 | 在专用轨道上添加音效。 |
 | `chroma` | `capcut chroma <project> <id> (--color <hex> \| --off) [options]` | 是 | 对视频片段做绿幕/色度抠像，或 --off 关闭。 |
+| `matting` | `capcut matting <project> <id> [--off]` | 是 | 对视频/图片片段的素材开启智能抠像（去除背景）—— 标志 3 为开启；--off 写入文档记载的标志 0 对象。 |
 | `prune` | `capcut prune <project>` | 是 | 删除没有任何片段引用的素材。 |
-| `register` | `capcut register <project-dir> [--apply] [--drafts <dir>]` | 是 | 从只读的 draft_content.json 修复已有草稿的注册元数据（draft_meta_info.json + root_meta_info.json 条目），让 CapCut 应用能列出它（默认只出计划；--apply 写入并留 .bak）。 |
+| `register` | `capcut register <project-dir> [--apply] [--materials] [--drafts <dir>]` | 是 | 从只读的 draft_content.json 修复已有草稿的注册元数据（draft_meta_info.json + root_meta_info.json 条目），让 CapCut 应用能列出它（默认只出计划；--apply 写入并留 .bak）。 |
 | `rename` | `capcut rename <project> <new-name> [--drafts <dir>]` | 是 | 在创建后重命名草稿：磁盘上的文件夹，加上 draft_meta_info.json 和存储 root_meta_info.json 条目里的 draft_name 及所有自引用路径，事务性完成（目标文件夹已存在时拒绝）。 |
 | `relink` | `capcut relink <project> (--dir <path> [--recursive] \| --from <prefix> --to <prefix>) [--stage]` | 是 | 修复失效的媒体路径（--dir 可递归搜索；同名歧义会报告并保持原路径；--from/--to 按路径边界映射）。 |
 | `replace-media` | `capcut replace-media <project> <segment-id> <new-file> [--retime]` | 是 | 替换片段的源文件（占位素材 → 成片素材），保留其时间、特效与关键帧。 |
@@ -77,19 +79,21 @@
 | `describe` | `capcut describe [--compact] [--command <name>]` | 否 | 以 JSON 输出命令契约；可按命令名筛选，或输出精简的命令发现索引。 |
 | `completions` | `capcut completions <bash\|zsh\|fish>` | 否 | 生成 shell 补全（bash\|zsh\|fish）。 |
 | `enums` | `capcut enums <category-flag> [--jianying]` | 否 | 按类别列出枚举 slug（转场、蒙版、特效等）。 |
+| `catalogue` | `capcut catalogue <query> [--kind <category>] [--limit <n>] [--jianying]` | 否 | 按名称在所有类别（含已采集条目）中查找资源 id。 |
 | `harvest-enums` | `capcut harvest-enums [<project> \| --sync \| --add <kind> <slug> <resource-id>] [--apply] [--catalogue <path>]` | 否 | 把商店资源 ID 学习进用户级素材目录：来源可以是单个草稿、整个草稿库（--sync），或手动添加（--add）。 |
 | `doctor` | `capcut doctor [--drafts <dir>]` | 否 | 环境预检（Node、whisper、API key、项目目录），并统计草稿目录中可读 / 无标记 / 已加密 / 无法读取的项目。 |
 | `diagnose` | `capcut diagnose <project> [--bundle <report.json>]` | 否 | 检查草稿的规范文件、文件间分歧与编辑器写入安全性。 |
 | `fixture` | `capcut fixture <project> --out <dir> [--anonymize] [--check]` | 否 | 构建可分享、已脱敏的兼容性包（仅时间线 JSON），用于版本支持 issue，内含蒙版关键帧证据报告（#44）。 |
-| `sync-timelines` | `capcut sync-timelines <project-dir> [--apply]` | 是 | 从只读的 draft_content.json 出发，协调已漂移的时间线镜像文件（template-2.tmp、draft_info.json）（默认输出带 mtime 的计划；--apply 只重写发生漂移的镜像）。 |
+| `sync-timelines` | `capcut sync-timelines <project-dir> [--nested] [--apply]` | 是 | 从只读的 draft_content.json 出发，协调已漂移的时间线镜像文件（template-2.tmp、draft_info.json）（默认输出带 mtime 的计划；--apply 只重写发生漂移的镜像）。 |
 | `restore` | `capcut restore <project> [--step <number> \| --list]` | 是 | 从 .bak / 快照历史撤销写入（--step N、--list）。 |
 | `serve` | `capcut serve [--queue <path>] [options]` | 否 | 从 stdin/--queue 运行无状态的 JSONL 任务队列。 |
 | `decrypt` | `capcut decrypt <project-or-file>` | 否 | 检测剪映 6.0+ 加密并说明应对方法。 |
 | `export` | `capcut export <drafts-dir> --batch [options]` | 是 | 实验性的 UI 自动化渲染队列（macOS）。 |
-| `init` | `capcut init <name> [--template <dir>] [--drafts <dir>]` | 是 | 从模板创建一个新的空草稿。 |
-| `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>]` | 是 | 一条命令生成第一个草稿：创建 + 添加一个素材 + lint + 打印“在 CapCut 中打开”的步骤。 |
+| `init` | `capcut init <name> [--template auto\|bundled\|<dir>] [--drafts <dir>] [--ratio <r> \| --width <px> --height <px>]` | 是 | 从模板创建一个新的空草稿。 |
+| `quickstart` | `capcut quickstart <name> [--video <f>] [--audio <f>] [--srt <f>] [--drafts <dir>] [--template auto\|bundled\|<dir>] [--ratio <r> \| --width <px> --height <px>]` | 是 | 一条命令生成第一个草稿：创建 + 添加一个素材 + lint + 打印“在 CapCut 中打开”的步骤。 |
 | `compile` | `capcut compile <spec.json> [--out <draftdir> \| --into <project>] [--template auto\|bundled\|<dir>] [--data <rows.jsonl\|->] [--check \| --plan]` | 是 | 从声明式 JSON spec 构建草稿；`--into` 填充应用创建的空项目，保留项目身份和注册信息。 |
 | `render` | `capcut render <project> [--out <preview.mp4>] [options]` | 否 | 渲染低清 ffmpeg 代理预览（裁剪+变速+音频，--burn-captions）；支持 --crf / --video-bitrate，大型滤镜图自动走脚本文件；不是 CapCut 的最终渲染。 |
 | `loudness` | `capcut loudness <project> [--target <lufs>] [--per-clip] [--max-gain-db <db>] [--apply] [--tolerance <lu>] [--max-true-peak <dbtp>]` | 否 | 测量每个有声片段的响度（EBU R128）；配合 --target 计算并写入使导出达到目标响度的增益；--tolerance / --max-true-peak 作为交付门槛，未达标时退出码为 1。 |
 | `detect-scenes` | `capcut detect-scenes <video> [options]` | 否 | 检测视频中的场景切换切点（ffmpeg scene 滤镜）；输出切点与片段列表，供 compile/cut 使用。 |
 | `detect-silence` | `capcut detect-silence <media> [options]` | 否 | 检测媒体文件中的静音区间（ffmpeg silencedetect）；输出静音与保留片段列表，供 compile/cut 使用。 |
+| `detect-retakes` | `capcut detect-retakes <project> [--track-name <s>] [--window <s>] [--similarity <n>] [--min-words <n>] \| --srt <file>` | 否 | 在草稿字幕（或 SRT）中查找重复录制的片段：基于窗口的词序列相似度，保留后一次录制；输出切点与保留片段，供 compile/cut 使用。 |
