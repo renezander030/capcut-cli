@@ -745,17 +745,11 @@ export function proxyLength(
   const mainEnd = Math.max(...main.map((seg) => seg.target_timerange.start + seg.target_timerange.duration));
   if (census.expected_duration_us - mainEnd > toleranceUs) reasons.push("past_main_track");
   if (reasons.length === 0) return null;
-  let written = closedGapsDurationUs(draft);
-  if (streams.softCaptions) {
-    if (streams.audio) return null; // the padded audio carries the file to the draft's length
-    const lastCue = Math.max(
-      0,
-      ...textSegments(draft).map(({ seg }) => seg.target_timerange.start + seg.target_timerange.duration),
-    );
-    written = Math.max(written, lastCue);
-    if (census.expected_duration_us - written <= toleranceUs) return null;
-  }
-  return { duration_us: written, reasons };
+  // With --soft-captions and audio, the padded audio carries the file to the draft's length. Without audio the
+  // container ends with the video: ffmpeg leaves the mov_text track out of the file's duration, so a cue past the
+  // main track does not lengthen it (rio, ffmpeg 7.1.5).
+  if (streams.softCaptions && streams.audio) return null;
+  return { duration_us: closedGapsDurationUs(draft), reasons };
 }
 
 const PROXY_REASON_TEXT: Record<ProxyShortening, string> = {

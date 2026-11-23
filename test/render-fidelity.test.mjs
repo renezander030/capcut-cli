@@ -366,9 +366,13 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
 
   // plainDraft: clips 0-2 s and 2-4 s, music 0-4 s, draft 4 s. `gap` moves clip 2 to 3-4 s (a 1 s gap the proxy
   // closes); `tail` runs the music and the draft to 6 s, past the last clip, where the proxy's picture ends.
-  function proxyRun(dir, durationSeconds, { gap = false, tail = false, audio = true } = {}, extra = []) {
+  function proxyRun(dir, durationSeconds, { gap = false, tail = false, audio = true, cueEnd = 0 } = {}, extra = []) {
     const draft = plainDraft(dir);
     if (!audio) draft.tracks.splice(1, 1);
+    if (cueEnd) {
+      const cue = draft.tracks.find((t) => t.type === "text").segments.at(-1);
+      cue.target_timerange.duration = cueEnd - cue.target_timerange.start;
+    }
     if (gap) {
       draft.tracks[0].segments[1].target_timerange.start = 3 * US;
       draft.tracks[0].segments[1].target_timerange.duration = US;
@@ -447,8 +451,10 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
     assert.notEqual(proxyRun(s.dir, "2", { gap: true, tail: true }).status, 0);
   });
 
-  // --soft-captions muxes a subtitle stream and drops -shortest, so the file runs to its longest stream: the audio,
-  // padded to the draft's length, or (with no audio) the main track or the last cue, whichever ends later.
+  // --soft-captions muxes a subtitle stream and drops -shortest. With audio the padded audio carries the file to the
+  // draft's length. Without audio the container ends with the video: ffmpeg does not count the mov_text track in the
+  // file's duration (rio, ffmpeg 7.1.5: video 3.000 s, subtitle 5.000 s, file 3.000 s), so a cue past the main track
+  // does not lengthen it.
   it("with --soft-captions and audio, a gapped or tailed draft writes the draft's length and passes", () => {
     const s = setup();
     after(s.cleanup);
@@ -469,6 +475,20 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.json.verification.proxy.duration_us, 3 * US);
     assert.notEqual(proxyRun(s.dir, "2", { gap: true, audio: false }, ["--soft-captions"]).status, 0);
+  });
+
+  it("with --soft-captions and no audio, a cue past the main track does not lengthen the file", () => {
+    const s = setup();
+    after(s.cleanup);
+    // clips 0-2 s and 3-4 s, the last cue ends at 4 s: ffmpeg writes a 3 s container (the gaps-closed video)
+    const r = proxyRun(s.dir, "3", { gap: true, audio: false, cueEnd: 4 * US }, ["--soft-captions"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.ok, true);
+    assert.equal(r.json.verification.proxy.duration_us, 3 * US);
+    assert.notEqual(
+      proxyRun(s.dir, "3", { gap: true, audio: false, cueEnd: 4 * US }, ["--soft-captions", "--verify"]).status,
+      0,
+    );
   });
 
   it("missing ffprobe: verified:false normally, a clear failure with --verify", () => {
