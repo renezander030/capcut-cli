@@ -6297,10 +6297,12 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
     return;
   }
   const result = renderDraft(draft, filePath, opts);
-  out(result, flags);
+  // renderOutcome holds the exit rules; a render that exits non-zero reports ok false. The file stays on disk either
+  // way and the result says why.
+  const outcome = renderOutcome(result, { verify: flags.verify, audioTrack: flags.audioTrack });
+  out(outcome.error ? { ...result, ok: false } : result, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
-  // The file stays on disk either way; the result above says why, and renderOutcome holds the exit rules.
-  reportRenderOutcome(renderOutcome(result, { verify: flags.verify, audioTrack: flags.audioTrack }), flags);
+  reportRenderOutcome(outcome, flags);
 }
 
 function reportRenderOutcome(outcome: { notes: string[]; error?: string }, flags: Flags): void {

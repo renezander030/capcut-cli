@@ -407,6 +407,7 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
 
     const strict = proxyRun(s.dir, "3", { gap: true }, ["--verify"]);
     assert.notEqual(strict.status, 0);
+    assert.equal(strict.json.ok, false, "a render that exits non-zero reports ok false");
     assert.match(strict.stderr, /drifts -1000000us/);
   });
 
@@ -512,6 +513,7 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
 
     const strict = spawnCli([...args, "--verify"]);
     assert.notEqual(strict.status, 0);
+    assert.equal(strict.json.ok, false, "a render that exits non-zero reports ok false");
     assert.match(strict.stderr, /could not be verified: ffprobe is unavailable/);
   });
 });
