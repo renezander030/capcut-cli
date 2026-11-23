@@ -160,7 +160,7 @@ export function buildPortable({ outDir, nodeRoot, root = sourceRoot, target = po
     if (!/^\d+\.\d+\.\d+$/.test(nodeVersion) || Number(nodeVersion.split(".")[0]) < 18) throw new Error("--node-version must name Node 18 or newer");
     runtime = { version: nodeVersion, platform: "win32", arch: "x64" };
   }
-  if (process.platform === "darwin") {
+  if (process.platform === "darwin" && !windows) {
     const libraries = run("otool", ["-L", node]).trim().split("\n").slice(1).map((line) => line.trim().split(" (", 1)[0]);
     if (!libraries.length || libraries.some((library) => !library.startsWith("/usr/lib/") && !library.startsWith("/System/Library/"))) {
       throw new Error("The runtime links non-system libraries; use the self-contained official Node distribution");
