@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { buildRenderPlan, parseFfmpegEncoders, renderDraft } from "../dist/render.js";
+import { writeFakeFfmpeg } from "./helpers/fake-ffmpeg.mjs";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 
 const US = 1_000_000;
@@ -33,50 +34,9 @@ const ENCODERS_OUTPUT = [
   " S..... srt                  SubRip subtitle (codec subrip)",
 ].join("\n");
 
-// A fake build whose -filters output satisfies every unconditional chain check
-// (so renderDraft gets as far as the encoder validation) but whose -encoders
-// list carries software encoders only — the machine without the hardware one.
-function fakeFfmpeg(dir) {
-  const path = join(dir, "fake-ffmpeg");
-  writeFileSync(
-    path,
-    [
-      "#!/bin/sh",
-      'case "$*" in',
-      "  *-filters*)",
-      "    cat <<'EOF'",
-      " ... fps                V->V       Force constant framerate.",
-      " ... scale              V->V       Scale the input video size and/or convert the image format.",
-      " ... pad                V->V       Pad the input video.",
-      " ... setsar             V->V       Set the pixel sample aspect ratio.",
-      " ... format             V->V       Convert the input video to one of several formats.",
-      " ... trim               V->V       Pick one continuous section from the input, drop the rest.",
-      " ... setpts             V->V       Set PTS for the output video frame.",
-      " ..C concat             N->N       Concatenate audio and video streams.",
-      " ... atrim              A->A       Pick one continuous section from the input, drop the rest.",
-      " ... asetpts            A->A       Set PTS for the output audio frame.",
-      " ... adelay             A->A       Delay one or more audio channels.",
-      " ... anull              A->A       Pass the source unchanged to the output.",
-      " ... amix               N->A       Audio mixing.",
-      "EOF",
-      "    exit 0 ;;",
-      "  *-encoders*)",
-      "    cat <<'EOF'",
-      "Encoders:",
-      " V..... = Video",
-      " ------",
-      " V..... libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)",
-      " A....D aac                  AAC (Advanced Audio Coding)",
-      "EOF",
-      "    exit 0 ;;",
-      "esac",
-      "exit 1",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
+// A fake build whose -filters output satisfies every chain check (so renderDraft gets as far as the encoder
+// validation) but whose -encoders list carries software encoders only — the machine without the hardware one.
+const fakeFfmpeg = (dir) => writeFakeFfmpeg(dir);
 
 // One video segment is all the encoder path needs.
 function buildDraft(dir) {

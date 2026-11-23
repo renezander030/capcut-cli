@@ -146,7 +146,7 @@ capcut-cli で何かを作りましたか? 公開リンク、何をするもの�
 | **追加** | `add-video` · `add-audio` · `add-text`(Wikimedia の URL に対応し、ライセンスを確認) |
 | **編集 / アニメーション** | trim · speed · volume · transitions · masks · text/image animations · easing curves |
 | **テンプレート** | 再利用できるレイアウトの適用と抽出 · `make-preset`(持ち運べるテキストスタイルのプリセット) |
-| **字幕と多言語化** | `caption` · `import-srt` · `export-srt`(行単位/単語単位の SRT + VTT) · `translate`(多言語ドラフトの複製) |
+| **字幕と多言語化** | `caption` · `import-srt`(SRT または WebVTT) · `export-srt`(行単位/単語単位の SRT + VTT) · `dub`(キューごとに TTS クリップを 1 つ) · `translate`(多言語ドラフトの複製) |
 | **エフェクト** | `sfx` · `chroma`(クロマキー) · `matting`(スマート背景除去) |
 | **長尺 → 短尺** | `cut` · `detect-scenes`(ffmpeg によるシーン切り替えの検出) · `detect-silence` · `detect-retakes`(繰り返しのテイク) |
 | **自動化** | `serve`(ステートレスな JSONL ランナー) · `migrate` · `doctor` · `sync-timelines`(8.7 のミラー修復) |

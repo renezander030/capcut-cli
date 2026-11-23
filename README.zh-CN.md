@@ -123,7 +123,7 @@ capcut compile spec.json --into /path/to/app-created-project --active-timeline
 | **添加** | `add-video` · `add-audio` · `add-text`（支持 Wikimedia URL，自动校验授权）|
 | **编辑 / 动画** | 裁剪 · 变速 · 音量 · 转场 · 蒙版 · 文字/图片动画 · 缓动曲线 |
 | **模板** | 应用与提取可复用版式 · `make-preset`（可移植文字样式预设）|
-| **字幕 / 多语言** | `caption` · `import-srt` · `export-srt`（行级/逐词 SRT + VTT）· `translate`（多语言草稿克隆）|
+| **字幕 / 多语言** | `caption` · `import-srt`（SRT 或 WebVTT）· `export-srt`（行级/逐词 SRT + VTT）· `dub`（每条字幕生成一段 TTS 配音）· `translate`（多语言草稿克隆）|
 | **特效** | `sfx` · `chroma`（绿幕抠像）· `matting`（智能抠像/去背景）|
 | **长视频切短** | `cut` · `detect-scenes`（ffmpeg 场景切点检测）· `detect-silence` · `detect-retakes`（重复口播段落）|
 | **自动化** | `serve`（无状态 JSONL 执行器）· `migrate` · `doctor` · `sync-timelines`（8.7 时间线镜像修复）|

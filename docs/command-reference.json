@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -1547,6 +1547,103 @@
       "mutates": true,
       "prerequisites": [
         "ffprobe (optional)",
+        "a local TTS CLI via --tts-cmd"
+      ],
+      "output": {
+        "type": "object",
+        "description": "JSON by default; use -H where supported for human output."
+      },
+      "exit_codes": {
+        "0": "success",
+        "1": "invalid input, warning, or operation failure"
+      }
+    },
+    {
+      "name": "dub",
+      "summary": "Dub a subtitle track: one clip per SRT or WebVTT cue via a local TTS command (--tts-cmd), each at its cue start.",
+      "usage": "capcut dub <project> <subtitles.srt|.vtt> --tts-cmd <template> [--lexicon <file>] [--trim-overlap] [options]",
+      "positionals": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": true
+        },
+        {
+          "name": "file",
+          "type": "path",
+          "required": false
+        }
+      ],
+      "options": [
+        {
+          "name": "tts_cmd",
+          "flags": [
+            "--tts-cmd"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "TTS command template, run once per cue without a shell: {out} (required) is replaced with the .wav path the tool must write, {text} with the cue's text as one argument; without {text} the text is piped to stdin."
+        },
+        {
+          "name": "lexicon",
+          "flags": [
+            "--lexicon"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "Pronunciation lexicon JSON applied to each cue's spoken text, as in tts."
+        },
+        {
+          "name": "trim_overlap",
+          "flags": [
+            "--trim-overlap"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Cut a clip whose speech runs into the next cue or into a segment already on the track at that point; without it such a run is refused and nothing is written."
+        },
+        {
+          "name": "volume",
+          "flags": [
+            "--volume"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Audio volume.",
+          "default": 1
+        },
+        {
+          "name": "track_name",
+          "flags": [
+            "--track-name"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Audio track for the clips.",
+          "default": "dub"
+        },
+        {
+          "name": "ffprobe_cmd",
+          "flags": [
+            "--ffprobe-cmd"
+          ],
+          "type": "path",
+          "required": false,
+          "description": "ffprobe binary."
+        },
+        {
+          "name": "active_timeline",
+          "flags": [
+            "--active-timeline"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "Explicitly follow the validated Timelines/project.json pointer on an unverified app build. Invalid, deleted or conflicting selected timelines are refused; write guards remain in force."
+        }
+      ],
+      "mutates": true,
+      "prerequisites": [
+        "ffprobe",
         "a local TTS CLI via --tts-cmd"
       ],
       "output": {
@@ -3694,7 +3791,7 @@
     {
       "name": "import-srt",
       "summary": "Import an SRT file/stdin as one text segment per cue.",
-      "usage": "capcut import-srt <project> <srt-or-> [options]",
+      "usage": "capcut import-srt <project> <srt-or-vtt-or-> [options]",
       "positionals": [
         {
           "name": "project",
@@ -3702,7 +3799,7 @@
           "required": true
         },
         {
-          "name": "srt-or-",
+          "name": "srt-or-vtt-or-",
           "type": "path",
           "required": true
         }
@@ -5590,6 +5687,7 @@
             "material",
             "add-audio",
             "tts",
+            "dub",
             "add-video",
             "add-text",
             "crop",
@@ -6697,6 +6795,29 @@
           "description": "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode."
         },
         {
+          "name": "audio_track",
+          "flags": [
+            "--audio-track"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Play this audio stream of each audio source (0-based; default the first). The result lists each source's stream count; a track a source does not have is refused before rendering."
+        },
+        {
+          "name": "audio_channel",
+          "flags": [
+            "--audio-channel"
+          ],
+          "type": "enum",
+          "required": false,
+          "description": "left, right, or mix: play one channel of a stereo source, or both mixed, as mono.",
+          "values": [
+            "left",
+            "right",
+            "mix"
+          ]
+        },
+        {
           "name": "burn_captions",
           "flags": [
             "--burn-captions"
@@ -6748,7 +6869,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept."
+          "description": "Also exit non-zero when the written file cannot be probed. A render whose probed duration drifts from the draft's by more than one frame always exits non-zero; the file is kept."
         },
         {
           "name": "ffprobe_cmd",

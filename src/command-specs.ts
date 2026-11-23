@@ -199,6 +199,7 @@ const usages = {
   material: "capcut material <project> <id>",
   "add-audio": "capcut add-audio <project> <file-or-url> <start> [duration] [options]",
   tts: "capcut tts <project> [start] [duration] (--text <string> | --text-file <path>) --tts-cmd <template> [--lexicon <file>] [options]",
+  dub: "capcut dub <project> <subtitles.srt|.vtt> --tts-cmd <template> [--lexicon <file>] [--trim-overlap] [options]",
   "add-video": "capcut add-video <project> <file-or-url> <start> [duration] [options]",
   "add-text": "capcut add-text <project> <start> <duration> <text> [options]",
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
@@ -225,7 +226,7 @@ const usages = {
   "make-preset": "capcut make-preset <project> <text-segment-id> --out <preset.json>",
   batch:
     "capcut batch <project> [--continue-on-error] [--plan <plan.json>] < operations.jsonl | capcut batch <project> --apply-plan <plan.json>",
-  "import-srt": "capcut import-srt <project> <srt-or-> [options]",
+  "import-srt": "capcut import-srt <project> <srt-or-vtt-or-> [options]",
   "import-ass": "capcut import-ass <project> <ass-or-> [options]",
   "text-ranges": "capcut text-ranges <project> <id> --styles <json-or-@file>",
   caption: "capcut caption <project> (--audio <path> | --from-segment <id> | --words <file.json|->) [options]",
@@ -387,6 +388,31 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
     TRACK_NAME,
     option("no_probe", ["--no-probe"], "boolean", "Disable automatic media probing."),
+    FFPROBE,
+  ],
+  dub: [
+    option(
+      "tts_cmd",
+      ["--tts-cmd"],
+      "string",
+      "TTS command template, run once per cue without a shell: {out} (required) is replaced with the .wav path the " +
+        "tool must write, {text} with the cue's text as one argument; without {text} the text is piped to stdin.",
+    ),
+    option(
+      "lexicon",
+      ["--lexicon"],
+      "path",
+      "Pronunciation lexicon JSON applied to each cue's spoken text, as in tts.",
+    ),
+    option(
+      "trim_overlap",
+      ["--trim-overlap"],
+      "boolean",
+      "Cut a clip whose speech runs into the next cue or into a segment already on the track at that point; " +
+        "without it such a run is refused and nothing is written.",
+    ),
+    option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
+    option("track_name", ["--track-name"], "string", "Audio track for the clips.", { default: "dub" }),
     FFPROBE,
   ],
   "add-video": [
@@ -971,6 +997,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "Target video bitrate such as 2500k or 4M; switches the proxy from CRF to bitrate mode.",
     ),
     option(
+      "audio_track",
+      ["--audio-track"],
+      "number",
+      "Play this audio stream of each audio source (0-based; default the first). The result lists each source's stream count; a track a source does not have is refused before rendering.",
+    ),
+    option(
+      "audio_channel",
+      ["--audio-channel"],
+      "enum",
+      "left, right, or mix: play one channel of a stereo source, or both mixed, as mono.",
+      { values: ["left", "right", "mix"] },
+    ),
+    option(
       "burn_captions",
       ["--burn-captions"],
       "boolean",
@@ -994,7 +1033,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "verify",
       ["--verify"],
       "boolean",
-      "Probe the written file with ffprobe and exit non-zero when its duration drifts from the draft's by more than one frame, or when it cannot be probed. The file is kept.",
+      "Also exit non-zero when the written file cannot be probed. A render whose probed duration drifts from the draft's by more than one frame always exits non-zero; the file is kept.",
     ),
     option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary for output verification."),
   ],
@@ -1115,6 +1154,7 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --tolerance, --max-true-peak -> loudness (delivery gate on the judged mix)
 //   --text, --text-file, --tts-cmd -> tts (v0.20 voiceover synthesis)
 //   --lexicon            -> tts (pronunciation rules for the spoken text)
+//   --trim-overlap       -> dub (cut a cue clip at the next cue)
 //   --nested             -> sync-timelines (v0.21 nested Timelines/ repair)
 //   --pip                -> lint (v0.21 PIP + mask validation report)
 //   --kind               -> catalogue (v0.21 cross-category lookup); --limit also scopes there
@@ -1138,9 +1178,12 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 //   --recursive -> relink (v0.27 nested media search)
 //   --anonymize -> fixture (neutral media, folder, project and text placeholders)
 //   --since-write -> diff (compare with the CLI's last recorded write)
+//   --audio-track, --audio-channel -> render (choose the audio stream or channel)
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--audio-track",
+  "--audio-channel",
   "--active-timeline",
   "--target",
   "--per-clip",
@@ -1216,6 +1259,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--threshold",
   "--threshold-db",
   "--tts-cmd",
+  "--trim-overlap",
   "--verify",
   "--window",
 ]);
@@ -1255,6 +1299,7 @@ const mutating = new Set([
   "add-video",
   "add-text",
   "tts",
+  "dub",
   "crop",
   "cut",
   "duplicate",
@@ -1350,6 +1395,7 @@ export function buildCommandSpecs(commands: readonly string[], summaries: Record
     if (["add-video", "add-audio", "tts", "compile", "detect-scenes", "detect-silence"].includes(name)) {
       prerequisites.push("ffprobe (optional)");
     }
+    if (name === "dub") prerequisites.push("ffprobe", "a local TTS CLI via --tts-cmd");
     if (name === "caption") prerequisites.push("whisper CLI", "ffmpeg (only with --audio-stream)");
     if (name === "tts") prerequisites.push("a local TTS CLI via --tts-cmd");
     if (name === "translate") prerequisites.push("ANTHROPIC_API_KEY or --api-key");

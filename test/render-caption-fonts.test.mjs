@@ -212,3 +212,56 @@ describe("render --burn-captions — draft fonts (ffmpeg)", () => {
     assert.ok(existsSync(out) && statSync(out).size > 0, "expected a non-empty proxy file");
   });
 });
+
+// A caption whose draft font cannot be used here used to be drawn in ffmpeg's default face with "faithful": true.
+describe("render --burn-captions — a missing draft font is named", () => {
+  it("counts captions whose named font is unusable under fidelity.dropped.missing_fonts with the font paths", (t) => {
+    const dir = scratch(t);
+    const ttc = fakeFont(dir, "Collection.TTC");
+    const absent = join(dir, "absent.ttf");
+    const woff = fakeFont(dir, "web.woff2");
+    const texts = [
+      { content: content("One", join(dir, "missing.ttf")), font_path: ttc }, // falls back to an existing file: fine
+      { content: content("Two"), font_path: absent },
+      { content: content("Three"), font_path: woff },
+      { content: content("Four"), font_path: absent }, // same font again: named once
+      { content: content("Six") }, // no font named: the default face is what the draft asks for
+    ];
+    const plan = buildRenderPlan(draftWith(dir, texts), { out: join(dir, "p.mp4"), burnCaptions: true });
+    assert.equal(plan.fidelity.faithful, false);
+    const entry = plan.fidelity.dropped.missing_fonts;
+    assert.equal(entry.count, 3);
+    assert.deepEqual(entry.segment_ids, ["st1", "st2", "st3"]);
+    assert.deepEqual(entry.fonts, [absent, woff]);
+    assert.match(entry.hint, /default face/);
+  });
+
+  it("stays faithful when every named font is found, and ignores fonts when captions are not burned", (t) => {
+    const dir = scratch(t);
+    const ok = buildRenderPlan(draftWith(dir, [{ content: content("Hi"), font_path: fakeFont(dir) }]), {
+      out: join(dir, "p.mp4"),
+      burnCaptions: true,
+    });
+    assert.equal(ok.fidelity.dropped.missing_fonts, undefined);
+    const notBurned = buildRenderPlan(
+      draftWith(dir, [{ content: content("Hi"), font_path: join(dir, "absent.ttf") }]),
+      {
+        out: join(dir, "p.mp4"),
+      },
+    );
+    assert.equal(notBurned.fidelity.dropped.missing_fonts, undefined);
+  });
+
+  it("render --strict refuses and the dry run names the font", (t) => {
+    const dir = scratch(t);
+    const absent = join(dir, "absent.ttf");
+    const draftPath = join(dir, "draft_content.json");
+    writeFileSync(draftPath, JSON.stringify(draftWith(dir, [{ content: content("Hi"), font_path: absent }])));
+    const strict = spawnCli(["render", draftPath, "--burn-captions", "--strict", "--dry-run"]);
+    assert.notEqual(strict.status, 0);
+    assert.match(strict.stderr, /missing_fonts/);
+    const plain = spawnCli(["render", draftPath, "--burn-captions", "--dry-run"]);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.ok(plain.stderr.includes(absent), plain.stderr);
+  });
+});

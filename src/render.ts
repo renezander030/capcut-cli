@@ -46,6 +46,42 @@ export interface RenderOptions {
   progress?: boolean; // stream ffmpeg's own stderr instead of buffering it
   strict?: boolean; // refuse (nothing rendered) when the fidelity census is not faithful
   ffprobeCmd?: string; // ffprobe binary for output verification (default "ffprobe")
+  audioTrack?: number; // which audio stream of each audio source to play (0-based; default the first)
+  audioChannel?: "left" | "right" | "mix"; // play one channel of a stereo source, or both mixed to mono
+  /**
+   * Filled by renderDraft from ffprobe: each audio file's channel count per audio stream (null when unreadable). With
+   * it, --audio-track applies to files that have several streams and --audio-channel to streams that have several
+   * channels; without it (a dry run) both apply as given.
+   */
+  audioProbe?: ReadonlyMap<string, number[] | null>;
+}
+
+/** One audio file of an executed render: how many audio streams it has, which one played and how. */
+export interface AudioSourceReport {
+  path: string;
+  /** Audio streams in the file; null when ffprobe could not count them. */
+  streams: number | null;
+  used: number;
+  /** Channels of the stream that played; null when unknown. */
+  channels: number | null;
+  /** The --audio-channel applied to this file; null when none was asked or its stream is mono. */
+  channel: "left" | "right" | "mix" | null;
+}
+
+/** Which stream of an audio file plays, and whether --audio-channel applies to it. */
+function audioChoice(path: string, opts: RenderOptions): AudioSourceReport {
+  const known = opts.audioProbe?.get(path) ?? null;
+  const chooses = opts.audioTrack !== undefined && (known === null || known.length > 1);
+  const used = chooses ? (opts.audioTrack as number) : 0;
+  const channels = known?.[used] ?? null;
+  const pans = opts.audioChannel !== undefined && (channels === null || channels > 1);
+  return {
+    path,
+    streams: known === null ? null : known.length,
+    used,
+    channels,
+    channel: pans ? (opts.audioChannel ?? null) : null,
+  };
 }
 
 /**
@@ -179,6 +215,8 @@ export interface RenderResult extends RenderPlan {
   executed: boolean;
   /** Present after a real render: the written file's duration against the draft's. */
   verification?: OutputVerification;
+  /** Present after a real render: each audio source's stream count and the stream that played. */
+  audio_sources?: AudioSourceReport[];
 }
 
 /**
@@ -211,8 +249,8 @@ const BASE_CHAIN_FILTERS = ["fps", "scale", "pad", "setsar", "format", "concat",
 // rather than up front — and they fail rather than degrade, because silently
 // dropping them changes the audio (unlike the drawtext/overlay flag fallbacks,
 // which only withhold an explicitly optional extra).
-const AUDIO_CHAIN_FILTERS = ["atrim", "asetpts", "adelay", "anull", "amix"] as const;
-const AUDIO_CONDITIONAL_FILTERS = ["atempo", "volume", "afade"] as const;
+const AUDIO_CHAIN_FILTERS = ["atrim", "asetpts", "adelay", "anull", "amix", "apad"] as const;
+const AUDIO_CONDITIONAL_FILTERS = ["atempo", "volume", "afade", "pan"] as const;
 
 /**
  * Every filter name the -filters probe checks. The chain/probe guard test
@@ -245,9 +283,11 @@ export interface FfmpegCapabilities {
   adelay: boolean;
   anull: boolean;
   amix: boolean;
+  apad: boolean;
   atempo: boolean;
   volume: boolean;
   afade: boolean;
+  pan: boolean;
 }
 
 type ProbedFilterFlags = Record<(typeof PROBED_FILTERS)[number], boolean>;
@@ -393,11 +433,13 @@ interface TextOverlay {
   y: number;
   /** The draft's font file, already escaped for drawtext's fontfile option; undefined = ffmpeg's default face. */
   fontFile?: string;
+  /** The font file the draft names when none of them can be used here; undefined when one resolved or none is named. */
+  missingFont?: string;
 }
 
 function textSegments(draft: Draft): TextOverlay[] {
   const out: TextOverlay[] = [];
-  const fonts = new Map<string, string | undefined>();
+  const fonts = new Map<string, { file?: string; missing?: string }>();
   for (const t of draft.tracks) {
     if (t.type !== "text") continue;
     for (const s of t.segments) {
@@ -405,14 +447,15 @@ function textSegments(draft: Draft): TextOverlay[] {
       const raw = typeof mat?.content === "string" ? extractText(mat.content) : "";
       if (raw) {
         const material = mat as unknown as Record<string, unknown>;
-        if (!fonts.has(s.material_id)) fonts.set(s.material_id, draftFontFile(material));
+        if (!fonts.has(s.material_id)) fonts.set(s.material_id, draftFont(material));
         out.push({
           seg: s,
           text: raw,
           color: safeColor(material.text_color),
           fontSize: Number(material.font_size ?? 15),
           y: s.clip?.transform.y ?? -0.6,
-          fontFile: fonts.get(s.material_id),
+          fontFile: fonts.get(s.material_id)?.file,
+          missingFont: fonts.get(s.material_id)?.missing,
         });
       }
     }
@@ -429,7 +472,7 @@ const FONT_FILE_EXTENSIONS = new Set([".ttf", ".otf", ".ttc"]);
  * material's own `font_path`. Only an existing .ttf/.otf/.ttc file whose path
  * can be written into the filter graph is used.
  */
-function draftFontFile(material: Record<string, unknown>): string | undefined {
+function draftFont(material: Record<string, unknown>): { file?: string; missing?: string } {
   const candidates: unknown[] = [];
   if (typeof material.content === "string") {
     try {
@@ -445,12 +488,14 @@ function draftFontFile(material: Record<string, unknown>): string | undefined {
     const escaped = escapeFilterPath(path);
     if (escaped === undefined) continue;
     try {
-      if (statSync(path).isFile()) return escaped;
+      if (statSync(path).isFile()) return { file: escaped };
     } catch {
       /* missing or unreadable: try the next candidate */
     }
   }
-  return undefined;
+  // A font was named and none could be used: the caption falls back to ffmpeg's default face.
+  const named = candidates.find((path): path is string => typeof path === "string" && path.trim() !== "");
+  return named === undefined ? {} : { missing: named };
 }
 
 /**
@@ -469,6 +514,7 @@ export const FIDELITY_CATEGORIES = [
   "main_track_gaps",
   "overlay_tracks",
   "text",
+  "missing_fonts",
   "stickers",
   "transitions",
   "effects",
@@ -492,6 +538,8 @@ const FIDELITY_HINTS: Record<FidelityCategory, string> = {
   main_track_gaps: "the proxy concatenates main-track segments, so timeline gaps close up and later clips play early",
   overlay_tracks: "extra video tracks are not composited; pass --all-video-tracks",
   text: "text is not drawn on the picture; pass --burn-captions (--soft-captions only adds a subtitle stream)",
+  missing_fonts:
+    "a caption's draft font file is missing or unusable here, so it is drawn in ffmpeg's default face; install the font or point the draft at its file",
   stickers: "sticker tracks are not rendered",
   transitions: "transitions are not rendered; segments cut hard",
   effects: "video effects are not rendered",
@@ -509,6 +557,8 @@ export interface FidelityEntry {
   count: number;
   segment_ids: string[];
   hint: string;
+  /** missing_fonts only: each font file the draft names that could not be used, once. */
+  fonts?: string[];
 }
 
 export interface FidelityCensus {
@@ -610,6 +660,14 @@ export function fidelityCensus(
     }
   }
   if (!opts.burnCaptions) for (const { seg } of textSegments(draft)) add("text", seg.id);
+  const missingFonts: string[] = [];
+  if (opts.burnCaptions) {
+    for (const { seg, missingFont } of textSegments(draft)) {
+      if (missingFont === undefined) continue;
+      add("missing_fonts", seg.id);
+      if (!missingFonts.includes(missingFont)) missingFonts.push(missingFont);
+    }
+  }
 
   const dropped: Partial<Record<FidelityCategory, FidelityEntry>> = {};
   for (const category of FIDELITY_CATEGORIES) {
@@ -619,6 +677,7 @@ export function fidelityCensus(
       count: ids.length,
       segment_ids: ids.slice(0, FIDELITY_ID_CAP),
       hint: FIDELITY_HINTS[category],
+      ...(category === "missing_fonts" ? { fonts: missingFonts } : {}),
     };
   }
   return {
@@ -650,6 +709,112 @@ export interface OutputVerification {
   drift_us?: number;
   tolerance_us: number;
   within_tolerance?: boolean;
+  /**
+   * Set when the proxy cannot play the draft's whole length: it closes main-track gaps, and its picture ends with the
+   * main track's last clip (music or captions past it are cut). The file is then held to what the proxy plays: the
+   * sum of the main-track segment durations.
+   */
+  proxy?: ProxyLength;
+}
+
+export type ProxyShortening = "main_track_gaps" | "past_main_track";
+
+export interface ProxyLength {
+  duration_us: number;
+  reasons: ProxyShortening[];
+  drift_us?: number;
+  within_tolerance?: boolean;
+}
+
+/**
+ * The length the proxy writes when it is shorter than the draft, with why; null when it writes the draft's length (or
+ * there is no main video track to end it). It follows the plan's own arguments: with -shortest the file ends with
+ * the main track (gaps closed); with a soft-caption stream there is no -shortest, so the file runs to its longest
+ * stream: the audio, padded to the draft's length, or else the main track or the last cue, whichever ends later.
+ */
+export function proxyLength(
+  draft: Draft,
+  census: FidelityCensus,
+  toleranceUs: number,
+  streams: { softCaptions: boolean; audio: boolean } = { softCaptions: false, audio: false },
+): ProxyLength | null {
+  const main = mainVideoSegments(draft);
+  if (main.length === 0) return null;
+  const reasons: ProxyShortening[] = [];
+  if (census.dropped.main_track_gaps) reasons.push("main_track_gaps");
+  const mainEnd = Math.max(...main.map((seg) => seg.target_timerange.start + seg.target_timerange.duration));
+  if (census.expected_duration_us - mainEnd > toleranceUs) reasons.push("past_main_track");
+  if (reasons.length === 0) return null;
+  // With --soft-captions and audio, the padded audio carries the file to the draft's length. Without audio the
+  // container ends with the video: ffmpeg leaves the mov_text track out of the file's duration, so a cue past the
+  // main track does not lengthen it (rio, ffmpeg 7.1.5).
+  if (streams.softCaptions && streams.audio) return null;
+  return { duration_us: closedGapsDurationUs(draft), reasons };
+}
+
+const PROXY_REASON_TEXT: Record<ProxyShortening, string> = {
+  main_track_gaps: "closes main-track gaps (fidelity.dropped.main_track_gaps)",
+  past_main_track: "ends with the main track's last clip (music or captions past it are cut)",
+};
+
+/**
+ * What a render tells its caller beyond the JSON result: stderr notes, and the error that fails it. One place for
+ * the exit rules: a duration that misses the draft's fails; a draft with main-track gaps is held to its gaps-closed
+ * length instead (a match is a note, short of it fails); --verify fails any drift and an unmeasured file.
+ */
+export function renderOutcome(
+  result: RenderPlan & Partial<Pick<RenderResult, "verification" | "audio_sources">>,
+  opts: { verify?: boolean; audioTrack?: number } = {},
+): { notes: string[]; error?: string } {
+  const notes: string[] = [];
+  for (const font of result.fidelity.dropped.missing_fonts?.fonts ?? []) {
+    notes.push(`Note: font ${font} is missing or unusable here; its captions are drawn in ffmpeg's default face.`);
+  }
+  for (const source of result.audio_sources ?? []) {
+    if (source.streams !== null && source.streams > 1 && opts.audioTrack === undefined) {
+      notes.push(
+        `Note: ${source.path} has ${source.streams} audio streams; stream 0 played (choose another with --audio-track <n>).`,
+      );
+    }
+  }
+  const check = result.verification;
+  if (!check) return { notes };
+  const proxy = check.proxy;
+  const why = proxy?.reasons.map((reason) => PROXY_REASON_TEXT[reason]).join(" and ");
+  if (proxy?.within_tolerance && !opts.verify) {
+    notes.push(
+      `Note: output is ${check.duration_us}us against the draft's ${check.expected_duration_us}us because the proxy ` +
+        `${why}: it plays ${proxy.duration_us}us; --verify makes this an error.`,
+    );
+    return { notes };
+  }
+  if (proxy?.within_tolerance === false && !opts.verify) {
+    return {
+      notes,
+      error:
+        `render: output duration ${check.duration_us}us is ${proxy.drift_us}us off the ${proxy.duration_us}us the proxy ` +
+        `plays (it ${why}${proxy.reasons.includes("main_track_gaps") ? ", so with gaps closed" : ""}), beyond the ` +
+        `one-frame tolerance of ${check.tolerance_us}us. The file was kept at ${result.output}.`,
+    };
+  }
+  if (opts.verify && !check.verified) {
+    return { notes, error: `render --verify: output could not be verified: ${check.reason}` };
+  }
+  if (check.verified && !check.within_tolerance) {
+    return {
+      notes,
+      error:
+        `render: output duration ${check.duration_us}us drifts ${check.drift_us}us from the draft's ` +
+        `${check.expected_duration_us}us, beyond the one-frame tolerance of ${check.tolerance_us}us. ` +
+        `The file was kept at ${result.output}; the result's \`fidelity\` lists what the proxy dropped (main_track_gaps shortens it).`,
+    };
+  }
+  return { notes };
+}
+
+/** The proxy's length with main-track gaps closed: concat plays each main-track segment for its timeline duration. */
+export function closedGapsDurationUs(draft: Draft): number {
+  return mainVideoSegments(draft).reduce((sum, seg) => sum + seg.target_timerange.duration, 0);
 }
 
 export function frameToleranceUs(fps: number): number {
@@ -690,12 +855,55 @@ export function probeRenderOutput(
   return checkOutputDuration(probe.durationUs, expectedUs, fps);
 }
 
-// atempo only accepts 0.5..2.0 per filter instance; we keep proxy audio simple
-// and only retime when a single atempo can express it.
+// --audio-channel: one channel of a stereo source (left/right) or both mixed down, as mono.
+function panFor(channel: RenderOptions["audioChannel"]): string | null {
+  if (channel === "left") return "pan=mono|c0=c0";
+  if (channel === "right") return "pan=mono|c0=c1";
+  if (channel === "mix") return "pan=mono|c0=0.5*c0+0.5*c1";
+  return null;
+}
+
+/**
+ * A file's audio streams as their channel counts, in stream order, from ffprobe; null when it cannot be read. Each
+ * stream index counts once: ffprobe can list a stream again under each program of a container (MPEG-TS).
+ */
+export function probeAudioStreams(path: string, ffprobeCmd = "ffprobe"): number[] | null {
+  const r = spawnSync(
+    ffprobeCmd,
+    ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels", "-of", "csv=p=0", path],
+    {
+      encoding: "utf-8",
+      timeout: 30_000,
+    },
+  );
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  const byIndex = new Map<number, number>();
+  const lines = r.stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  for (const line of lines) {
+    const match = /^(\d+),(\d*)/.exec(line.trim());
+    if (!match) return null; // not ffprobe's index,channels answer: unknown, so the flags apply as given
+    const index = Number(match[1]);
+    if (!byIndex.has(index)) byIndex.set(index, match[2] === "" ? 0 : Number(match[2]));
+  }
+  return [...byIndex.entries()].sort((x, y) => x[0] - y[0]).map(([, channels]) => channels);
+}
+
+// atempo accepts 0.5..2.0 per filter instance, so a speed outside that range
+// is a chain of stages whose product is the speed (3x = 2 x 1.5, 0.25x = 0.5 x 0.5).
 function atempoFor(speed: number): string | null {
-  if (!speed || speed === 1) return null;
-  if (speed >= 0.5 && speed <= 2) return `atempo=${round3(speed)}`;
-  return null; // out of single-stage range — leave audio at source rate for the proxy
+  if (!speed || speed === 1 || !Number.isFinite(speed) || speed < 0) return null;
+  const stages: number[] = [];
+  let rest = speed;
+  while (rest > 2) {
+    stages.push(2);
+    rest /= 2;
+  }
+  while (rest < 0.5) {
+    stages.push(0.5);
+    rest /= 0.5;
+  }
+  if (Math.abs(rest - 1) > 1e-9) stages.push(rest);
+  return stages.map((stage) => `atempo=${round3(stage)}`).join(",");
 }
 
 function round3(n: number): number {
@@ -917,6 +1125,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
       continue;
     }
     const idx = inputs.length;
+    const choice = audioChoice(path, opts);
     inputs.push({ index: idx, path, kind: "audio" });
     inputArgs.push("-i", path);
     const srcStart = round3(seg.source_timerange.start / US);
@@ -933,6 +1142,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     const chain = [
       `atrim=start=${srcStart}:duration=${srcDur}`,
       "asetpts=PTS-STARTPTS",
+      panFor(choice.channel ?? undefined),
       tempo,
       vol !== 1 ? `volume=${round3(vol)}` : null,
       fadeIn > 0 ? `afade=t=in:st=0:d=${round3(fadeIn)}` : null,
@@ -940,7 +1150,11 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
       `adelay=${startMs}|${startMs}`,
     ].filter(Boolean);
     const label = `a${idx}`;
-    filterParts.push(`[${idx}:a]${chain.join(",")}[${label}]`);
+    const stream =
+      choice.used > 0 || (opts.audioTrack !== undefined && choice.streams === null)
+        ? `${idx}:a:${choice.used}`
+        : `${idx}:a`;
+    filterParts.push(`[${stream}]${chain.join(",")}[${label}]`);
     audioLabels.push(`[${label}]`);
   }
 
@@ -951,6 +1165,12 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
   } else if (audioLabels.length > 1) {
     aOut = "aout";
     filterParts.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:normalize=0[${aOut}]`);
+  }
+  if (aOut) {
+    // A sound shorter than the timeline must not end the proxy: pad the mix to the draft's duration, so
+    // -shortest stops at the video and the written file keeps the timeline's length.
+    filterParts.push(`[${aOut}]apad=whole_dur=${round3(expectedDurationUs(draft) / US)}[apadded]`);
+    aOut = "apadded";
   }
 
   // --- soft captions (optional): SRT input + mov_text stream ---
@@ -1096,6 +1316,17 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
       });
     }
   }
+  // Each audio file is probed once: which stream plays and whether --audio-channel applies depend on what it holds.
+  const audioPaths = [
+    ...new Set(
+      audioSegments(draft)
+        .map((seg) => findAudioPath(draft, seg.material_id))
+        .filter((path): path is string => !!path && existsSync(path)),
+    ),
+  ];
+  effective.audioProbe = new Map(
+    audioPaths.map((path) => [path, probeAudioStreams(path, opts.ffprobeCmd ?? "ffprobe")]),
+  );
   const basePlan = buildRenderPlan(draft, effective);
   const plan = { ...basePlan, capabilities, skipped: [...basePlan.skipped, ...fallbackSkipped] };
   if (opts.strict) assertFaithful(plan.fidelity);
@@ -1109,13 +1340,29 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     throw missingFiltersError(
       opts.ffmpegCmd ?? "ffmpeg",
       missingConditional,
-      "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades). " +
+      "which this draft's audio needs (atempo = speed retiming, volume = per-segment volume, afade = fades, " +
+        "pan = --audio-channel). " +
         "Rendering without them would silently change the audio, so render refuses instead of degrading. ",
     );
   }
 
   if (opts.dryRun) {
     return { ...plan, ok: true, executed: false };
+  }
+
+  // One report per audio file: how many streams it has and which one plays. A file without the chosen stream among
+  // several, or with no audio stream at all, is refused before ffmpeg runs.
+  const audio_sources = audioPaths.map((path) => audioChoice(path, effective));
+  for (const source of audio_sources) {
+    if (source.streams === 0) {
+      throw new Error(`render: ${source.path} has no audio stream. Nothing was rendered.`);
+    }
+    if (source.streams !== null && source.used >= source.streams) {
+      throw new Error(
+        `render: ${source.path} has ${source.streams} audio streams; --audio-track ${source.used} does not exist ` +
+          "(streams count from 0). Nothing was rendered.",
+      );
+    }
   }
 
   // The SRT must exist before ffmpeg opens its inputs; it stays next to the
@@ -1204,5 +1451,22 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     plan.fps,
     opts.ffprobeCmd ?? "ffprobe",
   );
-  return { ...plan, ok: true, executed: true, verification };
+  // A file whose measured duration misses the draft's by more than a frame is not a faithful proxy. Where the proxy
+  // cannot play the draft's whole length (gaps closed, picture ending with the last main-track clip), the file is held
+  // to what the proxy plays instead: matching it is ok, falling short of it is a truncation like any other.
+  let ok = !(verification.verified && verification.within_tolerance === false);
+  const proxy = proxyLength(draft, plan.fidelity, verification.tolerance_us, {
+    softCaptions: plan.softCaptions !== undefined,
+    audio: plan.inputs.some((input) => input.kind === "audio"),
+  });
+  if (proxy) {
+    if (verification.verified && verification.duration_us !== undefined) {
+      const against = checkOutputDuration(verification.duration_us, proxy.duration_us, plan.fps);
+      proxy.drift_us = against.drift_us;
+      proxy.within_tolerance = against.within_tolerance;
+      ok = against.within_tolerance === true;
+    }
+    verification.proxy = proxy;
+  }
+  return { ...plan, ok, executed: true, verification, audio_sources };
 }

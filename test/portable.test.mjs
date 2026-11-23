@@ -15,22 +15,23 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { buildPortable } from "../scripts/build-portable.mjs";
+import { buildPortable, PORTABLE_TARGETS, portableTarget } from "../scripts/build-portable.mjs";
 
-const runtimeRoot = process.env.CAPCUT_PORTABLE_NODE_ROOT || resolve(dirname(process.execPath), "..");
-const target = `${process.platform}-${process.arch}`;
+const windows = process.platform === "win32";
+const runtimeRoot =
+  process.env.CAPCUT_PORTABLE_NODE_ROOT ||
+  (windows ? dirname(process.execPath) : resolve(dirname(process.execPath), ".."));
+const target = portableTarget();
+// symlinks and /bin/sh runtime fakes do not exist on Windows; the native Windows run covers the cmd launchers
+const unixOnly = windows ? "Symlinks and sh runtime fakes are Unix-only" : false;
 if (process.env.CAPCUT_PORTABLE_REQUIRED === "1") {
-  assert.ok(
-    ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target),
-    `Unsupported portable target: ${target}`,
-  );
+  assert.ok(PORTABLE_TARGETS.includes(target), `Unsupported portable target: ${target}`);
   assert.ok(existsSync(join(runtimeRoot, "LICENSE")), "A complete official Node distribution is required");
   if (process.env.CAPCUT_PORTABLE_EXPECT_TARGET) assert.equal(target, process.env.CAPCUT_PORTABLE_EXPECT_TARGET);
 }
 describe("portable distribution", {
   skip:
-    !["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].includes(target) ||
-    !existsSync(join(runtimeRoot, "LICENSE"))
+    !PORTABLE_TARGETS.includes(target) || !existsSync(join(runtimeRoot, "LICENSE"))
       ? "Requires a supported host and a complete official Node distribution (CAPCUT_PORTABLE_NODE_ROOT)"
       : false,
 }, () => {
@@ -41,17 +42,28 @@ describe("portable distribution", {
   before(() => {
     root = mkdtempSync(join(tmpdir(), "portable-test-"));
     receipt = buildPortable({ outDir: join(root, "archives"), ...(nodeRoot ? { nodeRoot } : {}) });
-    const result = spawnSync("tar", ["-xzf", receipt.archive, "-C", root], { encoding: "utf8" });
+    // Windows' own tar (bsdtar) reads zip; Git's GNU tar on a runner's PATH does not
+    const tar = windows ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
+    const result = spawnSync(tar, [windows ? "-xf" : "-xzf", receipt.archive, "-C", root], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     extracted = join(root, `capcut-cli-v${receipt.version}-${target}`);
   });
   after(() => rmSync(root, { recursive: true, force: true }));
   function invoke(command, args) {
-    const result = spawnSync(join(extracted, command), args, {
+    // a .cmd launcher runs through cmd.exe, as a user's double click or prompt does; /s /c keeps the quoted path whole
+    const [file, argv, extra] = windows
+      ? [
+          "cmd.exe",
+          ["/d", "/s", "/c", `"${[`"${join(extracted, `${command}.cmd`)}"`, ...args.map((a) => `"${a}"`)].join(" ")}"`],
+          { windowsVerbatimArguments: true },
+        ]
+      : [join(extracted, command), args, {}];
+    const result = spawnSync(file, argv, {
+      ...extra,
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: "",
+        PATH: windows ? process.env.SystemRoot && join(process.env.SystemRoot, "System32") : "",
         NODE_OPTIONS: "",
         XDG_CONFIG_HOME: join(root, "config"),
         CAPCUT_CLI_APP_VERSIONS: join(root, "config", "versions.json"),
@@ -85,7 +97,7 @@ describe("portable distribution", {
     extracted = moved;
     assert.equal(invoke("capcut", ["--version"]).trim(), receipt.version);
   });
-  it("runs through absolute and relative symlink chains without Node on PATH", () => {
+  it("runs through absolute and relative symlink chains without Node on PATH", { skip: unixOnly }, () => {
     const bin = join(root, "linked commands");
     mkdirSync(bin);
     for (const command of ["capcut", "capcut-cli"]) {
@@ -101,7 +113,7 @@ describe("portable distribution", {
       assert.equal(result.stdout.trim(), receipt.version);
     }
   });
-  it("preserves relative arguments and the working directory through a linked launcher", () => {
+  it("preserves relative arguments and the working directory through a linked launcher", { skip: unixOnly }, () => {
     const link = join(root, "linked-cli");
     symlinkSync(relative(root, join(extracted, "capcut")), link);
     writeFileSync(
@@ -147,7 +159,7 @@ describe("portable distribution", {
     );
     assert.deepEqual(readFileSync(receipt.archive), before);
   });
-  it("rejects a runtime for another target before producing an archive", () => {
+  it("rejects a runtime for another target before producing an archive", { skip: unixOnly }, () => {
     const wrong = join(root, "wrong-target");
     mkdirSync(join(wrong, "bin"), { recursive: true });
     writeFileSync(join(wrong, "LICENSE"), "Example runtime");
@@ -159,7 +171,7 @@ describe("portable distribution", {
     assert.throws(() => buildPortable({ outDir: join(root, "wrong-output"), nodeRoot: wrong }), /runtime must be/);
     assert.equal(existsSync(join(root, "wrong-output")), false);
   });
-  it("rejects a runtime for another architecture on the same platform", () => {
+  it("rejects a runtime for another architecture on the same platform", { skip: unixOnly }, () => {
     const wrong = join(root, "wrong-architecture");
     mkdirSync(join(wrong, "bin"), { recursive: true });
     writeFileSync(join(wrong, "LICENSE"), "Example runtime");

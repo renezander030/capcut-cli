@@ -5,13 +5,12 @@
 // and guess the open-in-CapCut step. Issue context: the repo has 50+ commands;
 // the missing utility was first-run friction, not another feature.
 
-import { existsSync, readFileSync } from "node:fs";
-import { stripBom } from "./bom.js";
+import { existsSync } from "node:fs";
+import { readSubtitleCues } from "./bom.js";
 import { loadDraft, saveDraft } from "./draft.js";
 import { addAudio, addText, addVideo, type CanvasConfig, initDraft, type TemplateReport } from "./factory.js";
 import { lintDraft, summarize } from "./lint.js";
 import { probeMedia } from "./probe.js";
-import { parseSrt } from "./srt.js";
 import { diagnoseDraftStore } from "./store.js";
 
 // Fallback when ffprobe is unavailable or the input has no readable duration.
@@ -82,6 +81,9 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
   ] as const) {
     if (p && !existsSync(p)) throw new Error(`Input for ${flag} not found: ${p}`);
   }
+  // Read and check the subtitles before anything is created, with the same strict UTF-8 reader as import-srt.
+  const cues = opts.srt ? readSubtitleCues(opts.srt) : [];
+  if (opts.srt && cues.length === 0) throw new Error(`SRT produced 0 cues: ${opts.srt}`);
 
   const steps: QuickstartStep[] = [];
 
@@ -151,8 +153,6 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
   }
 
   if (opts.srt) {
-    const cues = parseSrt(stripBom(readFileSync(opts.srt, "utf-8")));
-    if (cues.length === 0) throw new Error(`SRT produced 0 cues: ${opts.srt}`);
     for (const cue of cues) {
       addText(draft, filePath, { text: cue.text, start: cue.startUs, duration: cue.endUs - cue.startUs });
     }

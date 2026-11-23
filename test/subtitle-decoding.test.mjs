@@ -55,6 +55,30 @@ describe("subtitle decoding integrity", () => {
     });
   }
 
+  it("quickstart --srt and detect-retakes --srt refuse a non-UTF-8 file like import-srt", (t) => {
+    const fix = setup(t),
+      latin1 = join(fix.dir, "latin1.srt"),
+      drafts = join(fix.dir, "drafts");
+    // "Café" in Latin-1: the 0xE9 byte is not UTF-8 and used to become U+FFFD silently.
+    writeFileSync(latin1, Buffer.from("1\r\n00:00:00,000 --> 00:00:02,000\r\nCaf\xe9 au lait\r\n", "latin1"));
+    const quick = spawnCli([
+      "quickstart",
+      "latin1-draft",
+      "--srt",
+      latin1,
+      "--drafts",
+      drafts,
+      "--template",
+      "bundled",
+    ]);
+    assert.notEqual(quick.status, 0);
+    assert.match(quick.stderr, /not valid UTF-8.*Convert the file to UTF-8/);
+    assert.equal(existsSync(join(drafts, "latin1-draft", "draft_content.json")), false);
+    const retakes = spawnCli(["detect-retakes", "--srt", latin1]);
+    assert.notEqual(retakes.status, 0);
+    assert.match(retakes.stderr, /not valid UTF-8.*Convert the file to UTF-8/);
+  });
+
   it("rejects malformed stdin bytes before writing", (t) => {
     const fix = setup(t),
       before = readFileSync(fix.path);
@@ -85,5 +109,28 @@ describe("subtitle decoding integrity", () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /not valid UTF-8/);
     assert.equal(existsSync(out), false);
+  });
+});
+
+describe("readSubtitleCues", () => {
+  it("reads SRT and WebVTT through the strict UTF-8 reader", async (t) => {
+    const { readSubtitleCues } = await import("../dist/bom.js");
+    const fix = setup(t);
+    const srt = join(fix.dir, "a.srt");
+    const vtt = join(fix.dir, "a.vtt");
+    const bad = join(fix.dir, "bad.vtt");
+    writeFileSync(srt, "﻿1\n00:00:01,000 --> 00:00:02,000\nCafé\n");
+    writeFileSync(vtt, "WEBVTT\n\n00:01.000 --> 00:02.000\nCafé\n");
+    writeFileSync(
+      bad,
+      Buffer.concat([Buffer.from("WEBVTT\n\n00:01.000 --> 00:02.000\nCaf"), Buffer.from([0xe9]), Buffer.from("\n")]),
+    );
+    for (const path of [srt, vtt]) {
+      assert.deepEqual(
+        readSubtitleCues(path).map((c) => [c.startUs, c.endUs, c.text]),
+        [[1_000_000, 2_000_000, "Café"]],
+      );
+    }
+    assert.throws(() => readSubtitleCues(bad), /not valid UTF-8/);
   });
 });

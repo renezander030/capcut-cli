@@ -76,6 +76,11 @@ export function buildTtsArgv(
   return { argv, delivery };
 }
 
+/** True when {text} starts an argument of the template and the text begins with "-": the tool would read it as an option. */
+export function ttsTextWouldBeOption(template: string, text: string): boolean {
+  return text.startsWith("-") && splitCommandTemplate(template).some((token) => token.startsWith("{text}"));
+}
+
 /**
  * First free `<stem><ext>`, `<stem>-2<ext>`, ... path in `dir` (created if
  * needed). Numbering instead of overwriting: an earlier voiceover may still be

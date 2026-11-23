@@ -2,6 +2,21 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-11-22
+
+### Added
+- CapCut 9.5.0 is recorded as supported on a reported round trip, and 9.8.0 as untested with its report that a compiled draft opens (no round trip yet), each with its evidence link, and `capcut version` names the write-only route for JianYing 11.x drafts ([#50](https://github.com/renezander030/capcut-cli/issues/50), [#178](https://github.com/renezander030/capcut-cli/pull/178), [easy-jianying#1](https://github.com/YeJe-cpu/easy-jianying/issues/1)).
+- `render --audio-track <n>` plays that audio stream of each audio file that has several (a single-stream file plays its one stream), and `--audio-channel left|right|mix` takes one channel of a stereo stream as mono (a mono stream plays unchanged); the result lists each audio file once with its stream count and the stream that played, stderr names a file with several streams once, and a track a multi-stream file does not have is refused before rendering ([lossless-cut#256](https://github.com/mifi/lossless-cut/issues/256)).
+- `import-srt`, `quickstart --srt`, `detect-retakes --srt`, `compile` captions and `dub` read WebVTT as well as SRT, told apart by the `WEBVTT` header: titled headers with metadata lines, NOTE/STYLE/REGION blocks, cue identifiers, cue settings, `mm:ss.ttt` timestamps, and voice, class, language and ruby tags ([bili-sub2txt#1](https://github.com/Lin-Ruipeng/bili-sub2txt/issues/1)).
+- Portable Windows x64 download: `capcut-cli-v<version>-win-x64.zip` bundles the official Node runtime with `capcut.cmd` and `capcut-cli.cmd` launchers and a `.sha256` file; every release builds and runs it on a Windows runner before publishing ([rea-capcut#12](https://github.com/Xiangyu-CAS/rea-capcut/issues/12)).
+- `dub` turns a subtitle track into speech: one clip per SRT or WebVTT cue from your local TTS command, each placed at its cue's start; speech that would run into the next cue is refused, or cut there with `--trim-overlap` ([Concat#770](https://github.com/jub0t/Concat/issues/770)).
+
+### Fixed
+- `render --burn-captions` no longer reports `"faithful": true` when a caption's draft font file is missing or unusable: `fidelity.dropped.missing_fonts` counts those captions and names each font, stderr names it, and `--strict` refuses ([mockingbird#276](https://github.com/NirjharBhattacharjee/mockingbird/issues/276)).
+- `quickstart --srt` and `detect-retakes --srt` refuse a subtitle file that is not valid UTF-8, as `import-srt` does, instead of writing replacement characters into captions ([subtitleedit#16978](https://github.com/SubtitleEdit/subtitleedit/issues/16978)).
+- `render` pads audio to the timeline, so a sound shorter than the video no longer cuts the proxy to its length, and a render whose written duration misses the draft's by more than a frame now exits non-zero instead of reporting success; a draft the proxy cannot play whole (main-track gaps, which it closes, or music and captions past the last clip, where its picture ends) is held to what the proxy plays instead (matching it is a stderr note and an error only with `--verify`, falling short of it fails) ([ComeCut#26](https://github.com/juntaosun/ComeCut/issues/26)).
+- `render` plays audio at its segment speed above 2x and below 0.5x by chaining tempo stages, where it used to stay at 1x while the video was retimed ([Concat#762](https://github.com/jub0t/Concat/issues/762)).
+
 ## [0.36.0] - 2026-11-20
 
 ### Added

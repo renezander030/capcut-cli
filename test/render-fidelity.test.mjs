@@ -13,6 +13,7 @@ import {
   probeRenderOutput,
   renderDraft,
 } from "../dist/render.js";
+import { writeFakeFfmpeg } from "./helpers/fake-ffmpeg.mjs";
 import { spawnCli } from "./helpers/spawn-cli.mjs";
 
 const US = 1_000_000;
@@ -233,53 +234,7 @@ describe("render output verification (pure)", () => {
 
 // A fake ffmpeg with every probed filter and libx264 that "renders" by
 // touching its last argument (the output path).
-function fakeFfmpeg(dir) {
-  const path = join(dir, "fake-ffmpeg");
-  const filters = [
-    "fps",
-    "scale",
-    "pad",
-    "setsar",
-    "format",
-    "trim",
-    "setpts",
-    "concat",
-    "atrim",
-    "asetpts",
-    "adelay",
-    "anull",
-    "amix",
-    "atempo",
-    "volume",
-    "afade",
-    "drawtext",
-    "overlay",
-  ];
-  writeFileSync(
-    path,
-    [
-      "#!/bin/sh",
-      'case "$*" in',
-      "  *-filters*)",
-      "    cat <<'EOF'",
-      ...filters.map((name) => ` ... ${name.padEnd(18)} V->V       fake.`),
-      "EOF",
-      "    exit 0 ;;",
-      "  *-encoders*)",
-      "    cat <<'EOF'",
-      " V..... libx264              H.264",
-      " S..... mov_text             3GPP Timed Text subtitle",
-      "EOF",
-      "    exit 0 ;;",
-      "esac",
-      'for last; do :; done; : > "$last"',
-      "exit 0",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(path, 0o755);
-  return path;
-}
+const fakeFfmpeg = (dir) => writeFakeFfmpeg(dir, { encoders: ["libx264", "mov_text"], writesOutput: true });
 
 // A fake ffprobe reporting the container duration given in FAKE_FFPROBE_DURATION (seconds).
 function fakeFfprobe(dir) {
@@ -391,19 +346,150 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
     assert.equal(typeof r.json.output, "string", "the existing output path field is unchanged");
   });
 
-  it("drift beyond tolerance is reported; only --verify turns it into a failure, and the file stays", () => {
+  it("drift beyond tolerance fails the render with or without --verify, and the file stays", () => {
     const s = setup();
     after(s.cleanup);
     const lax = run(s.dir, "3.5");
-    assert.equal(lax.r.status, 0, lax.r.stderr);
+    assert.notEqual(lax.r.status, 0);
+    assert.equal(lax.r.json.ok, false);
     assert.equal(lax.r.json.verification.within_tolerance, false);
     assert.equal(lax.r.json.verification.drift_us, -500_000);
+    assert.match(lax.r.stderr, /drifts -500000us/);
+    assert.ok(existsSync(lax.out), "the rendered file is kept");
 
     const strict = run(s.dir, "3.5", ["--verify"]);
     assert.notEqual(strict.r.status, 0);
     assert.equal(strict.r.json.verification.within_tolerance, false);
     assert.match(strict.r.stderr, /drifts -500000us/);
     assert.ok(existsSync(strict.out), "the rendered file is kept");
+  });
+
+  // plainDraft: clips 0-2 s and 2-4 s, music 0-4 s, draft 4 s. `gap` moves clip 2 to 3-4 s (a 1 s gap the proxy
+  // closes); `tail` runs the music and the draft to 6 s, past the last clip, where the proxy's picture ends.
+  function proxyRun(dir, durationSeconds, { gap = false, tail = false, audio = true, cueEnd = 0 } = {}, extra = []) {
+    const draft = plainDraft(dir);
+    if (!audio) draft.tracks.splice(1, 1);
+    if (cueEnd) {
+      const cue = draft.tracks.find((t) => t.type === "text").segments.at(-1);
+      cue.target_timerange.duration = cueEnd - cue.target_timerange.start;
+    }
+    if (gap) {
+      draft.tracks[0].segments[1].target_timerange.start = 3 * US;
+      draft.tracks[0].segments[1].target_timerange.duration = US;
+    }
+    if (tail) {
+      draft.duration = 6 * US;
+      draft.tracks[1].segments[0].target_timerange.duration = 6 * US;
+      draft.tracks[1].segments[0].source_timerange.duration = 6 * US;
+    }
+    const draftPath = writeDraft(dir, draft);
+    const args = ["render", draftPath, "--out", join(dir, "p.mp4"), "--ffmpeg-cmd", fakeFfmpeg(dir)];
+    return spawnCli([...args, "--ffprobe-cmd", fakeFfprobe(dir), ...extra], {
+      env: { FAKE_FFPROBE_DURATION: String(durationSeconds) },
+    });
+  }
+
+  it("a gapped draft whose file matches its gaps-closed length is ok, with a note; --verify fails it", () => {
+    const s = setup();
+    after(s.cleanup);
+    const lax = proxyRun(s.dir, "3", { gap: true }); // 2 s + 1 s of main-track clips
+    assert.equal(lax.status, 0, lax.stderr);
+    assert.equal(lax.json.ok, true);
+    assert.equal(lax.json.fidelity.faithful, false);
+    assert.ok(lax.json.fidelity.dropped.main_track_gaps);
+    assert.deepEqual(lax.json.verification.proxy, {
+      duration_us: 3 * US,
+      reasons: ["main_track_gaps"],
+      drift_us: 0,
+      within_tolerance: true,
+    });
+    assert.match(lax.stderr, /closes main-track gaps/);
+
+    const strict = proxyRun(s.dir, "3", { gap: true }, ["--verify"]);
+    assert.notEqual(strict.status, 0);
+    assert.equal(strict.json.ok, false, "a render that exits non-zero reports ok false");
+    assert.match(strict.stderr, /drifts -1000000us/);
+  });
+
+  it("a gapped draft whose file is short of its gaps-closed length fails", () => {
+    const s = setup();
+    after(s.cleanup);
+    const r = proxyRun(s.dir, "2.2", { gap: true });
+    assert.notEqual(r.status, 0);
+    assert.equal(r.json.ok, false);
+    assert.equal(r.json.verification.proxy.within_tolerance, false);
+    assert.equal(r.json.verification.proxy.drift_us, -800_000);
+    assert.match(r.stderr, /gaps closed/);
+  });
+
+  it("music running past the last clip: a file of the main track's length is ok with a note, a shorter one fails", () => {
+    const s = setup();
+    after(s.cleanup);
+    const lax = proxyRun(s.dir, "4", { tail: true });
+    assert.equal(lax.status, 0, lax.stderr);
+    assert.equal(lax.json.ok, true);
+    assert.deepEqual(lax.json.verification.proxy, {
+      duration_us: 4 * US,
+      reasons: ["past_main_track"],
+      drift_us: 0,
+      within_tolerance: true,
+    });
+    assert.match(lax.stderr, /ends with the main track's last clip/);
+    const strict = proxyRun(s.dir, "4", { tail: true }, ["--verify"]);
+    assert.notEqual(strict.status, 0);
+    const short = proxyRun(s.dir, "3", { tail: true });
+    assert.notEqual(short.status, 0);
+    assert.equal(short.json.verification.proxy.drift_us, -1_000_000);
+  });
+
+  it("gaps and a tail together: held to the gaps-closed length of the main track", () => {
+    const s = setup();
+    after(s.cleanup);
+    const lax = proxyRun(s.dir, "3", { gap: true, tail: true });
+    assert.equal(lax.status, 0, lax.stderr);
+    assert.deepEqual(lax.json.verification.proxy.reasons, ["main_track_gaps", "past_main_track"]);
+    assert.equal(lax.json.verification.proxy.duration_us, 3 * US);
+    assert.notEqual(proxyRun(s.dir, "2", { gap: true, tail: true }).status, 0);
+  });
+
+  // --soft-captions muxes a subtitle stream and drops -shortest. With audio the padded audio carries the file to the
+  // draft's length. Without audio the container ends with the video: ffmpeg does not count the mov_text track in the
+  // file's duration (rio, ffmpeg 7.1.5: video 3.000 s, subtitle 5.000 s, file 3.000 s), so a cue past the main track
+  // does not lengthen it.
+  it("with --soft-captions and audio, a gapped or tailed draft writes the draft's length and passes", () => {
+    const s = setup();
+    after(s.cleanup);
+    for (const shape of [{ gap: true }, { tail: true }, { gap: true, tail: true }]) {
+      const draftSeconds = shape.tail ? "6" : "4";
+      const r = proxyRun(s.dir, draftSeconds, shape, ["--soft-captions"]);
+      assert.equal(r.status, 0, `${JSON.stringify(shape)}: ${r.stderr}`);
+      assert.equal(r.json.ok, true);
+      assert.equal(r.json.verification.proxy, undefined, JSON.stringify(shape));
+      assert.equal(r.json.verification.within_tolerance, true);
+    }
+  });
+
+  it("with --soft-captions and no audio, a gapped draft is held to its main track or last cue", () => {
+    const s = setup();
+    after(s.cleanup);
+    const r = proxyRun(s.dir, "3", { gap: true, audio: false }, ["--soft-captions"]); // clips 2 s + 1 s, cue ends at 2 s
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.verification.proxy.duration_us, 3 * US);
+    assert.notEqual(proxyRun(s.dir, "2", { gap: true, audio: false }, ["--soft-captions"]).status, 0);
+  });
+
+  it("with --soft-captions and no audio, a cue past the main track does not lengthen the file", () => {
+    const s = setup();
+    after(s.cleanup);
+    // clips 0-2 s and 3-4 s, the last cue ends at 4 s: ffmpeg writes a 3 s container (the gaps-closed video)
+    const r = proxyRun(s.dir, "3", { gap: true, audio: false, cueEnd: 4 * US }, ["--soft-captions"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.ok, true);
+    assert.equal(r.json.verification.proxy.duration_us, 3 * US);
+    assert.notEqual(
+      proxyRun(s.dir, "3", { gap: true, audio: false, cueEnd: 4 * US }, ["--soft-captions", "--verify"]).status,
+      0,
+    );
   });
 
   it("missing ffprobe: verified:false normally, a clear failure with --verify", () => {
@@ -427,6 +513,7 @@ describe("render output verification (fake ffmpeg + ffprobe)", { skip: isWindows
 
     const strict = spawnCli([...args, "--verify"]);
     assert.notEqual(strict.status, 0);
+    assert.equal(strict.json.ok, false, "a render that exits non-zero reports ok false");
     assert.match(strict.stderr, /could not be verified: ffprobe is unavailable/);
   });
 });
