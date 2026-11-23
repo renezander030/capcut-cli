@@ -1,13 +1,20 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The generated command references for a `describe` schema: one renderer for the writer and its drift test. */
-export function renderCommandDocs(schema) {
+const usageCell = (command) => `\`${command.usage.replaceAll("|", "\\|")}\``;
+const translatedRow = /^\| `([^`]+)` \| `[^`]*` \| (?:是|否) \| (.*) \|$/;
+
+/**
+ * The generated command references for a `describe` schema: one renderer for the writer and its drift test.
+ * Given the current Chinese page, it also renders that page: the command set, order, usage and mutates columns come
+ * from `describe`, each summary stays as translated there (a command without one shows its English summary until
+ * someone translates it), and the text around the table is kept.
+ */
+export function renderCommandDocs(schema, { zhCN } = {}) {
   const rows = schema.commands.map(
-    (command) =>
-      `| \`${command.name}\` | \`${command.usage.replaceAll("|", "\\|")}\` | ${command.mutates ? "yes" : "no"} | ${command.summary} |`,
+    (command) => `| \`${command.name}\` | ${usageCell(command)} | ${command.mutates ? "yes" : "no"} | ${command.summary} |`,
   );
   const markdown = [
     "# Generated command reference",
@@ -19,7 +26,28 @@ export function renderCommandDocs(schema) {
     ...rows,
     "",
   ].join("\n");
-  return { json: `${JSON.stringify(schema, null, 2)}\n`, markdown };
+  const docs = { json: `${JSON.stringify(schema, null, 2)}\n`, markdown };
+  if (zhCN !== undefined) docs.zhCN = renderTranslatedReference(schema, zhCN);
+  return docs;
+}
+
+function renderTranslatedReference(schema, current) {
+  const lines = current.split("\n");
+  const first = lines.findIndex((line) => line.startsWith("| `"));
+  if (first < 0) throw new Error("the Chinese command reference has no command table");
+  let end = first;
+  while (end < lines.length && lines[end].startsWith("| `")) end++;
+  const summaries = new Map();
+  for (const line of lines.slice(first, end)) {
+    const match = line.match(translatedRow);
+    if (!match) throw new Error(`unreadable row in the Chinese command reference: ${line}`);
+    summaries.set(match[1], match[2]);
+  }
+  const rows = schema.commands.map(
+    (command) =>
+      `| \`${command.name}\` | ${usageCell(command)} | ${command.mutates ? "是" : "否"} | ${summaries.get(command.name) ?? command.summary} |`,
+  );
+  return [...lines.slice(0, first), ...rows, ...lines.slice(end)].join("\n");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -28,7 +56,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.status !== 0) throw new Error(result.stderr || `describe exited ${result.status}`);
-  const docs = renderCommandDocs(JSON.parse(result.stdout));
+  const zhPath = "docs/command-reference.zh-CN.md";
+  const docs = renderCommandDocs(JSON.parse(result.stdout), {
+    zhCN: readFileSync(zhPath, "utf8").replaceAll("\r\n", "\n"),
+  });
   writeFileSync("docs/command-reference.json", docs.json);
   writeFileSync("docs/command-reference.md", docs.markdown);
+  writeFileSync(zhPath, docs.zhCN);
 }

@@ -17,6 +17,20 @@ import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { buildPortable, PORTABLE_TARGETS, portableTarget } from "../scripts/build-portable.mjs";
 
+// Windows keeps a handle on a folder for a moment after a process run from it exits (seen on the windows-2025 release
+// runner, 23 Nov: EPERM on this rename while the same test passed twice in CI); retry that briefly, nothing else.
+function renameWhenReleased(from, to) {
+  for (let tries = 0; ; tries++) {
+    try {
+      return renameSync(from, to);
+    } catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code) || tries >= 20)
+        throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+}
+
 const windows = process.platform === "win32";
 const runtimeRoot =
   process.env.CAPCUT_PORTABLE_NODE_ROOT ||
@@ -93,7 +107,7 @@ describe("portable distribution", {
   });
   it("remains relocatable when the directory contains spaces", () => {
     const moved = join(root, "relocated package");
-    renameSync(extracted, moved);
+    renameWhenReleased(extracted, moved);
     extracted = moved;
     assert.equal(invoke("capcut", ["--version"]).trim(), receipt.version);
   });

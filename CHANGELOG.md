@@ -2,6 +2,12 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.1] - 2026-11-23
+
+### Fixed
+- The Chinese command reference (`docs/command-reference.zh-CN.md`) lists every command `capcut describe` knows, `dub`, `matting`, `catalogue` and `detect-retakes` among them, with current usages; it is generated with the English reference and checked against `describe` like it.
+- The Windows relocation check of the portable archive waits for Windows to release the folder after the bundled runtime exits, instead of failing on a momentary lock.
+
 ## [0.37.0] - 2026-11-22
 
 ### Added
