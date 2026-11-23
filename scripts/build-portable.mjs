@@ -108,10 +108,11 @@ const SH_LAUNCHER = [
   "",
 ].join("\n");
 
-/** What differs per target once the runtime is checked: its file name, the launchers and the archive format. */
+/** What differs per target: where the runtime sits in a Node distribution, its name, the launchers and the archive. */
 function portableLayout(windows, tar) {
   if (windows) {
     return {
+      runtimeSource: ["node.exe"],
       runtimeName: "node.exe",
       extension: "zip",
       writeLaunchers: (payload) => {
@@ -121,6 +122,7 @@ function portableLayout(windows, tar) {
     };
   }
   return {
+    runtimeSource: ["bin", "node"],
     runtimeName: "node",
     extension: "tar.gz",
     writeLaunchers: (payload) => {
@@ -146,10 +148,11 @@ export function buildPortable({ outDir, nodeRoot, root = sourceRoot, target = po
   // Windows' own tar (bsdtar); Git's GNU tar earlier on a runner's PATH reads "C:\\..." as a remote host
   const tar = process.platform === "darwin" ? "gtar" : process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
   if (!windows && !run(tar, ["--version"]).includes("GNU tar")) throw new Error("Building portable archives requires GNU tar (gnu-tar on macOS)");
-  const node = windows ? join(nodeRoot, "node.exe") : join(nodeRoot, "bin", "node");
+  const layout = portableLayout(windows, tar);
+  const node = join(nodeRoot, ...layout.runtimeSource);
   const license = join(nodeRoot, "LICENSE");
   if (!existsSync(node) || !existsSync(license)) {
-    throw new Error(windows ? "Use a complete official Node distribution with node.exe and LICENSE" : "Use a complete official Node distribution with bin/node and LICENSE");
+    throw new Error(`Use a complete official Node distribution with ${layout.runtimeSource.join("/")} and LICENSE`);
   }
   let runtime;
   if (target === host) {
@@ -175,7 +178,6 @@ export function buildPortable({ outDir, nodeRoot, root = sourceRoot, target = po
   const name = `capcut-cli-v${version}-${target}`;
   const output = resolve(outDir);
   mkdirSync(output, { recursive: true });
-  const layout = portableLayout(windows, tar);
   const archive = join(output, `${name}.${layout.extension}`);
   const checksum = `${archive}.sha256`;
   if (existsSync(archive) || existsSync(checksum)) throw new Error("Portable output already exists; choose an empty output directory");
