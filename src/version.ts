@@ -89,6 +89,23 @@ const SUPPORTED_APP_VERSIONS: Record<AppSource, VersionRegistryEntry> = {
   },
 };
 
+/**
+ * Where a version sits against its app's registry entry: the first
+ * known-broken boundary it reaches (any version >= `min`), and whether it is
+ * newer than the evidence ceiling. The one place these two registry rules are
+ * read, so the write guard and the `capcut version` assessment cannot drift.
+ */
+function registryVerdict(
+  registry: VersionRegistryEntry,
+  version: string | null,
+): { broken: VersionRegistryEntry["broken"][number] | undefined; beyondCeiling: boolean } {
+  if (version === null) return { broken: undefined, beyondCeiling: false };
+  return {
+    broken: registry.broken.find((entry) => atLeast(version, entry.min)),
+    beyondCeiling: registry.ceiling !== null && !atLeast(registry.ceiling, version),
+  };
+}
+
 // Highest top-level `version` schema integer observed in any real draft corpus
 // (constant across all known CapCut 8.x fixtures). Evidence level: reported —
 // the observing fixtures are not committed in this repo. A larger value means
@@ -199,11 +216,10 @@ export function assessWriteSafety(draft: Draft, storeVersion: string | null): Wr
   const app_version = candidates.sort((a, b) => (atLeast(a, b) ? -1 : 1))[0] ?? null;
 
   const registry = SUPPORTED_APP_VERSIONS[app_source];
-  const beyondCeiling = app_version !== null && registry.ceiling !== null && !atLeast(registry.ceiling, app_version);
+  const { broken: brokenMatch, beyondCeiling } = registryVerdict(registry, app_version);
   const beyond_known_range = beyondCeiling || (schema_int !== null && schema_int > KNOWN_SCHEMA_INT_MAX);
   const detected = { app_source, app_version, schema_int, beyond_known_range };
 
-  const brokenMatch = app_version !== null ? registry.broken.find((entry) => atLeast(app_version, entry.min)) : null;
   if (brokenMatch) {
     return {
       action: "refuse",
@@ -370,7 +386,8 @@ function assessSupport(
       notes: [...notes, "No `platform.app_version` field — cannot assess compatibility"],
     };
   }
-  const brokenMatch = matrix.broken.find((entry) => atLeast(app_version, entry.min));
+  const verdict = registryVerdict(matrix, app_version);
+  const brokenMatch = verdict.broken;
   if (brokenMatch) {
     notes.push(`Version ${app_version} listed as known-broken (>= ${brokenMatch.min}: ${brokenMatch.reason})`);
     return { status: "known-broken", evidence: "reported", notes };
@@ -396,7 +413,7 @@ function assessSupport(
     );
     return { status: "untested", evidence: "expected-compatible", notes };
   }
-  if (matrix.ceiling !== null && !atLeast(matrix.ceiling, app_version)) {
+  if (verdict.beyondCeiling) {
     notes.push(
       `Version ${app_version} is beyond the known range (${matrix.range}) — no evidence this CLI can round-trip it`,
     );
