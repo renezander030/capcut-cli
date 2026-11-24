@@ -8,12 +8,36 @@ on:
   push:
     tags:
       - 'v*'
+  # Proof only, no publish: npm trusts this workflow file whatever its trigger, so a manual run exchanges the
+  # job's OIDC token and says whether npm would take the publish (.github/scripts/npm-trust-proof.mjs).
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  npm-trust-proof:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token npm exchanges; nothing is published
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Exchange the OIDC token with npm for the package
+        run: node .github/scripts/npm-trust-proof.mjs --out npm-trust-proof.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: npm-trust-proof
+          path: npm-trust-proof.json
+
   portable-native:
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +81,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    if: github.event_name == 'push'
     needs: portable-native
     runs-on: ubuntu-latest
     permissions:
@@ -116,8 +141,11 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm with provenance
-        run: npm publish --provenance --access public
+      - name: npm publish of each version npm lacks; one npm already serves with the same contents is skipped
+        id: already-published
+        env:
+          NPM_CONFIG_PROVENANCE: true
+        run: node .github/scripts/npm-publish-new.mjs --dir . --out already-published.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
