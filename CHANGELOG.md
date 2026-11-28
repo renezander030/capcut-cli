@@ -2,6 +2,22 @@
 
 All notable changes to capcut-cli are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.38.0] - 2026-11-27
+
+### Added
+- Match synthesized dub clip peaks with explicit `--normalize-peak`, bounded boosts and per-clip gain reports; meter played prefixes before saving and keep dry-run free of TTS/assets. ([pyvideotrans#1251](https://github.com/jianchang512/pyvideotrans/issues/1251))
+- Render selected timeline intervals with `--start`/`--end` on an in-memory draft copy, rebasing video, audio and captions without changing source files. ([Concat#848](https://github.com/jub0t/Concat/issues/848))
+- `remove --ripple --ripple-captions` trims/drops intersecting caption timing and shifts later content while retaining crossing-media and animated-caption safeguards. ([lossless-cut #3209](https://github.com/mifi/lossless-cut/issues/3209)).
+- `lint --fix` wraps existing Thai, Lao, Khmer and Myanmar lines at Unicode boundaries while moving editable style ranges with inserted newlines and preserving cue timing. ([OpenCut #924](https://github.com/OpenCut-app/OpenCut/issues/924)).
+- Thai, Lao, Khmer and Myanmar captions join without inserted token spaces and split long aligner tokens at Unicode boundaries; estimated internal timings and unresolved caps are reported explicitly. ([OpenCut #924](https://github.com/OpenCut-app/OpenCut/issues/924)).
+- WebM proxy outputs select VP9/Opus/WebVTT, refuse incompatible video encoders, and check required encoder availability before rendering; MP4 defaults stay unchanged. ([lossless-cut #3230](https://github.com/mifi/lossless-cut/issues/3230)).
+- Proxy fidelity reports known HDR/wide-gamut source metadata and refuses it with `render --strict`; source-color evidence stays explicit when unavailable. ([Concat #858](https://github.com/jub0t/Concat/issues/858)).
+- SRT/WebVTT imports map inline bold, italic, underline, and font-color tags to editable ranges across import, quickstart, and compile; escaped tags stay literal, and keyword emphasis preserves inline styling. ([OpenCut #925](https://github.com/OpenCut-app/OpenCut/issues/925), [pyvideotrans #1341](https://github.com/jianchang512/pyvideotrans/issues/1341)).
+- Subtitle input honors UTF-16LE/BE byte-order marks, and `import-srt`, `import-ass`, `quickstart`, `detect-retakes` and `dub` accept `--encoding` for an explicitly chosen code page. Strict UTF-8 remains the default for files without a BOM; malformed text and NUL characters are refused before a draft is written ([OpenCut#925](https://github.com/OpenCut-app/OpenCut/issues/925), [subtitleedit#16978](https://github.com/SubtitleEdit/subtitleedit/issues/16978)).
+- `README.ja.md`, a Japanese translation of the README, linked from the language selector in all three READMEs and shipped in the npm package.
+
 ## [0.37.1] - 2026-11-23
 
 ### Fixed
@@ -38,12 +54,6 @@ All notable changes to capcut-cli are documented here. The format follows [Keep 
 ### Added
 - Portable macOS downloads for Apple Silicon and Intel, with a bundled Node runtime, license and SHA-256 checksum. Both CLI names run without Node or npm on PATH.
 - Native macOS archive checks before release publication, including relocated paths, bundled-template compilation and runtime-target validation.
-
-## [Unreleased]
-
-### Added
-
-- `README.ja.md`, a Japanese translation of the README, linked from the language selector in all three READMEs and shipped in the npm package.
 
 ## [0.34.0] — 2026-11-14
 

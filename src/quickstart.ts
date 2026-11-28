@@ -7,6 +7,7 @@
 
 import { existsSync } from "node:fs";
 import { readSubtitleCues } from "./bom.js";
+import { setTextRanges } from "./decorators.js";
 import { loadDraft, saveDraft } from "./draft.js";
 import { addAudio, addText, addVideo, type CanvasConfig, initDraft, type TemplateReport } from "./factory.js";
 import { lintDraft, summarize } from "./lint.js";
@@ -26,6 +27,7 @@ export interface QuickstartOptions {
   video?: string;
   audio?: string;
   srt?: string;
+  encoding?: string;
   ffprobeCmd?: string;
   now?: number;
   /** Canvas override from --ratio / --width / --height (factory.resolveCanvas); template canvas when absent. */
@@ -82,7 +84,7 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
     if (p && !existsSync(p)) throw new Error(`Input for ${flag} not found: ${p}`);
   }
   // Read and check the subtitles before anything is created, with the same strict UTF-8 reader as import-srt.
-  const cues = opts.srt ? readSubtitleCues(opts.srt) : [];
+  const cues = opts.srt ? readSubtitleCues(opts.srt, opts.encoding) : [];
   if (opts.srt && cues.length === 0) throw new Error(`SRT produced 0 cues: ${opts.srt}`);
 
   const steps: QuickstartStep[] = [];
@@ -154,7 +156,8 @@ export function runQuickstart(opts: QuickstartOptions): QuickstartResult {
 
   if (opts.srt) {
     for (const cue of cues) {
-      addText(draft, filePath, { text: cue.text, start: cue.startUs, duration: cue.endUs - cue.startUs });
+      const added = addText(draft, filePath, { text: cue.text, start: cue.startUs, duration: cue.endUs - cue.startUs });
+      if (cue.spans?.length) setTextRanges(draft, added.segmentId, cue.spans);
     }
     added.captions = cues.length;
     steps.push({ step: "import-srt", ok: true, detail: `Added ${cues.length} caption segment(s).` });

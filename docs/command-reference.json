@@ -1,6 +1,6 @@
 {
   "name": "capcut-cli",
-  "version": "0.37.1",
+  "version": "0.38.0",
   "schema_version": 2,
   "description": "Edit CapCut/JianYing draft_content.json directly. JSON in, JSON out.",
   "global_flags": [
@@ -1576,6 +1576,35 @@
       ],
       "options": [
         {
+          "name": "normalize_peak",
+          "flags": [
+            "--normalize-peak"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Normalize each synthesized clip to a true-peak dBFS target (-60 to 0); measures its played prefix with FFmpeg before saving. Use without a separate volume adjustment."
+        },
+        {
+          "name": "max_gain_db",
+          "flags": [
+            "--max-gain-db"
+          ],
+          "type": "number",
+          "required": false,
+          "description": "Largest normalization boost in dB; clamped clips report the estimated level actually reached.",
+          "default": 20
+        },
+        {
+          "name": "ffmpeg_cmd",
+          "flags": [
+            "--ffmpeg-cmd"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "FFmpeg executable for peak normalization.",
+          "default": "ffmpeg"
+        },
+        {
           "name": "tts_cmd",
           "flags": [
             "--tts-cmd"
@@ -1621,6 +1650,15 @@
           "required": false,
           "description": "Audio track for the clips.",
           "default": "dub"
+        },
+        {
+          "name": "encoding",
+          "flags": [
+            "--encoding"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Subtitle text encoding (for example windows-1252 or shift_jis). UTF BOMs are detected automatically; without a BOM or this option, strict UTF-8 is required."
         },
         {
           "name": "ffprobe_cmd",
@@ -1849,7 +1887,7 @@
     {
       "name": "remove",
       "summary": "Remove a segment, its emptied track, and the materials that orphans.",
-      "usage": "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]",
+      "usage": "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple] [--ripple-captions]",
       "positionals": [
         {
           "name": "project",
@@ -1863,6 +1901,15 @@
         }
       ],
       "options": [
+        {
+          "name": "ripple_captions",
+          "flags": [
+            "--ripple-captions"
+          ],
+          "type": "boolean",
+          "required": false,
+          "description": "With --ripple, trim/drop intersecting static caption timing; crossing media remains refused and retained text is unchanged."
+        },
         {
           "name": "keep_track",
           "flags": [
@@ -1888,7 +1935,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Close the removed time span across every track; refuses crossing segments."
+          "description": "Close the removed time span across every track; refuses crossing segments unless caption adjustment is selected."
         },
         {
           "name": "active_timeline",
@@ -3806,6 +3853,15 @@
       ],
       "options": [
         {
+          "name": "encoding",
+          "flags": [
+            "--encoding"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Subtitle text encoding (for example windows-1252 or shift_jis). UTF BOMs are detected automatically; without a BOM or this option, strict UTF-8 is required."
+        },
+        {
           "name": "track_name",
           "flags": [
             "--track-name"
@@ -4157,6 +4213,15 @@
         }
       ],
       "options": [
+        {
+          "name": "encoding",
+          "flags": [
+            "--encoding"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Subtitle text encoding (for example windows-1252 or shift_jis). UTF BOMs are detected automatically; without a BOM or this option, strict UTF-8 is required."
+        },
         {
           "name": "track_name",
           "flags": [
@@ -6496,6 +6561,15 @@
       ],
       "options": [
         {
+          "name": "encoding",
+          "flags": [
+            "--encoding"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Subtitle text encoding (for example windows-1252 or shift_jis). UTF BOMs are detected automatically; without a BOM or this option, strict UTF-8 is required."
+        },
+        {
           "name": "video",
           "flags": [
             "--video"
@@ -6730,6 +6804,24 @@
       ],
       "options": [
         {
+          "name": "start",
+          "flags": [
+            "--start"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Start of the preview range (time format; default 0). The source draft is unchanged."
+        },
+        {
+          "name": "end",
+          "flags": [
+            "--end"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "End of the preview range (time format; default timeline end). Requires start < end within the timeline."
+        },
+        {
           "name": "out",
           "flags": [
             "--out"
@@ -6773,7 +6865,7 @@
           ],
           "type": "string",
           "required": false,
-          "description": "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering."
+          "description": "Video encoder for the proxy (-c:v; default libvpx-vp9 for WebM, libx264 otherwise). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering."
         },
         {
           "name": "crf",
@@ -6833,7 +6925,7 @@
           ],
           "type": "boolean",
           "required": false,
-          "description": "Mux the text-track cues as a toggleable mov_text subtitle stream (the SRT is also written next to the output as <preview>.srt); skipped with a note when ffmpeg has no mov_text encoder."
+          "description": "Mux text-track cues as toggleable subtitles (WebVTT for WebM, mov_text otherwise); also write <preview>.srt. Skipped with a note when the selected subtitle encoder is unavailable."
         },
         {
           "name": "all_video_tracks",
@@ -7220,6 +7312,15 @@
         }
       ],
       "options": [
+        {
+          "name": "encoding",
+          "flags": [
+            "--encoding"
+          ],
+          "type": "string",
+          "required": false,
+          "description": "Subtitle text encoding (for example windows-1252 or shift_jis). UTF BOMs are detected automatically; without a BOM or this option, strict UTF-8 is required."
+        },
         {
           "name": "track_name",
           "flags": [

@@ -1,15 +1,12 @@
 /**
  * Which script a caption is written in, and what that changes: the limits a
  * line and a reading speed are held to (lint), and how whisper's words are
- * joined and grouped into cues (caption). Latin and everything else share one
- * bucket; Chinese, Japanese and Korean each get their own because their
- * subtitling conventions differ from Latin ones and from each other.
+ * joined and grouped into cues (caption). CJK scripts have their own limits;
+ * Thai, Lao, Khmer and Myanmar also need joining without inserted word spaces.
  */
 
-/** The script a caption is written in, as far as the line-length and
- * reading-speed rules care: Latin (and everything else), or one of the three
- * CJK scripts whose subtitling conventions differ from Latin ones. */
-export type CaptionScript = "latin" | "zh" | "ja" | "ko";
+/** Script selection for caption joining, grouping and optional lint limits. */
+export type CaptionScript = "latin" | "zh" | "ja" | "ko" | "th" | "lo" | "km" | "my";
 
 export interface ScriptLimit {
   maxCharsPerLine?: number;
@@ -36,6 +33,13 @@ export const CJK_SCRIPT_LIMITS: ScriptLimits = {
   ko: { maxCharsPerLine: 16, maxCharsPerSecond: 12 },
 };
 
+const SOUTHEAST_ASIAN: Array<[CaptionScript, RegExp]> = [
+  ["th", /\p{Script=Thai}/u],
+  ["lo", /\p{Script=Lao}/u],
+  ["km", /\p{Script=Khmer}/u],
+  ["my", /\p{Script=Myanmar}/u],
+];
+
 const KANA = /[\u3040-\u30ff]/;
 const HANGUL = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/;
 const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
@@ -52,6 +56,7 @@ const CJK_ANY =
  */
 export function captionScript(text: string): CaptionScript {
   let total = 0;
+  const southeastCounts = new Map<CaptionScript, number>();
   let cjk = 0;
   let kana = 0;
   let hangul = 0;
@@ -59,6 +64,9 @@ export function captionScript(text: string): CaptionScript {
   for (const ch of text) {
     if (/\s/.test(ch)) continue;
     total++;
+    for (const [script, pattern] of SOUTHEAST_ASIAN) {
+      if (pattern.test(ch)) southeastCounts.set(script, (southeastCounts.get(script) ?? 0) + 1);
+    }
     if (KANA.test(ch)) {
       kana++;
       cjk++;
@@ -72,7 +80,11 @@ export function captionScript(text: string): CaptionScript {
       cjk++;
     }
   }
-  if (total === 0 || cjk * 2 < total) return "latin";
+  if (total === 0) return "latin";
+  if (cjk * 2 < total) {
+    for (const [script, count] of southeastCounts) if (count * 2 >= total) return script;
+    return "latin";
+  }
   if (kana > 0) return "ja";
   if (hangul > 0) return "ko";
   if (han > 0) return "zh";
@@ -80,12 +92,12 @@ export function captionScript(text: string): CaptionScript {
 }
 
 /**
- * How a cue's words are joined into its text: Chinese and Japanese are written
- * without spaces, so a space between two of whisper's tokens would land in the
- * caption; Korean and Latin scripts are written with them.
+ * Join Chinese, Japanese and Southeast Asian source tokens without inserting
+ * spaces; preserve spaces already inside a supplied token. Korean and Latin
+ * tokens keep the existing space separator.
  */
 export function wordSeparator(script: CaptionScript): string {
-  return script === "zh" || script === "ja" ? "" : " ";
+  return script === "zh" || script === "ja" || isSoutheastAsianScript(script) ? "" : " ";
 }
 
 export interface GroupingDefaults {
@@ -112,7 +124,48 @@ export function groupingDefaults(script: CaptionScript): GroupingDefaults {
       return { karaokeMaxWords: Number.POSITIVE_INFINITY, karaokeMaxChars: 13, lineMaxChars: 13 };
     case "ko":
       return { karaokeMaxWords: 4, karaokeMaxChars: 16, lineMaxChars: 16 };
+    case "th":
+    case "lo":
+    case "km":
+    case "my":
+      return { karaokeMaxWords: Number.POSITIVE_INFINITY, karaokeMaxChars: 28, lineMaxChars: 42 };
     default:
       return { karaokeMaxWords: 4, karaokeMaxChars: 28, lineMaxChars: 42 };
   }
+}
+
+/** These scripts use lexical and grapheme boundaries rather than inserted word spaces. */
+export function isSoutheastAsianScript(script: CaptionScript): boolean {
+  return script === "th" || script === "lo" || script === "km" || script === "my";
+}
+
+/** Split at word boundaries when possible, with a grapheme-safe fallback for a long word. */
+export function spacelessTextChunks(text: string, maxChars: number, locale: string): string[] {
+  if (text.length === 0) return [];
+  if (!Number.isFinite(maxChars) || text.length <= maxChars) return [text];
+  if (maxChars < 1) throw new Error("maxChars must be at least 1");
+  const wordEnds = new Set(
+    [...new Intl.Segmenter(locale, { granularity: "word" }).segment(text)].map(
+      (part) => part.index + part.segment.length,
+    ),
+  );
+  const edges = [...new Intl.Segmenter(locale, { granularity: "grapheme" }).segment(text)].map(
+    (part) => part.index + part.segment.length,
+  );
+  const result: string[] = [];
+  let start = 0;
+  let next = 0;
+  while (start < text.length) {
+    let end: number | undefined;
+    let wordEnd: number | undefined;
+    for (let at = next; at < edges.length && edges[at] <= start + maxChars; at++) {
+      end = edges[at];
+      if (wordEnds.has(end)) wordEnd = end;
+    }
+    end = wordEnd ?? end ?? edges[next];
+    result.push(text.slice(start, end));
+    start = end;
+    while (next < edges.length && edges[next] <= start) next++;
+  }
+  return result;
 }

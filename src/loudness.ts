@@ -315,3 +315,70 @@ export function applyLoudness(draft: Draft, report: LoudnessReport): number {
   }
   return changed;
 }
+
+export interface PeakNormalization {
+  measured_peak_dbfs: number;
+  gain_db: number;
+  volume: number;
+  estimated_peak_dbfs: number;
+  clamped: boolean;
+}
+
+export function peakNormalizationOptions(targetPeakDbfs: number, maxGainDb = DEFAULT_MAX_GAIN_DB) {
+  if (!Number.isFinite(targetPeakDbfs) || targetPeakDbfs < -60 || targetPeakDbfs > 0) {
+    throw new Error("--normalize-peak must be a dBFS level between -60 and 0 (for example -3).");
+  }
+  if (!Number.isFinite(maxGainDb) || maxGainDb < 0) throw new Error("--max-gain-db must be a number >= 0.");
+  return { targetPeakDbfs, maxGainDb };
+}
+
+/** Meter only the played prefix; validate all clips before the caller writes any segment gain. */
+export function normalizeClipPeak(
+  path: string,
+  durationUs: number,
+  opts: { targetPeakDbfs: number; maxGainDb: number; ffmpegCmd?: string },
+): PeakNormalization {
+  peakNormalizationOptions(opts.targetPeakDbfs, opts.maxGainDb);
+  if (!Number.isFinite(durationUs) || durationUs <= 0)
+    throw new Error("Peak measurement needs a positive played duration.");
+  const command = opts.ffmpegCmd ?? "ffmpeg";
+  const result = spawnSync(
+    command,
+    [
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      path,
+      "-t",
+      (durationUs / 1e6).toFixed(6),
+      "-map",
+      "0:a:0",
+      "-vn",
+      "-af",
+      "ebur128=peak=true",
+      "-f",
+      "null",
+      "-",
+    ],
+    { encoding: "utf-8", timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      `Peak measurement failed with '${command}' (${result.error?.message ?? `exit ${result.status}`}): ${(result.stderr ?? "").slice(-600)}`,
+    );
+  }
+  const peak = parseEbur128(`${result.stdout ?? ""}${result.stderr ?? ""}`).peak;
+  if (peak === null)
+    throw new Error(`No finite true-peak reading for ${path}; silent or unreadable audio cannot be normalized.`);
+  const wanted = opts.targetPeakDbfs - peak;
+  const gain = Math.min(wanted, opts.maxGainDb);
+  const volume = 10 ** (gain / 20);
+  if (!Number.isFinite(volume) || volume <= 0) throw new Error("Peak normalization produced an invalid gain.");
+  return {
+    measured_peak_dbfs: peak,
+    gain_db: round(gain, 3),
+    volume,
+    estimated_peak_dbfs: round(peak + gain, 3),
+    clamped: wanted > opts.maxGainDb,
+  };
+}

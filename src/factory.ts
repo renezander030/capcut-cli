@@ -2312,6 +2312,8 @@ export interface RemoveSegmentOptions {
    * segment crosses that span, because silently slicing it would change
    * source media; remove/trim the named blocker explicitly first. */
   ripple?: boolean;
+  /** Adjust intersecting static captions, retaining the crossing-media refusal. Requires ripple. */
+  rippleCaptions?: boolean;
 }
 
 export interface RemoveSegmentResult {
@@ -2325,6 +2327,7 @@ export interface RemoveSegmentResult {
   durationBefore: number;
   durationAfter: number;
   rippleShifted: number;
+  captionAdjustments?: { trimmed: number; dropped: number; retained_text_unchanged: true };
 }
 
 /**
@@ -2337,52 +2340,114 @@ export interface RemoveSegmentResult {
  * fresh init draft).
  */
 export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOptions = {}): RemoveSegmentResult {
-  const found = requireSegment(draft, segId);
-  const { track, segment, index } = found;
+  if (opts.rippleCaptions && !opts.ripple) throw new Error("--ripple-captions requires --ripple.");
+  const { track, segment, index } = requireSegment(draft, segId);
   const durationBefore = draft.duration;
   const removedStart = segment.target_timerange.start;
   const removedEnd = removedStart + segment.target_timerange.duration;
+  if (opts.rippleCaptions && !(removedEnd > removedStart)) {
+    throw new Error("--ripple-captions needs a positive removed time span; nothing was changed.");
+  }
+  const intersects = (candidate: Segment) => {
+    const start = candidate.target_timerange.start;
+    return start < removedEnd && start + candidate.target_timerange.duration > removedStart;
+  };
+  const neutralCompanions = createCompanionMaterials("text").materials;
+  const plainCaption = (candidate: Segment) => {
+    const refs = candidate.keyframe_refs;
+    if (refs !== undefined && (!Array.isArray(refs) || refs.length > 0)) return false;
+    for (const ref of candidate.extra_material_refs ?? []) {
+      const found = findMaterialGlobal(draft, ref);
+      if (!found) return false;
+      const neutral = neutralCompanions.find((item) => item.type === found.type);
+      if (!neutral) return false;
+      const keys = Object.keys(found.material).filter((key) => key !== "id");
+      const defaults = neutral.data as Record<string, unknown>;
+      if (
+        keys.length !== Object.keys(defaults).length - 1 ||
+        !keys.every(
+          (key) =>
+            Object.hasOwn(defaults, key) && JSON.stringify(found.material[key]) === JSON.stringify(defaults[key]),
+        )
+      )
+        return false;
+    }
+    const lists = candidate.common_keyframes;
+    if (lists === undefined) return true;
+    if (!Array.isArray(lists)) return false;
+    return lists.every((list) => {
+      if (!list || typeof list !== "object") return false;
+      const frames = (list as { keyframe_list?: unknown }).keyframe_list;
+      return Array.isArray(frames) && frames.length === 0;
+    });
+  };
+  const canAdjust = (candidateTrack: Track, candidate: Segment) =>
+    opts.rippleCaptions &&
+    candidateTrack.type === "text" &&
+    ((candidate.target_timerange.start >= removedStart &&
+      candidate.target_timerange.start + candidate.target_timerange.duration <= removedEnd) ||
+      plainCaption(candidate));
 
+  // Validate every blocker before any splice, time edit or material sweep.
   if (opts.ripple) {
     const blockers = draft.tracks.flatMap((candidateTrack) =>
-      candidateTrack.segments.filter((candidate) => {
-        if (candidate === segment) return false;
-        const start = candidate.target_timerange.start;
-        const end = start + candidate.target_timerange.duration;
-        return start < removedEnd && end > removedStart;
-      }),
+      candidateTrack.segments.filter(
+        (candidate) => candidate !== segment && intersects(candidate) && !canAdjust(candidateTrack, candidate),
+      ),
     );
     if (blockers.length > 0) {
       throw new Error(
         `Ripple delete ${removedStart}us-${removedEnd}us crosses ${blockers.length} other segment(s): ` +
           `${blockers
             .slice(0, 5)
-            .map((s) => s.id)
-            .join(", ")}. Remove or trim them first; nothing was changed.`,
+            .map((item) => item.id)
+            .join(", ")}. Remove or trim them first; nothing was changed.` +
+          (opts.rippleCaptions
+            ? " Crossing media and captions carrying keyframes or companion resources remain blockers."
+            : ""),
       );
     }
   }
-
   track.segments.splice(index, 1);
   let trackRemoved = false;
   if (track.segments.length === 0 && !opts.keepTrack) {
-    draft.tracks = draft.tracks.filter((t) => t !== track);
+    draft.tracks = draft.tracks.filter((item) => item !== track);
     trackRemoved = true;
   }
-
   let rippleShifted = 0;
+  const captionAdjustments = opts.rippleCaptions
+    ? { trimmed: 0, dropped: 0, retained_text_unchanged: true as const }
+    : undefined;
   if (opts.ripple) {
     const amount = removedEnd - removedStart;
+    const mapTime = (time: number) => (time <= removedStart ? time : time >= removedEnd ? time - amount : removedStart);
     for (const candidateTrack of draft.tracks) {
+      const survivors: Segment[] = [];
       for (const candidate of candidateTrack.segments) {
-        if (candidate.target_timerange.start >= removedEnd) {
+        if (captionAdjustments && candidateTrack.type === "text" && intersects(candidate)) {
+          const oldStart = candidate.target_timerange.start;
+          const oldEnd = oldStart + candidate.target_timerange.duration;
+          const start = mapTime(oldStart);
+          const end = mapTime(oldEnd);
+          if (end <= start) {
+            captionAdjustments.dropped++;
+            continue;
+          }
+          candidate.target_timerange.start = start;
+          candidate.target_timerange.duration = end - start;
+          if (candidate.source_timerange) {
+            candidate.source_timerange.duration = Math.round((end - start) * (candidate.speed || 1));
+          }
+          captionAdjustments.trimmed++;
+        } else if (candidate.target_timerange.start >= removedEnd) {
           candidate.target_timerange.start -= amount;
           rippleShifted++;
         }
+        survivors.push(candidate);
       }
+      if (captionAdjustments) candidateTrack.segments = survivors;
     }
   }
-
   let materialsRemoved = 0;
   let materialsByType: Record<string, { removed: number; kept: number }> = {};
   if (!opts.keepMaterials) {
@@ -2390,16 +2455,12 @@ export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOp
     materialsRemoved = swept.removed;
     materialsByType = swept.byType;
   }
-
   let maxEnd = 0;
-  for (const t of draft.tracks) {
-    for (const seg of t.segments) {
-      const end = seg.target_timerange.start + seg.target_timerange.duration;
-      if (end > maxEnd) maxEnd = end;
-    }
+  for (const item of draft.tracks) {
+    for (const candidate of item.segments)
+      maxEnd = Math.max(maxEnd, candidate.target_timerange.start + candidate.target_timerange.duration);
   }
   draft.duration = maxEnd;
-
   return {
     segmentId: segment.id,
     trackId: track.id,
@@ -2411,6 +2472,7 @@ export function removeSegment(draft: Draft, segId: string, opts: RemoveSegmentOp
     durationBefore,
     durationAfter: maxEnd,
     rippleShifted,
+    ...(captionAdjustments ? { captionAdjustments } : {}),
   };
 }
 
