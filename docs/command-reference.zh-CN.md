@@ -36,7 +36,7 @@
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | 是 | 读取或设置视频/图片片段的源素材裁剪（--ratio 预设、--rect x,y,w,h 或 --reset）。 |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | 是 | 把一段时间范围提取为一个独立的新草稿。 |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | 是 | 在相同的时间线位置，把片段复制到源轨道上方的轨道。 |
-| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]` | 是 | 删除片段、被它清空的轨道，以及由此孤立的素材；--ripple 会安全地闭合所有轨道上的空档。 |
+| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple] [--ripple-captions]` | 是 | 删除片段、被它清空的轨道，以及由此孤立的素材；--ripple 会安全地闭合所有轨道上的空档。 |
 | `keyframe` | `capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] \| --batch` | 是 | 添加关键帧（位置/缩放/旋转/透明度/音量）；单个或 --batch 批量。 |
 | `transition` | `capcut transition <project> <id> <slug> [--duration <time>]` | 是 | 在片段之间添加转场。 |
 | `mask` | `capcut mask <project> <id> <slug> [options] \| --off` | 是 | 应用蒙版（线性/圆形/爱心/……），带几何参数，或用 --off 移除。 |

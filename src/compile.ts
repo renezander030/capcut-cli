@@ -1140,6 +1140,9 @@ function populateDraft(
               else
                 warnings.push(`compile captions styleRef '${operation.styleRef}' did not resolve; base style retained`);
             }
+            if (cue.spans?.length) setTextRanges(draft, result.segmentId, cue.spans);
+            if (cue.unsupportedStyles)
+              warnings.push(`captions cue ${cue.index}: ${cue.unsupportedStyles} unsupported inline style(s)`);
             maxEnd = Math.max(maxEnd, cue.endUs + offset);
             segments++;
           }

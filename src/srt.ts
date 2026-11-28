@@ -9,6 +9,8 @@
 //   ...
 // Accepts '.' or ',' as the ms separator. Index lines are optional.
 
+import type { TextRangeInput } from "./decorators.js";
+import { parseSubtitleMarkup } from "./subtitle-markup.js";
 import { toStoredOffset } from "./text-offsets.js";
 import { srtTime, vttTime } from "./time.js";
 
@@ -17,6 +19,8 @@ export interface SrtCue {
   startUs: number;
   endUs: number;
   text: string;
+  spans?: TextRangeInput[];
+  unsupportedStyles?: number;
 }
 
 const TS = /^(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})/;
@@ -26,7 +30,7 @@ function tsToUs(h: string, m: string, s: string, ms: string): number {
   return ((parseInt(h, 10) * 3600 + parseInt(m, 10) * 60 + parseInt(s, 10)) * 1000 + parseInt(msPadded, 10)) * 1000;
 }
 
-export function parseSrt(content: string): SrtCue[] {
+export function parseSrt(content: string, styled = false): SrtCue[] {
   const cues: SrtCue[] = [];
   const lines = content.replace(/\r\n?/g, "\n").split("\n");
   let i = 0;
@@ -51,7 +55,8 @@ export function parseSrt(content: string): SrtCue[] {
       i++;
     }
     if (endUs <= startUs) throw new Error(`SRT cue ${idx} has end <= start`);
-    cues.push({ index: idx, startUs, endUs, text: textLines.join("\n") });
+    const raw = textLines.join("\n");
+    cues.push({ index: idx, startUs, endUs, ...(styled ? parseSubtitleMarkup(raw) : { text: raw }) });
     autoIdx = idx;
   }
   return cues;
@@ -74,12 +79,14 @@ function vttTimeToUs(value: string): number | null {
  * Cue text as an editor shows it: voice, class, language and ruby tags and inline timestamps removed (ruby
  * annotations too), <b>/<i>/<u> kept as in SRT, and the WebVTT character references decoded.
  */
-function vttCueText(lines: string[]): string {
-  return lines
+function vttCueText(lines: string[], styled = false): string {
+  const raw = lines
     .join("\n")
     .replace(/<rt>[\s\S]*?<\/rt>/g, "")
     .replace(/<\d[\d:.]*>/g, "")
-    .replace(/<\/?(?:v|c|lang|ruby|rt)(?:[.\s][^>]*)?>/g, "")
+    .replace(/<\/?(?:v|c|lang|ruby|rt)(?:[.\s][^>]*)?>/g, "");
+  if (styled) return raw;
+  return raw
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ")
@@ -92,7 +99,7 @@ function vttCueText(lines: string[]): string {
  * WebVTT cues: the WEBVTT header (with an optional title and metadata lines), NOTE, STYLE and REGION blocks,
  * cue identifiers, cue settings, mm:ss.ttt and many-digit-hour timestamps. Cues are numbered 1..n in file order.
  */
-export function parseVtt(content: string): SrtCue[] {
+export function parseVtt(content: string, styled = false): SrtCue[] {
   const lines = content.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
   if (!/^WEBVTT(?:[ \t].*)?$/.test(lines[0] ?? "")) {
     throw new Error("Invalid WebVTT: the file must start with a WEBVTT line");
@@ -118,14 +125,15 @@ export function parseVtt(content: string): SrtCue[] {
     }
     const index = cues.length + 1;
     if (endUs <= startUs) throw new Error(`WebVTT cue ${index} has end <= start`);
-    cues.push({ index, startUs, endUs, text: vttCueText(block.slice(at + 1)) });
+    const raw = vttCueText(block.slice(at + 1), styled);
+    cues.push({ index, startUs, endUs, ...(styled ? parseSubtitleMarkup(raw) : { text: raw }) });
   }
   return cues;
 }
 
 /** Cues from SRT or WebVTT text, told apart by the WEBVTT header. */
-export function parseSubtitles(content: string): SrtCue[] {
-  return /^﻿?WEBVTT/.test(content) ? parseVtt(content) : parseSrt(content);
+export function parseSubtitles(content: string, styled = false): SrtCue[] {
+  return /^﻿?WEBVTT/.test(content) ? parseVtt(content, styled) : parseSrt(content, styled);
 }
 
 // --- Export (export-srt) ---

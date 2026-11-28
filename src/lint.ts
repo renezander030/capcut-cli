@@ -8,7 +8,15 @@ import { copyAssetDeduped, effectCatalogue, filterCatalogue, storeOutgrowsTempla
 import { jianyingMaskField, MASK_FIELD_NAMES, populatedMaskFields } from "./mask-fields.js";
 import { isLocalPath, linkLocalMaterialIds, readSidecar, unlinkedMaterials } from "./materials-register.js";
 import { ffprobeAvailable, isVfr, probeMedia } from "./probe.js";
-import { type CaptionScript, CJK_SCRIPT_LIMITS, captionScript, type ScriptLimit, type ScriptLimits } from "./script.js";
+import {
+  type CaptionScript,
+  CJK_SCRIPT_LIMITS,
+  captionScript,
+  isSoutheastAsianScript,
+  type ScriptLimit,
+  type ScriptLimits,
+  spacelessTextChunks,
+} from "./script.js";
 import { assessMediaRegistrationAt } from "./store.js";
 import { rangesLookDoubled, repairDoubledRanges } from "./text-offsets.js";
 import { quantizeToFrame } from "./time.js";
@@ -1605,6 +1613,20 @@ function wrapLine(line: string, maxChars: number): string {
       out += `${rest.slice(0, brk)}\n`;
       rest = rest.slice(brk + 1);
       continue;
+    }
+    // This head contains no ASCII space, so newline insertions remain distinct
+    // from the space swaps understood by rewrapContent's style-offset repair.
+    const firstSpace = rest.indexOf(" ");
+    const head = firstSpace < 0 ? rest : rest.slice(0, firstSpace);
+    const script = captionScript(head);
+    if (isSoutheastAsianScript(script)) {
+      const chunks = spacelessTextChunks(head, maxChars, script);
+      if (chunks.length > 1 && chunks.every((chunk) => chunk.length <= maxChars)) {
+        if (firstSpace < 0) return out + chunks.join("\n");
+        out += `${chunks.slice(0, -1).join("\n")}\n`;
+        rest = chunks[chunks.length - 1] + rest.slice(firstSpace);
+        continue;
+      }
     }
     // …or, in a space-less script, between two characters at the cap, walking
     // back to the first legal break so closing punctuation never opens a line.
