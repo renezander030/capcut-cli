@@ -88,6 +88,12 @@ const TRACK = option("track", ["--track", "--type"], "string", "Track or materia
 const TRACK_NAME = option("track_name", ["--track-name"], "string", "Target track name.");
 const OUT = option("out", ["--out"], "path", "Output path.");
 const FFPROBE = option("ffprobe_cmd", ["--ffprobe-cmd"], "path", "ffprobe binary.");
+const SUBTITLE_ENCODING = option(
+  "encoding",
+  ["--encoding"],
+  "string",
+  "Subtitle text encoding (for example windows-1252 or shift_jis). UTF BOMs are detected automatically; without a BOM or this option, strict UTF-8 is required.",
+);
 const TEMPLATE = option(
   "template",
   ["--template"],
@@ -205,7 +211,7 @@ const usages = {
   crop: "capcut crop <project> <segment-id> [--ratio <r> | --rect <x,y,w,h> | --reset]",
   cut: "capcut cut <project> <start> <end> --out <path>",
   duplicate: "capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]",
-  remove: "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]",
+  remove: "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple] [--ripple-captions]",
   keyframe: "capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] | --batch",
   transition: "capcut transition <project> <id> <slug> [--duration <time>]",
   mask: "capcut mask <project> <id> <slug> [options] | --off",
@@ -392,6 +398,22 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   dub: [
     option(
+      "normalize_peak",
+      ["--normalize-peak"],
+      "number",
+      "Normalize each synthesized clip to a true-peak dBFS target (-60 to 0); measures its played prefix with FFmpeg before saving. Use without a separate volume adjustment.",
+    ),
+    option(
+      "max_gain_db",
+      ["--max-gain-db"],
+      "number",
+      "Largest normalization boost in dB; clamped clips report the estimated level actually reached.",
+      { default: 20 },
+    ),
+    option("ffmpeg_cmd", ["--ffmpeg-cmd"], "string", "FFmpeg executable for peak normalization.", {
+      default: "ffmpeg",
+    }),
+    option(
       "tts_cmd",
       ["--tts-cmd"],
       "string",
@@ -413,6 +435,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
     option("volume", ["--volume"], "number", "Audio volume.", { default: 1 }),
     option("track_name", ["--track-name"], "string", "Audio track for the clips.", { default: "dub" }),
+    SUBTITLE_ENCODING,
     FFPROBE,
   ],
   "add-video": [
@@ -451,13 +474,19 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
   ],
   remove: [
+    option(
+      "ripple_captions",
+      ["--ripple-captions"],
+      "boolean",
+      "With --ripple, trim/drop intersecting static caption timing; crossing media remains refused and retained text is unchanged.",
+    ),
     option("keep_track", ["--keep-track"], "boolean", "Keep the segment's track even when it becomes empty."),
     option("keep_materials", ["--keep-materials"], "boolean", "Skip the orphan-material sweep (run prune later)."),
     option(
       "ripple",
       ["--ripple"],
       "boolean",
-      "Close the removed time span across every track; refuses crossing segments.",
+      "Close the removed time span across every track; refuses crossing segments unless caption adjustment is selected.",
     ),
   ],
   keyframe: [
@@ -609,6 +638,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("template", ["--template"], "path", "Template directory for --out."),
   ],
   "import-srt": [
+    SUBTITLE_ENCODING,
     TRACK_NAME,
     STYLE_REF,
     CLONE_STYLE,
@@ -617,6 +647,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ...KEYWORD_EMPHASIS,
   ],
   "import-ass": [
+    SUBTITLE_ENCODING,
     TRACK_NAME,
     STYLE_REF,
     CLONE_STYLE,
@@ -937,6 +968,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
   ],
   init: [TEMPLATE, option("drafts", ["--drafts"], "path", "Draft root directory."), ...CANVAS],
   quickstart: [
+    SUBTITLE_ENCODING,
     option("video", ["--video"], "path", "Video or image to add."),
     option("audio", ["--audio"], "path", "Audio file to add."),
     option("srt", ["--srt"], "path", "SRT subtitles to add as caption segments."),
@@ -971,6 +1003,18 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     ),
   ],
   render: [
+    option(
+      "start",
+      ["--start"],
+      "string",
+      "Start of the preview range (time format; default 0). The source draft is unchanged.",
+    ),
+    option(
+      "end",
+      ["--end"],
+      "string",
+      "End of the preview range (time format; default timeline end). Requires start < end within the timeline.",
+    ),
     OUT,
     option("scale", ["--scale"], "number", "Proxy scale.", { default: 0.5 }),
     option("fps", ["--fps"], "number", "Output FPS."),
@@ -979,7 +1023,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "encoder",
       ["--encoder"],
       "string",
-      "Video encoder for the proxy (-c:v; default libx264). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering.",
+      "Video encoder for the proxy (-c:v; default libvpx-vp9 for WebM, libx264 otherwise). Hardware encoders like h264_videotoolbox/h264_nvenc/h264_qsv work when the build carries them; validated against `ffmpeg -encoders` before rendering.",
     ),
     option(
       "crf",
@@ -1019,7 +1063,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
       "soft_captions",
       ["--soft-captions"],
       "boolean",
-      "Mux the text-track cues as a toggleable mov_text subtitle stream (the SRT is also written next to the output as <preview>.srt); skipped with a note when ffmpeg has no mov_text encoder.",
+      "Mux text-track cues as toggleable subtitles (WebVTT for WebM, mov_text otherwise); also write <preview>.srt. Skipped with a note when the selected subtitle encoder is unavailable.",
     ),
     option("all_video_tracks", ["--all-video-tracks"], "boolean", "Composite every video track."),
     option("progress", ["--progress"], "boolean", "Stream ffmpeg's progress to stderr instead of buffering it."),
@@ -1109,6 +1153,7 @@ const optionsByCommand: Record<string, OptionSpec[]> = {
     option("json", ["--json"], "boolean", "Force JSON output (the default; overrides -H)."),
   ],
   "detect-retakes": [
+    SUBTITLE_ENCODING,
     TRACK_NAME,
     option("srt", ["--srt"], "path", "Read cues from this SRT file instead of a draft (no <project> then)."),
     option("window", ["--window"], "number", "Max seconds between the earlier cue's end and the later cue's start.", {
@@ -1182,6 +1227,10 @@ optionsByCommand["image-anim"] = optionsByCommand["text-anim"];
 // Everywhere else they fall through to the positional stream verbatim, matching
 // pre-release behaviour where these tokens were unknown and preserved.
 export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
+  "--normalize-peak",
+  "--start",
+  "--end",
+  "--encoding",
   "--audio-track",
   "--audio-channel",
   "--active-timeline",
@@ -1216,6 +1265,7 @@ export const RELEASE_SCOPED_FLAGS: ReadonlySet<string> = new Set([
   "--no-coverage",
   "--from",
   "--ripple",
+  "--ripple-captions",
   "--frame-grid",
   "--max-still-secs",
   "--max-shot-secs",

@@ -39,18 +39,39 @@ export function readJsonObjectFile(path: string): { raw: string | null; obj: Rec
   return { raw, obj: raw === null ? null : parseJsonObject(raw) };
 }
 
-/** Read UTF-8 subtitles without silently replacing malformed source bytes. */
-export function readSubtitleText(path: string | number): string {
+/** Honor UTF BOMs or an explicitly selected encoding; never guess a legacy code page. */
+export function readSubtitleText(path: string | number, encoding?: string): string {
   const bytes = readFileSync(path);
+  const source = typeof path === "number" ? "stdin" : path;
+  const detected =
+    encoding ??
+    (bytes[0] === 0xff && bytes[1] === 0xfe
+      ? "utf-16le"
+      : bytes[0] === 0xfe && bytes[1] === 0xff
+        ? "utf-16be"
+        : "utf-8");
+  let decoder: TextDecoder;
   try {
-    return stripBom(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    decoder = new TextDecoder(detected, { fatal: true });
   } catch {
-    const source = typeof path === "number" ? "stdin" : path;
-    throw new Error(`Subtitle input is not valid UTF-8: ${source}. Convert the file to UTF-8 before importing it.`);
+    throw new Error(`Unsupported subtitle encoding: ${detected}. Use a TextDecoder encoding such as windows-1252.`);
   }
+  let text: string;
+  try {
+    text = stripBom(decoder.decode(bytes));
+  } catch {
+    throw new Error(
+      `Subtitle input is not valid ${decoder.encoding.toUpperCase()}: ${source}. Convert the file to UTF-8 before importing it, or select its encoding with --encoding.`,
+    );
+  }
+  if (text.includes("\0"))
+    throw new Error(
+      `Subtitle input contains NUL characters: ${source}. Select the file's encoding with --encoding or convert it to UTF-8.`,
+    );
+  return text;
 }
 
-/** SRT or WebVTT cues from a file or stdin (fd 0), read strictly as UTF-8: the one way commands get subtitle cues. */
-export function readSubtitleCues(path: string | number): SrtCue[] {
-  return parseSubtitles(readSubtitleText(path));
+/** The shared strict decoder and SRT/WebVTT parser, for files and stdin (fd 0). */
+export function readSubtitleCues(path: string | number, encoding?: string): SrtCue[] {
+  return parseSubtitles(readSubtitleText(path, encoding), true);
 }

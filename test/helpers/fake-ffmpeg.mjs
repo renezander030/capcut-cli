@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { PROBED_FILTERS } from "../../dist/render.js";
 
 const ENCODER_LINES = {
+  "libvpx-vp9": " V..... libvpx-vp9            libvpx VP9",
+  libopus: " A..... libopus               Opus audio",
+  webvtt: " S..... webvtt                WebVTT subtitle",
   libx264: " V..... libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)",
   aac: " A....D aac                  AAC (Advanced Audio Coding)",
   mov_text: " S..... mov_text             3GPP Timed Text subtitle",

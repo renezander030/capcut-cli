@@ -479,7 +479,7 @@ Edit:
              per-segment companion (speed, canvas, mask, ...) are cloned with
              fresh ids, so edits like crop/mix-mode on the copy never touch
              the source segment.
-  remove     <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]
+  remove     <project> <segment-id> [--keep-track] [--keep-materials] [--ripple] [--ripple-captions]
              Delete a segment in place. A track left empty by the removal is
              dropped too (--keep-track keeps it). Materials no surviving
              segment references are swept in the same pass prune runs —
@@ -487,6 +487,8 @@ Edit:
              skips the sweep). Recomputes the project duration to the max
              remaining segment end across all tracks. --ripple closes the
              removed span across every track and refuses crossing segments.
+             Add --ripple-captions to trim/drop static caption timing; media
+             crossings remain refused and surviving caption text stays whole.
              Undo with restore.
   export-srt <project> [options]                Export subtitles to SRT/WebVTT
   export-ass <project> [--karaoke] [--out <f.ass>]  Export styled subtitles as ASS
@@ -996,7 +998,10 @@ interface Flags {
   like?: string;
   fromStore?: boolean;
   fromTime?: string;
+  renderStart?: string;
+  renderEnd?: string;
   ripple?: boolean;
+  rippleCaptions?: boolean;
   track?: string;
   out?: string;
   fontSize?: number;
@@ -1105,6 +1110,7 @@ interface Flags {
   enumCategory?: Category;
   jianying?: boolean;
   // import-srt
+  encoding?: string;
   styleRef?: string;
   timeOffset?: string;
   // text-ranges
@@ -1201,6 +1207,7 @@ interface Flags {
   target?: number;
   perClip?: boolean;
   maxGainDb?: number;
+  normalizePeak?: number;
   tolerance?: number;
   maxTruePeak?: number;
   // render: refuse an unfaithful proxy / fail on output duration drift
@@ -1324,6 +1331,7 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--materials", "materials"],
   ["--from-store", "fromStore"],
   ["--ripple", "ripple"],
+  ["--ripple-captions", "rippleCaptions"],
   ["--word-reveal", "wordReveal"],
   ["--soft-captions", "softCaptions"],
   ["--per-clip", "perClip"],
@@ -1373,6 +1381,8 @@ const BOOLEAN_FLAGS = new Map<string, FlagKey<boolean>>([
   ["--cloud", "cloud"],
 ]);
 const STRING_FLAGS = new Map<string, FlagKey<string>>([
+  ["--start", "renderStart"],
+  ["--end", "renderEnd"],
   ["--out", "out"],
   ["--translate", "translate"],
   ["--color", "color"],
@@ -1420,6 +1430,7 @@ const STRING_FLAGS = new Map<string, FlagKey<string>>([
   ["--ffprobe-cmd", "ffprobeCmd"],
   ["--video", "video"],
   ["--srt", "srt"],
+  ["--encoding", "encoding"],
   ["--to", "to"],
   ["--api-key", "apiKey"],
   ["--model", "model"],
@@ -1438,6 +1449,7 @@ const STRING_FLAGS = new Map<string, FlagKey<string>>([
   ["--rect", "rect"],
 ]);
 const FLOAT_FLAGS = new Map<string, FlagKey<number>>([
+  ["--normalize-peak", "normalizePeak"],
   ["--font-size", "fontSize"],
   ["--x", "x"],
   ["--y", "y"],
@@ -2899,9 +2911,17 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
     );
   }
   if (flags.noProbe) die("dub measures every clip with ffprobe to place it; --no-probe is not available here.");
+  const peakModule = flags.normalizePeak !== undefined ? await import("./loudness.js") : undefined;
+  const peakOptions =
+    peakModule && flags.normalizePeak !== undefined
+      ? peakModule.peakNormalizationOptions(flags.normalizePeak, flags.maxGainDb)
+      : undefined;
+  if (peakOptions && flags.volume !== undefined && flags.volume !== 1) {
+    die("--normalize-peak sets each clip's volume; use it without a separate --volume adjustment.");
+  }
   let cues: Array<{ index: number; startUs: number; endUs: number; text: string }>;
   try {
-    cues = readSubtitleCues(source);
+    cues = readSubtitleCues(source, flags.encoding);
   } catch (e) {
     die(`${source}: ${(e as Error).message}`);
   }
@@ -2925,7 +2945,7 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
   // here, so subtitles (untrusted text) never change how the tool runs, and nothing is written.
   const todo: Array<{ cue: (typeof cues)[number]; text: string }> = [];
   for (const cue of cues) {
-    let text = cueSpeechText(cue.text);
+    let text = cueSpeechText(cue.text, false);
     if (lexiconMod && rules) text = lexiconMod.applyLexicon(text, rules as never).spoken_text.trim();
     if (!text) {
       skipped.push(cue.index);
@@ -2939,6 +2959,30 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
       );
     }
     todo.push({ cue, text });
+  }
+  if (isDryRun()) {
+    out(
+      {
+        ok: true,
+        source,
+        track_name: trackName,
+        cues: cues.length,
+        planned_cues: todo.map(({ cue, text }) => ({ cue: cue.index, start_us: cue.startUs, text })),
+        skipped_cues: skipped,
+        executed: false,
+        ...(peakOptions
+          ? {
+              normalization: {
+                target_peak_dbfs: peakOptions.targetPeakDbfs,
+                max_gain_db: peakOptions.maxGainDb,
+                measured: false,
+              },
+            }
+          : {}),
+      },
+      flags,
+    );
+    return;
   }
   try {
     for (const { cue, text } of todo) {
@@ -2970,6 +3014,20 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
       `refused [dub-overlap]: ${plan.refusals.join("; ")}. Shorten those cues' text or pass --trim-overlap. Nothing was written.`,
     );
   }
+  const levels = new Map<string, import("./loudness.js").PeakNormalization>();
+  try {
+    if (peakModule && peakOptions) {
+      for (const clip of plan.clips) {
+        levels.set(
+          clip.path,
+          peakModule.normalizeClipPeak(clip.path, clip.durationUs, { ...peakOptions, ffmpegCmd: flags.ffmpegCmd }),
+        );
+      }
+    }
+  } catch (e) {
+    for (const file of made) rmSync(file, { force: true });
+    die(`dub: ${(e as Error).message} Nothing was written.`);
+  }
   // Placing the clips or saving the draft can still refuse (the write guard, for one): the clips go with it.
   let clips: Array<Record<string, unknown>>;
   try {
@@ -2978,7 +3036,7 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
         path: clip.path,
         start: clip.startUs,
         duration: clip.durationUs,
-        volume: flags.volume,
+        volume: levels.get(clip.path)?.volume ?? flags.volume,
         trackName,
       });
       return {
@@ -2989,6 +3047,7 @@ async function cmdDub(draft: Draft, filePath: string, positional: string[], flag
         duration_us: clip.durationUs,
         speech_us: clip.speechUs,
         trimmed: clip.trimmed,
+        ...(levels.has(clip.path) ? { normalization: levels.get(clip.path) } : {}),
         text: clip.text,
       };
     });
@@ -3651,6 +3710,7 @@ async function cmdRemove(draft: Draft, filePath: string, positional: string[], f
     keepTrack: flags.keepTrack,
     keepMaterials: flags.keepMaterials,
     ripple: flags.ripple,
+    rippleCaptions: flags.rippleCaptions,
   });
   saveDraft(filePath, draft);
   out(
@@ -3666,6 +3726,7 @@ async function cmdRemove(draft: Draft, filePath: string, positional: string[], f
       duration_before_us: result.durationBefore,
       duration_after_us: result.durationAfter,
       ripple_shifted: flags.ripple ? result.rippleShifted : undefined,
+      ripple_captions: result.captionAdjustments,
     },
     flags,
   );
@@ -3903,7 +3964,8 @@ interface ImportCue {
   startUs: number;
   endUs: number;
   text: string;
-  // import-ass only: inline override tags mapped onto per-range styles, and
+  unsupportedStyles?: number;
+  // Subtitle inline markup mapped onto per-range styles, and
   // the Dialogue's Style line seeding segment defaults the flags don't set.
   spans?: TextRangeInput[];
   styleSeed?: { fontSize?: number; color?: string; alignment?: number };
@@ -3917,6 +3979,7 @@ async function importCuesToDraft(
   label: string,
 ): Promise<void> {
   const { buildEmphasisRanges, setTextRanges, setTextStyle } = await import("./decorators.js");
+  const { overlaySubtitleStyles } = await import("./subtitle-markup.js");
   const { addText, copyTextStyle } = await import("./factory.js");
   const offsetUs = flags.timeOffset ? parseTimeInput(flags.timeOffset) : 0;
 
@@ -3981,10 +4044,9 @@ async function importCuesToDraft(
     if (flags.styleRef)
       copyTextStyle(draft, flags.styleRef, res.materialId, { keepFillColor: Boolean(emphasis.cycle) });
     if (hasStyleFlags) setTextStyle(draft, res.segmentId, styleOpts);
-    // Inline override spans from the cue (import-ass). setTextRanges replaces
-    // the whole styles array, so this must precede the emphasis ranges — which
-    // no command combines with span-carrying cues today.
-    if (cue.spans && cue.spans.length > 0) setTextRanges(draft, res.segmentId, cue.spans);
+    // Compose inline subtitle styles with keyword overrides before the single
+    // setTextRanges call, which replaces the whole styles array.
+    let inlineRanges = cue.spans ?? [];
     if (emphasis.words) {
       // Emphasis ranges sit on top of the base styling written above; unmatched
       // text inherits the cue's styles[0] via setTextRanges' gap fill.
@@ -3994,9 +4056,10 @@ async function importCuesToDraft(
         sizeMultiplier: emphasis.size,
         baseSize: textBaseFontSize(draft, res.materialId),
       });
-      if (ranges.length > 0) setTextRanges(draft, res.segmentId, ranges);
+      inlineRanges = overlaySubtitleStyles(inlineRanges, ranges);
       keywordMatches += matches;
     }
+    if (inlineRanges.length > 0) setTextRanges(draft, res.segmentId, inlineRanges);
     created.push({ id: res.segmentId, start_us: start, duration_us: duration, text: cue.text });
   }
 
@@ -4005,6 +4068,9 @@ async function importCuesToDraft(
     {
       ok: true,
       format: label,
+      unsupported_styles: cues.some((cue) => cue.unsupportedStyles)
+        ? cues.reduce((sum, cue) => sum + (cue.unsupportedStyles ?? 0), 0)
+        : undefined,
       cues: created.length,
       track_name: flags.trackName ?? "subtitle",
       style_ref: flags.styleRef ?? null,
@@ -4022,7 +4088,7 @@ async function importCuesToDraft(
 async function cmdImportSrt(draft: Draft, filePath: string, positional: string[], flags: Flags): Promise<void> {
   const srtArg = positional[2];
   if (!srtArg) die(`Usage: capcut import-srt <project> <srt-or-vtt-path-or-->`);
-  const cues = readSubtitleCues(srtArg === "-" ? 0 : srtArg);
+  const cues = readSubtitleCues(srtArg === "-" ? 0 : srtArg, flags.encoding);
   if (cues.length === 0) die(`Subtitle file produced 0 cues`);
   await importCuesToDraft(draft, filePath, cues, flags, "srt");
 }
@@ -4031,7 +4097,7 @@ async function cmdImportAss(draft: Draft, filePath: string, positional: string[]
   const { parseAss } = await import("./ass.js");
   const assArg = positional[2];
   if (!assArg) die(`Usage: capcut import-ass <project> <ass-path-or-->`);
-  const assContent = readSubtitleText(assArg === "-" ? 0 : assArg);
+  const assContent = readSubtitleText(assArg === "-" ? 0 : assArg, flags.encoding);
   const cues = parseAss(assContent).map((cue) => ({
     ...cue,
     spans: cue.spans?.map((s) => {
@@ -6250,7 +6316,29 @@ async function cmdCompileData(specPath: string, flags: Flags): Promise<void> {
 // it never mutates the draft. With --dry-run it returns the ffmpeg plan without
 // executing, so the filter graph is inspectable (and the path is ffmpeg-free).
 async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<void> {
-  const { assertFaithful, buildRenderPlan, renderDraft, renderOutcome } = await import("./render.js");
+  const { assertFaithful, buildRenderPlan, collectVideoProbes, expectedDurationUs, renderDraft, renderOutcome } =
+    await import("./render.js");
+  let renderInput = draft;
+  let sourceRange: { start_us: number; end_us: number; duration_us: number } | undefined;
+  if (flags.renderStart !== undefined || flags.renderEnd !== undefined) {
+    const duration = expectedDurationUs(draft);
+    const start = flags.renderStart === undefined ? 0 : parseTimeInput(flags.renderStart);
+    const end = flags.renderEnd === undefined ? duration : parseTimeInput(flags.renderEnd);
+    if (
+      !Number.isSafeInteger(duration) ||
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      end <= start ||
+      end > duration
+    ) {
+      die(`Render range needs 0 <= start < end <= timeline duration (${duration}us). Nothing was rendered.`);
+    }
+    const { cutProject } = await import("./factory.js");
+    renderInput = structuredClone(draft);
+    cutProject(renderInput, { start, end });
+    sourceRange = { start_us: start, end_us: end, duration_us: end - start };
+  }
   if (flags.crf !== undefined && flags.videoBitrate !== undefined) {
     die("--crf and --video-bitrate are mutually exclusive.");
   }
@@ -6286,20 +6374,22 @@ async function cmdRender(draft: Draft, filePath: string, flags: Flags): Promise<
   };
   if (opts.dryRun) {
     // Build-only: surface the plan; no ffmpeg needed.
-    const plan = buildRenderPlan(draft, {
+    const plan = buildRenderPlan(renderInput, {
       ...opts,
       out: opts.out ?? path.join(draftProjectDir(filePath), "preview.mp4"),
+      videoProbe: flags.ffprobeCmd ? collectVideoProbes(renderInput, flags.ffprobeCmd) : undefined,
     });
     if (opts.strict) assertFaithful(plan.fidelity);
-    out({ ok: true, executed: false, ...plan }, flags);
+    out({ ok: true, executed: false, ...plan, ...(sourceRange ? { source_range: sourceRange } : {}) }, flags);
     reportRenderOutcome(renderOutcome(plan), flags);
     return;
   }
-  const result = renderDraft(draft, filePath, opts);
+  const result = renderDraft(renderInput, filePath, opts);
   // renderOutcome holds the exit rules; a render that exits non-zero reports ok false. The file stays on disk either
   // way and the result says why.
   const outcome = renderOutcome(result, { verify: flags.verify, audioTrack: flags.audioTrack });
-  out(outcome.error ? { ...result, ok: false } : result, flags);
+  const report = sourceRange ? { ...result, source_range: sourceRange } : result;
+  out(outcome.error ? { ...report, ok: false } : report, flags);
   if (!flags.quiet) process.stderr.write(`Rendered: ${result.output}\n`);
   reportRenderOutcome(outcome, flags);
 }
@@ -6444,7 +6534,7 @@ async function cmdDetectRetakes(draft: Draft | null, flags: Flags): Promise<void
   if (draft === null) {
     const srtPath = flags.srt as string;
     if (!existsSync(srtPath)) die(`--srt file not found: ${srtPath}`);
-    cues = readSubtitleCues(srtPath).map((c) => ({
+    cues = readSubtitleCues(srtPath, flags.encoding).map((c) => ({
       text: c.text,
       startUs: c.startUs,
       endUs: c.endUs,
@@ -6792,6 +6882,7 @@ async function main(): Promise<void> {
       video: flags.video,
       audio: flags.audio,
       srt: flags.srt,
+      encoding: flags.encoding,
       ffprobeCmd: flags.ffprobeCmd,
       canvas: canvas ?? undefined,
       seed,
@@ -6970,7 +7061,11 @@ async function main(): Promise<void> {
       await cmdDuplicate(draft, filePath, positional, flags);
       break;
     case "remove":
-      requireArgs(positional, 3, "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]");
+      requireArgs(
+        positional,
+        3,
+        "capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple] [--ripple-captions]",
+      );
       await cmdRemove(draft, filePath, positional, flags);
       break;
     case "keyframe":

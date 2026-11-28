@@ -1,7 +1,7 @@
 {
   "name": "capcut-cli",
-  "version": "0.37.1",
-  "description": "Independent, unofficial CLI to create and edit CapCut projects — build drafts from scratch, add video/audio/text, subtitles, timing, speed, volume, templates, cut long-form to shorts. No API needed. Not affiliated with ByteDance.",
+  "version": "0.38.0",
+  "description": "Independent, unofficial CLI to create and edit CapCut projects \u2014 build drafts from scratch, add video/audio/text, subtitles, timing, speed, volume, templates, cut long-form to shorts. No API needed. Not affiliated with ByteDance.",
   "type": "module",
   "bin": {
     "capcut": "dist/index.js",
@@ -43,9 +43,9 @@
     "prepublishOnly": "npm run build",
     "dev": "node --import tsx src/index.ts",
     "extract-enums": "python3 scripts/extract-enums.py",
-    "test": "npm run build && node --test --test-reporter=spec",
+    "test": "npm run build && node --test --test-concurrency=4 --test-reporter=spec",
     "smoke:package": "node scripts/release-smoke.mjs",
-    "test:fast": "node --test --test-reporter=spec",
+    "test:fast": "node --test --test-concurrency=4 --test-reporter=spec",
     "lint": "biome check --error-on-warnings src/ test/",
     "lint:fix": "biome check --write src/ test/",
     "format": "biome format --write src/ test/",
@@ -87,7 +87,7 @@
     "mcp",
     "cli"
   ],
-  "author": "René Zander",
+  "author": "Ren\u00e9 Zander",
   "license": "MIT",
   "repository": {
     "type": "git",

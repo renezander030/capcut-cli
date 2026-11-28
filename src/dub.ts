@@ -10,11 +10,14 @@ const KNOWN_TAG = /<\/?(?:i|b|u|s|font|v|c|lang|ruby|rt)(?:[.\s][^>]*)?>/gi;
  * {\an8} overrides), lines joined with a space. Character references are not decoded here: the WebVTT reader already
  * decoded them, and SRT text is spoken as written.
  */
-export function cueSpeechText(text: string): string {
-  return text
-    .replace(/<rt>[\s\S]*?<\/rt>/gi, "")
-    .replace(/<\d+:\d{2}[\d:.]*>/g, "")
-    .replace(KNOWN_TAG, "")
+export function cueSpeechText(text: string, markup = true): string {
+  const plain = markup
+    ? text
+        .replace(/<rt>[\s\S]*?<\/rt>/gi, "")
+        .replace(/<\d+:\d{2}[\d:.]*>/g, "")
+        .replace(KNOWN_TAG, "")
+    : text;
+  return plain
     .replace(/\{\\[^}]*\}/g, "")
     .split("\n")
     .map((line) => line.trim())

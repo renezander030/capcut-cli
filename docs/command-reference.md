@@ -32,7 +32,7 @@
 | `crop` | `capcut crop <project> <segment-id> [--ratio <r> \| --rect <x,y,w,h> \| --reset]` | yes | Read or set a video/photo segment's source-material crop (--ratio preset, --rect x,y,w,h, or --reset). |
 | `cut` | `capcut cut <project> <start> <end> --out <path>` | yes | Extract a time range into a new standalone draft. |
 | `duplicate` | `capcut duplicate <project> <segment-id> [--track <track-name>] [--new-track]` | yes | Duplicate a segment at its same timeline position onto a track above the source. |
-| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple]` | yes | Remove a segment, its emptied track, and the materials that orphans. |
+| `remove` | `capcut remove <project> <segment-id> [--keep-track] [--keep-materials] [--ripple] [--ripple-captions]` | yes | Remove a segment, its emptied track, and the materials that orphans. |
 | `keyframe` | `capcut keyframe <project> <id> <property> <time> <value> [--easing <name>] \| --batch` | yes | Add a keyframe (position/scale/rotation/alpha/volume); single or --batch. |
 | `transition` | `capcut transition <project> <id> <slug> [--duration <time>]` | yes | Add a transition between segments. |
 | `mask` | `capcut mask <project> <id> <slug> [options] \| --off` | yes | Apply a mask (linear/circle/heart/...) with geometry flags, or --off. |

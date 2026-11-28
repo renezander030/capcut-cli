@@ -24,7 +24,14 @@ import type { Draft, Segment, Track } from "./draft.js";
 import { findSegment, isDryRun } from "./draft.js";
 import { captionStyleFromPreset, type TextStylePreset } from "./preset.js";
 import { probeMedia } from "./probe.js";
-import { type CaptionScript, captionScript, groupingDefaults, wordSeparator } from "./script.js";
+import {
+  type CaptionScript,
+  captionScript,
+  groupingDefaults,
+  isSoutheastAsianScript,
+  spacelessTextChunks,
+  wordSeparator,
+} from "./script.js";
 import { requireSegment } from "./segment-lookup.js";
 import { parseSrt } from "./srt.js";
 import { storedTextLength } from "./text-offsets.js";
@@ -129,6 +136,13 @@ export interface CaptionResult {
   /** The script the transcript is written in, which chose the word separator
    * and the --max-words / --max-chars defaults (see script.ts). */
   caption_script: CaptionScript;
+  /** Internal splits estimate timings within supplied token/cue spans. */
+  timing_interpolation?: {
+    split_tokens: number;
+    generated_chunks: number;
+    from_cues: boolean;
+    unresolved_tokens: number;
+  };
 }
 
 /**
@@ -281,6 +295,26 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   );
   const separator = wordSeparator(textScript);
   const grouping = groupingDefaults(textScript);
+  const timing = {
+    split_tokens: 0,
+    generated_chunks: 0,
+    from_cues: transcription.words.length === 0,
+    unresolved_tokens: 0,
+  };
+  const groupCaptionWords = (
+    words: CaptionWord[],
+    maxWords: number,
+    maxChars: number,
+    maxGap: number,
+    joiner: string,
+  ) => {
+    if (!isSoutheastAsianScript(textScript)) return groupWords(words, maxWords, maxChars, maxGap, joiner);
+    const split = splitSpacelessTimings(words, maxChars, textScript);
+    timing.split_tokens += split.splitTokens;
+    timing.generated_chunks += split.generatedChunks;
+    timing.unresolved_tokens += split.unresolvedTokens;
+    return groupWords(split.words, maxWords, maxChars, maxGap, joiner);
+  };
   let scriptReport: AlignmentReport | undefined;
   let cues: CaptionCue[];
   if (opts.scriptText !== undefined) {
@@ -298,7 +332,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
       );
     }
     cues = opts.karaoke
-      ? groupWords(
+      ? groupCaptionWords(
           aligned.words,
           opts.maxWords ?? grouping.karaokeMaxWords,
           opts.maxChars ?? grouping.karaokeMaxChars,
@@ -308,7 +342,7 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
       : // One cue per script line — the author's chunking — split only when a
         // line outgrows --max-chars (words and gaps never split a line).
         aligned.lines.flatMap((line) =>
-          groupWords(
+          groupCaptionWords(
             line,
             Number.POSITIVE_INFINITY,
             opts.maxChars ?? grouping.lineMaxChars,
@@ -319,18 +353,18 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
   } else {
     cues =
       opts.karaoke || opts.wordReveal
-        ? groupWords(
+        ? groupCaptionWords(
             recognizedWords,
             opts.maxWords ?? grouping.karaokeMaxWords,
             opts.maxChars ?? grouping.karaokeMaxChars,
             (opts.maxGapMs ?? 500) * 1000,
             separator,
           )
-        : fromWords
+        : fromWords || isSoutheastAsianScript(textScript)
           ? // Aligner output carries words only, no sentence segments: line
             // cues group the words at the script's line width and close on a
             // pause, as the karaoke grouping does.
-            groupWords(
+            groupCaptionWords(
               recognizedWords,
               opts.maxWords ?? Number.POSITIVE_INFINITY,
               opts.maxChars ?? grouping.lineMaxChars,
@@ -477,6 +511,11 @@ export async function captionDraft(draft: Draft, opts: CaptionOptions): Promise<
     engine: fromWords ? "words" : opts.cloud ? "capcut-cloud" : opts.whisperCmd ? "shell" : "whisper-cli",
     engine_name: fromWords ? undefined : transcription.engine,
     caption_script: textScript,
+    timing_interpolation:
+      isSoutheastAsianScript(textScript) &&
+      (timing.split_tokens > 0 || timing.from_cues || timing.unresolved_tokens > 0)
+        ? timing
+        : undefined,
     words: transcription.words.length,
     karaoke: opts.karaoke ?? false,
     word_reveal: opts.wordReveal || undefined,
@@ -1003,7 +1042,8 @@ function whisperCppWords(segment: Record<string, unknown>): CaptionWord[] | null
     .filter((token) => typeof token.text === "string" && !/^\[_[^\]]*\]$/.test(token.text));
   const spelled = tokens.map((token) => token.text).join("");
   if (text.trim() === "" || spelled.trim() !== text.trim()) return null;
-  const eachTokenAWord = wordSeparator(captionScript(text)) === "";
+  const tokenScript = captionScript(text);
+  const eachTokenAWord = tokenScript === "zh" || tokenScript === "ja";
   const words: CaptionWord[] = [];
   for (const token of tokens) {
     const piece = token.text as string;
@@ -1111,4 +1151,39 @@ function defaultCaptionStyle(): Record<string, unknown> {
     italic: false,
     underline: false,
   };
+}
+
+/** Splitting a coarse token estimates internal timings; never label these as measured word times. */
+function splitSpacelessTimings(words: CaptionWord[], maxChars: number, locale: string) {
+  const output: CaptionWord[] = [];
+  let splitTokens = 0;
+  let generatedChunks = 0;
+  let unresolvedTokens = 0;
+  const graphemes = new Intl.Segmenter(locale, { granularity: "grapheme" });
+  for (const word of words) {
+    const parts = spacelessTextChunks(word.word, maxChars, locale);
+    const duration = word.endUs - word.startUs;
+    if (parts.some((part) => part.length > maxChars) || duration < parts.length) {
+      output.push(word);
+      unresolvedTokens++;
+      continue;
+    }
+    if (parts.length <= 1) {
+      output.push(word);
+      continue;
+    }
+    splitTokens++;
+    generatedChunks += parts.length;
+    const weights = parts.map((part) => [...graphemes.segment(part)].length);
+    const total = weights.reduce((sum, weight) => sum + weight, 0);
+    const proportional = duration - parts.length;
+    let weight = 0;
+    parts.forEach((part, index) => {
+      const startUs = word.startUs + index + Math.round((proportional * weight) / total);
+      weight += weights[index];
+      const endUs = word.startUs + index + 1 + Math.round((proportional * weight) / total);
+      output.push({ word: part, startUs, endUs });
+    });
+  }
+  return { words: output, splitTokens, generatedChunks, unresolvedTokens };
 }

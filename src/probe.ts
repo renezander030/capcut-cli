@@ -34,6 +34,10 @@ export interface MediaProbe {
   hasVideo: boolean;
   hasAudio: boolean;
   audioChannels: number | null;
+  colorTransfer?: string;
+  colorPrimaries?: string;
+  colorSpace?: string;
+  dolbyVision?: boolean;
   videoCodec: string | null;
   audioCodec: string | null;
 }
@@ -49,6 +53,50 @@ export interface MediaProbe {
 export function isVfr(probe: MediaProbe): boolean {
   if (probe.avgFps === null || probe.baseFps === null || probe.baseFps <= 0) return false;
   return Math.abs(probe.avgFps - probe.baseFps) / probe.baseFps > 0.01;
+}
+
+export type SourceColor = Pick<MediaProbe, "colorTransfer" | "colorPrimaries" | "colorSpace" | "dolbyVision">;
+
+/** Only reported source metadata: missing/unknown tags never imply SDR. */
+export function sourceColorMetadata(stream: Record<string, unknown>): SourceColor {
+  const color: SourceColor = {};
+  for (const [source, target] of [
+    ["color_transfer", "colorTransfer"],
+    ["color_primaries", "colorPrimaries"],
+    ["color_space", "colorSpace"],
+  ] as const) {
+    const value = stream[source];
+    if (
+      typeof value === "string" &&
+      value.trim() &&
+      !["unknown", "unspecified", "reserved"].includes(value.toLowerCase())
+    )
+      color[target] = value.toLowerCase();
+  }
+  if (
+    Array.isArray(stream.side_data_list) &&
+    stream.side_data_list.some((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      const data = entry as Record<string, unknown>;
+      return (
+        (typeof data.side_data_type === "string" && /dovi|dolby vision/i.test(data.side_data_type)) ||
+        (typeof data.dv_profile === "number" && data.dv_profile > 0)
+      );
+    })
+  )
+    color.dolbyVision = true;
+  return color;
+}
+
+/** The proxy has no HDR preservation or HDR/wide-gamut to SDR transform. */
+export function unsupportedSourceColor(color: SourceColor | null | undefined): boolean {
+  return (
+    !!color &&
+    (color.dolbyVision === true ||
+      ["smpte2084", "arib-std-b67"].includes(color.colorTransfer ?? "") ||
+      ["bt2020", "smpte431", "smpte432"].includes(color.colorPrimaries ?? "") ||
+      ["bt2020nc", "bt2020c"].includes(color.colorSpace ?? ""))
+  );
 }
 
 const ffprobeAvailableCache = new Map<string, boolean>();
@@ -118,6 +166,7 @@ export function parseMediaProbe(json: string): MediaProbe | null {
     hasVideo: Boolean(video),
     hasAudio: Boolean(audio),
     audioChannels: audio && Number(audio.channels) > 0 ? Number(audio.channels) : null,
+    ...sourceColorMetadata(video ?? {}),
     videoCodec: typeof video?.codec_name === "string" ? video.codec_name : null,
     audioCodec: typeof audio?.codec_name === "string" ? audio.codec_name : null,
   };

@@ -4,7 +4,7 @@ import { dirname, extname, join } from "node:path";
 import type { Draft, Segment } from "./draft.js";
 import { extractText } from "./draft.js";
 import { MASK_FIELDS } from "./mask-fields.js";
-import { ffprobeAvailable, probeMedia } from "./probe.js";
+import { ffprobeAvailable, type MediaProbe, probeMedia, sourceColorMetadata, unsupportedSourceColor } from "./probe.js";
 import { renderSrt } from "./srt.js";
 import { draftProjectDir } from "./store.js";
 
@@ -36,11 +36,11 @@ export interface RenderOptions {
   scale?: number; // proxy scale factor applied to canvas dims (default 0.5)
   fps?: number; // output fps override (default draft.fps or 30)
   ffmpegCmd?: string; // ffmpeg binary (default "ffmpeg")
-  encoder?: string; // -c:v video encoder (default libx264; e.g. h264_videotoolbox/h264_nvenc/h264_qsv)
+  encoder?: string; // -c:v encoder; default libvpx-vp9 for WebM, otherwise libx264
   crf?: number; // constant-quality value; default 28, mutually exclusive with videoBitrate
   videoBitrate?: string; // target video bitrate such as 4M; switches from CRF to bitrate mode
   burnCaptions?: boolean; // draw text-track segments onto the video
-  softCaptions?: boolean; // mux the text-track cues as a mov_text subtitle stream (see softCaptionsFor)
+  softCaptions?: boolean; // mux text-track cues as WebVTT for WebM, otherwise mov_text
   allVideoTracks?: boolean; // composite overlay video tracks
   dryRun?: boolean; // build the plan, do not execute ffmpeg
   progress?: boolean; // stream ffmpeg's own stderr instead of buffering it
@@ -54,6 +54,8 @@ export interface RenderOptions {
    * channels; without it (a dry run) both apply as given.
    */
   audioProbe?: ReadonlyMap<string, number[] | null>;
+  /** Source video metadata supplied by the execution boundary; pure planning never probes. */
+  videoProbe?: ReadonlyMap<string, MediaProbe | null>;
 }
 
 /** One audio file of an executed render: how many audio streams it has, which one played and how. */
@@ -511,6 +513,7 @@ function draftFont(material: Record<string, unknown>): { file?: string; missing?
  */
 export const FIDELITY_CATEGORIES = [
   "missing_media",
+  "hdr_color",
   "main_track_gaps",
   "overlay_tracks",
   "text",
@@ -534,6 +537,8 @@ export type FidelityCategory = (typeof FIDELITY_CATEGORIES)[number];
 export const FIDELITY_ID_CAP = 20;
 
 const FIDELITY_HINTS: Record<FidelityCategory, string> = {
+  hdr_color:
+    "known HDR or wide-gamut source color is not preserved or tone-mapped by this proxy; use the editor for a color-managed export",
   missing_media: "segment media is missing or has no path; `capcut relink` repairs moved media",
   main_track_gaps: "the proxy concatenates main-track segments, so timeline gaps close up and later clips play early",
   overlay_tracks: "extra video tracks are not composited; pass --all-video-tracks",
@@ -570,6 +575,7 @@ export interface FidelityCensus {
   dropped: Partial<Record<FidelityCategory, FidelityEntry>>;
   /** Every category the census checks, so an absent key reads as "checked, none". */
   checked: FidelityCategory[];
+  source_color: { mode: "not_probed" | "probed"; probed: number; unknown_paths: string[] };
 }
 
 export function expectedDurationUs(draft: Draft): number {
@@ -592,9 +598,47 @@ function hasKeyframes(seg: Segment): boolean {
   });
 }
 
+function sourceVideoPaths(draft: Draft): string[] {
+  const used = new Set(
+    draft.tracks
+      .filter((track) => track.type === "video")
+      .flatMap((track) => track.segments.map((seg) => seg.material_id)),
+  );
+  return [
+    ...new Set(
+      draft.materials.videos
+        .filter((material) => used.has(material.id))
+        .map((material) => material.path)
+        .filter((path): path is string => typeof path === "string" && !!path),
+    ),
+  ];
+}
+
+/** Execution-boundary IO; callers of the pure planner may supply this map explicitly. */
+export function collectVideoProbes(draft: Draft, command = "ffprobe"): ReadonlyMap<string, MediaProbe | null> {
+  return new Map(sourceVideoPaths(draft).map((path) => [path, probeMedia(path, command)]));
+}
+
+function sourceColorReport(
+  draft: Draft,
+  probes?: ReadonlyMap<string, MediaProbe | null>,
+): FidelityCensus["source_color"] {
+  const paths = sourceVideoPaths(draft);
+  return {
+    mode: probes ? "probed" : "not_probed",
+    probed: paths.filter((path) => probes?.get(path) != null).length,
+    unknown_paths: paths.filter((path) => {
+      const metadata = probes?.get(path);
+      return (
+        !metadata || !(metadata.colorTransfer || metadata.colorPrimaries || metadata.colorSpace || metadata.dolbyVision)
+      );
+    }),
+  };
+}
+
 export function fidelityCensus(
   draft: Draft,
-  opts: Pick<RenderOptions, "allVideoTracks" | "burnCaptions">,
+  opts: Pick<RenderOptions, "allVideoTracks" | "burnCaptions" | "videoProbe">,
   skipped: Array<{ segmentId: string; reason: string }> = [],
 ): FidelityCensus {
   const hits = new Map<FidelityCategory, string[]>();
@@ -633,6 +677,12 @@ export function fidelityCensus(
   const mainTrack = draft.tracks.find((t) => t.type === "video");
   for (const track of draft.tracks) {
     for (const seg of track.segments) {
+      if (track.type === "video") {
+        const material = videoMaterials.get(seg.material_id);
+        const path = typeof material?.path === "string" ? material.path : "";
+        const color = { ...sourceColorMetadata(material ?? {}), ...(opts.videoProbe?.get(path) ?? {}) };
+        if (unsupportedSourceColor(color)) add("hdr_color", seg.id);
+      }
       if (track.type === "video" && track !== mainTrack && !opts.allVideoTracks) add("overlay_tracks", seg.id);
       if (track.type === "sticker") add("stickers", seg.id);
       if (track.type === "effect") add("effects", seg.id);
@@ -685,6 +735,7 @@ export function fidelityCensus(
     expected_duration_us: expectedDurationUs(draft),
     dropped,
     checked: [...FIDELITY_CATEGORIES],
+    source_color: sourceColorReport(draft, opts.videoProbe),
   };
 }
 
@@ -956,6 +1007,23 @@ function escapeDrawtext(s: string): string {
  * Build the ffmpeg invocation for a draft. Pure and deterministic given the
  * draft + options (no uuids, no clock) so it can be asserted in tests.
  */
+
+/** Output-container policy shared by pure planning and execution preflight. */
+function renderCodecs(output: string, encoder?: string) {
+  const webm = extname(output).toLowerCase() === ".webm";
+  const video = encoder ?? (webm ? "libvpx-vp9" : "libx264");
+  if (
+    webm &&
+    !["libvpx", "libvpx-vp9", "libaom-av1", "libsvtav1", "librav1e"].includes(video) &&
+    !/^(?:vp8|vp9|av1)_[a-z0-9_]+$/.test(video)
+  ) {
+    throw new Error(
+      `render: WebM requires a VP8, VP9 or AV1 video encoder; '${video}' is incompatible. Omit --encoder for libvpx-vp9 or choose a compatible encoder.`,
+    );
+  }
+  return { webm, video, audio: webm ? "libopus" : "aac", subtitle: webm ? "webvtt" : "mov_text" };
+}
+
 export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
   if (opts.crf !== undefined && opts.videoBitrate !== undefined) {
     throw new Error("render: crf and videoBitrate are mutually exclusive");
@@ -972,6 +1040,7 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
   const height = Math.max(2, Math.round((canvas.height * scale) / 2) * 2);
   const fps = opts.fps && opts.fps > 0 ? opts.fps : draft.fps || 30;
   const output = opts.out ?? join(dirname(""), "preview.mp4");
+  const codecs = renderCodecs(output, opts.encoder);
 
   const inputs: RenderInput[] = [];
   const skipped: Array<{ segmentId: string; reason: string }> = [];
@@ -1210,14 +1279,15 @@ export function buildRenderPlan(draft: Draft, opts: RenderOptions): RenderPlan {
     ...(aOut ? ["-map", `[${aOut}]`] : []),
     ...(softCaptions ? ["-map", `${softCaptions.inputIndex}:0`] : []),
     "-c:v",
-    opts.encoder ?? "libx264",
-    "-preset",
-    "veryfast",
-    ...(quality.mode === "bitrate" ? ["-b:v", quality.bitrate] : ["-crf", String(quality.crf)]),
+    codecs.video,
+    ...(codecs.webm ? [] : ["-preset", "veryfast"]),
+    ...(quality.mode === "bitrate"
+      ? ["-b:v", quality.bitrate]
+      : ["-crf", String(quality.crf), ...(codecs.webm ? ["-b:v", "0"] : [])]),
     "-pix_fmt",
     "yuv420p",
-    ...(aOut ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-    ...(softCaptions ? ["-c:s", "mov_text", "-metadata:s:s:0", "language=und"] : ["-shortest"]),
+    ...(aOut ? ["-c:a", codecs.audio, "-b:a", "128k"] : ["-an"]),
+    ...(softCaptions ? ["-c:s", codecs.subtitle, "-metadata:s:s:0", "language=und"] : ["-shortest"]),
     output,
   ];
 
@@ -1258,6 +1328,7 @@ const MINIMAL_BUILD_NOTE =
 
 export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions): RenderResult {
   const out = opts.out ?? join(draftProjectDir(filePath), "preview.mp4");
+  const codecs = renderCodecs(out, opts.encoder);
   const capabilities = probeFfmpegCapabilities(opts.ffmpegCmd ?? "ffmpeg");
   if (!capabilities.available) {
     throw new Error(
@@ -1283,18 +1354,33 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
         MINIMAL_BUILD_NOTE,
     );
   }
-  if (opts.encoder) {
+  if (opts.encoder || codecs.webm) {
     const { listed, encoders } = probeFfmpegEncoders(opts.ffmpegCmd ?? "ffmpeg");
-    if (listed && !encoders.has(opts.encoder)) {
+    if (listed && !encoders.has(codecs.video)) {
       throw new Error(
-        `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' has no '${opts.encoder}' encoder. ` +
-          "Hardware encoders (h264_videotoolbox, h264_nvenc, h264_qsv, ...) exist only in builds compiled for them — " +
-          `'${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -encoders' lists what this build carries. Omit --encoder to use libx264.`,
+        `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' has no '${codecs.video}' encoder. ` +
+          (codecs.webm
+            ? "WebM needs a build with a VP8, VP9 or AV1 encoder. "
+            : "Hardware encoders (h264_videotoolbox, h264_nvenc, h264_qsv, ...) exist only in builds compiled for them — ") +
+          `'${opts.ffmpegCmd ?? "ffmpeg"} -hide_banner -encoders' lists what this build carries.` +
+          (codecs.webm ? "" : " Omit --encoder to use libx264."),
       );
     }
+    if (
+      codecs.webm &&
+      listed &&
+      !encoders.has(codecs.audio) &&
+      audioSegments(draft).some((seg) => {
+        const path = findAudioPath(draft, seg.material_id);
+        return !!path && existsSync(path);
+      })
+    )
+      throw new Error(
+        `render: ffmpeg at '${opts.ffmpegCmd ?? "ffmpeg"}' has no '${codecs.audio}' encoder, required for WebM audio. Nothing was rendered.`,
+      );
   }
   const fallbackSkipped: Array<{ segmentId: string; reason: string }> = [];
-  const effective = { ...opts, out };
+  const effective = { ...opts, out, videoProbe: opts.videoProbe ?? collectVideoProbes(draft, opts.ffprobeCmd) };
   if (effective.burnCaptions && !capabilities.drawtext) {
     effective.burnCaptions = false;
     fallbackSkipped.push({ segmentId: "captions", reason: "ffmpeg lacks drawtext; caption burn disabled" });
@@ -1308,11 +1394,11 @@ export function renderDraft(draft: Draft, filePath: string, opts: RenderOptions)
     // a note rather than failing the render. Only a build that LISTS its
     // encoders and lacks mov_text is treated as lacking it.
     const { listed, encoders } = probeFfmpegEncoders(opts.ffmpegCmd ?? "ffmpeg");
-    if (listed && !encoders.has("mov_text")) {
+    if (listed && !encoders.has(codecs.subtitle)) {
       effective.softCaptions = false;
       fallbackSkipped.push({
         segmentId: "captions",
-        reason: "ffmpeg lacks the mov_text encoder; soft captions disabled",
+        reason: `ffmpeg lacks the ${codecs.subtitle} encoder; soft captions disabled`,
       });
     }
   }

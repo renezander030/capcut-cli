@@ -95,7 +95,9 @@ describe("WebVTT import", () => {
         s.target_timerange.start + s.target_timerange.duration,
         JSON.parse(texts.get(s.material_id)).text,
       ]),
-      expected,
+      expected.map(([start, end, text]) => [start, end, text === "<b>bold</b> stays" ? "bold stays" : text]),
     );
+    const bold = JSON.parse(texts.get(added[2].material_id));
+    assert.ok(bold.styles.some((style) => style.bold && style.range[0] === 0 && style.range[1] === 4));
   });
 });
